@@ -9,7 +9,11 @@ from _interval_solver_cases import cdf_grid, make_case
 def test_randomized_interval_solver_satisfies_mathematical_contract(seed):
     """Random supports/censoring/weights end at a feasible stationary face."""
     from gibbus._api.component import _Component
-    from gibbus._fit.conic_newton import _certify, _preconditioned_subproblem, _solve_natural_conic
+    from gibbus._fit.conic_newton import (
+        _certify,
+        _preconditioned_subproblem,
+        _solve_natural_conic,
+    )
     from gibbus._fit.conic_qp import _support_representation
     from gibbus._fit.natural_objective import (
         _natural_interval_start,

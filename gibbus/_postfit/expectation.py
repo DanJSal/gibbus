@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 from scipy.integrate import quad
 
@@ -48,7 +50,7 @@ def expect(potential, support, func, /, *, points=None):
             raise RuntimeError(f"expect function returned a non-finite value at x={x!r}")
         return float(gx * density)
 
-    kwargs = dict(epsabs=1e-10, epsrel=1e-10, limit=300)
+    kwargs = {"epsabs": 1e-10, "epsrel": 1e-10, "limit": 300}
     if np.isfinite(lo) and np.isfinite(hi) and points is not None:
         pts = np.asarray(points, dtype=np.float64).reshape(-1)
         pts = pts[np.isfinite(pts) & (pts > lo) & (pts < hi)]
@@ -136,7 +138,7 @@ def expect_vectorized(potential, support, func, /, *, points=None, epsabs=1e-10,
     edges = np.concatenate(([lo], pts, [hi]))
     # Segment kinds: 0 finite [a, b]; 1 [a, inf); 2 (-inf, b].
     kinds, anchors, a_par, b_par = [], [], [], []
-    for a, b in zip(edges[:-1], edges[1:], strict=True):
+    for a, b in itertools.pairwise(edges):
         if not b > a:
             continue
         if np.isfinite(a) and np.isfinite(b):

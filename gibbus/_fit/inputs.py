@@ -1,4 +1,4 @@
-"""Public-boundary input validation and normalisation for ``Distribution.fit``.
+"""Public-boundary input validation and normalization for ``Distribution.fit``.
 
 This module is the sole entry-point for converting raw user arguments
 into the canonical internal representation used by the fitting pipeline.
@@ -21,7 +21,7 @@ After passing through this module, samples always have one of two shapes:
 * **Interval samples** — ``(R, 2)`` float64, with ``col0 <= col1``
   (swapped silently if reversed)
 
-Sample weights (when provided) are normalised to sum to one and stored
+Sample weights (when provided) are normalized to sum to one and stored
 as a 1-D float64 array of length *R*.
 """
 
@@ -64,7 +64,7 @@ def _to_generator(rng, /):
 
 
 def _normalize_sample_weights_1d(R, w, /):
-    """Validate and normalise a 1-D sample-weight array.
+    """Validate and normalize a 1-D sample-weight array.
 
     Parameters
     ----------
@@ -77,7 +77,7 @@ def _normalize_sample_weights_1d(R, w, /):
     Returns
     -------
     numpy.ndarray, shape (R,), dtype float64
-        Weights normalised to sum to one.
+        Weights normalized to sum to one.
 
     Raises
     ------
@@ -625,7 +625,7 @@ def _normalize_mixture_fit_inputs(
     /,
     sample_weights=None,
 ):
-    """Validate and normalise all inputs for multi-component fitting.
+    """Validate and normalize all inputs for multi-component fitting.
 
     Parameters
     ----------
@@ -648,7 +648,7 @@ def _normalize_mixture_fit_inputs(
     suppress_warnings : bool
         Whether numerical fitting warnings should be suppressed.
     sample_weights : array_like or None, optional
-        Non-negative observation weights of length *R*.  Normalised to
+        Non-negative observation weights of length *R*.  Normalized to
         sum to one and returned under the ``weights`` key.
 
     Returns
@@ -690,15 +690,14 @@ def _normalize_mixture_fit_inputs(
 
     _check_spread(S)
 
-    if not is_auto and n_components > 1:
-        # Each component needs enough data to be identifiable at all;
-        # without this the failure surfaces deep inside the initializers.
-        if R < 2 * n_components:
-            raise ValueError(
-                f"n_components={n_components} requires at least "
-                f"{2 * n_components} samples, got {R}. Reduce "
-                "n_components or supply more data."
-            )
+    # Each component needs enough data to be identifiable at all;
+    # without this the failure surfaces deep inside the initializers.
+    if not is_auto and n_components > 1 and R < 2 * n_components:
+        raise ValueError(
+            f"n_components={n_components} requires at least "
+            f"{2 * n_components} samples, got {R}. Reduce "
+            "n_components or supply more data."
+        )
 
     if is_auto:
         if component_options is not None:
@@ -797,9 +796,8 @@ def _coerce_sample_size(size, /):
         raise TypeError(f"{_MSG}, not {type(size).__name__}")
 
     value = size_arr.item()
-    if size_arr.dtype.kind == "f":
-        if not np.isfinite(value) or value != int(value):
-            raise ValueError(f"{_MSG}, got {value!r}")
+    if size_arr.dtype.kind == "f" and (not np.isfinite(value) or value != int(value)):
+        raise ValueError(f"{_MSG}, got {value!r}")
 
     n = int(value)
     if n < 0:

@@ -30,7 +30,7 @@ def test_unweighted_power_moments_match_raw_means():
     assert stats.effective_n == pytest.approx(z.size)
 
 
-def test_weighted_power_moments_accept_unnormalised_weights():
+def test_weighted_power_moments_accept_unnormalized_weights():
     z = np.array([-2.0, -0.1, 0.3, 1.2, 4.0])
     w = np.array([0.1, 2.0, 0.4, 3.0, 0.2])
     wn = w / w.sum()

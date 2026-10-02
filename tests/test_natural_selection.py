@@ -56,7 +56,7 @@ def test_spurious_fixed_k_cluster_does_not_change_bic_selection():
     """The known narrow fixed-K local maximum is penalized by BIC."""
     rng = np.random.default_rng(270901)
     n = 200
-    split = int(round(0.6 * n))
+    split = round(0.6 * n)
     x = np.concatenate([
         rng.normal(0.0, 1.0, split),
         rng.normal(1.2, 0.6, n - split),

@@ -2,9 +2,9 @@
 
 The model works on a full line, a lower half-line, or a bounded interval
 (an upper half-line is reflected), but the finite canonical endpoints need
-not be fixed at ``0`` or ``+-1``.  This module chooses one data-centred
+not be fixed at ``0`` or ``+-1``.  This module chooses one data-centered
 affine coordinate for every support type.  The transform is numerical
-preconditioning, not an optimiser parameter.
+preconditioning, not an optimizer parameter.
 
 The origin and robust scale are responsibility-weighted where component
 weights are relevant.  The scale uses a Gaussian-consistent weighted MAD
@@ -59,8 +59,8 @@ def _safe_scaled_difference(values, center, scale, /):
     return np.where(bad, fallback, out)
 
 
-def _normalised_nonnegative_weights(weights, n, /):
-    """Return relative weights normalised by their maximum then their sum.
+def _normalized_nonnegative_weights(weights, n, /):
+    """Return relative weights normalized by their maximum then their sum.
 
     Parameters
     ----------
@@ -199,7 +199,7 @@ def _weighted_median(values, weights, /, *, order=None):
     if weights is None:
         return float(np.median(values))
 
-    w = _normalised_nonnegative_weights(weights, values.size)
+    w = _normalized_nonnegative_weights(weights, values.size)
     if w is None:
         return float(np.median(values))
 
@@ -302,7 +302,7 @@ def _build_fit_coordinate(
         Point samples or interval midpoints in user coordinates.
     weights : numpy.ndarray, shape (R,) or None, optional
         Mixture responsibilities or sample weights.  They affect both the
-        robust centre and robust scale on every support type.
+        robust center and robust scale on every support type.
     widths : numpy.ndarray, shape (R,) or None, optional
         Interval widths.  When present, their within-bin spread supplies a
         lower bound on data-derived scales.
@@ -317,7 +317,7 @@ def _build_fit_coordinate(
     Returns
     -------
     _FitCoordinate
-        Fixed data-centred transform.  Finite support endpoints are mapped
+        Fixed data-centered transform.  Finite support endpoints are mapped
         into the returned canonical support and are not forced to prescribed
         values such as zero or ``+-1``.
 
@@ -352,7 +352,7 @@ def _build_fit_coordinate(
     # sits on one location.  Use an overflow-safe weighted RMS fallback before
     # declaring the component numerically degenerate.
     if not (np.isfinite(scale) and scale > 0.0):
-        wn = _normalised_nonnegative_weights(weights, samples.size)
+        wn = _normalized_nonnegative_weights(weights, samples.size)
         if wn is None:
             wn = np.full(samples.size, 1.0 / samples.size, dtype=np.float64)
         max_rel = float(np.max(rel_dev))
@@ -412,12 +412,12 @@ def _build_interval_fit_coordinate(support, intervals, weights=None, /):
     intervals : array_like, shape (R, 2)
         Ordered censoring intervals.  Infinite endpoints are permitted.
     weights : array_like, shape (R,) or None, optional
-        Nonnegative observation weights used for the robust centre and scale.
+        Nonnegative observation weights used for the robust center and scale.
 
     Returns
     -------
     _FitCoordinate
-        Data-centred coordinate suitable for exact censored-likelihood fitting.
+        Data-centered coordinate suitable for exact censored-likelihood fitting.
 
     Raises
     ------

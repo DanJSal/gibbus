@@ -1,4 +1,4 @@
-"""Vectorised low-level evaluators for polynomial potentials.
+"""Vectorized low-level evaluators for polynomial potentials.
 
 Array polynomial evaluation is delegated to the compiled Horner kernel
 ``_state_kernels._polyval_vec``; potential evaluation combines those

@@ -116,7 +116,7 @@ def _mode_quad_points(window, mode, local_scale, support=None, core_window=None,
     enough to the mode and can miss an order-one peak entirely.  Bracketing
     the known mode by eight affine scales creates a finite local panel while
     leaving the tail panels adaptive.  The extra points are used by both the
-    normaliser and moment/derivative quadratures so they share the same local
+    normalizer and moment/derivative quadratures so they share the same local
     resolution.
 
     Parameters

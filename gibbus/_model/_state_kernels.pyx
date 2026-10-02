@@ -24,7 +24,7 @@ cnp.import_array()
 
 
 cdef inline double _nan() noexcept nogil:
-    return (<double>0.0) / (<double>0.0)
+    return NAN
 
 
 cdef inline bint _finite(double x) noexcept nogil:
@@ -46,12 +46,12 @@ cdef inline double _agm(double a, double b) noexcept nogil:
     cdef double x = a
     cdef double y = b
     cdef double xn, yn
-    cdef int it
+    cdef int _it
     if (not _finite(x)) or (not _finite(y)):
         return 0.0
     if x <= 0.0 or y <= 0.0:
         return 0.0
-    for it in range(64):
+    for _it in range(64):
         xn = 0.5 * (x + y)
         yn = sqrt(x * y)
         if fabs(xn - yn) <= 1e-15 * (fabs(xn) + fabs(yn) + 1.0):
@@ -176,7 +176,7 @@ cdef inline bint _try_bracket(
     cdef double a, b, at, bt
     cdef double ga, gb, gat, gbt
     cdef double step
-    cdef int it
+    cdef int _it
 
     if finL and finU:
         a = _safe(L, L, U, finL, finU, eps)
@@ -201,7 +201,7 @@ cdef inline bint _try_bracket(
     b = x0
     ga = gb
 
-    for it in range(bracket_max_expand):
+    for _it in range(bracket_max_expand):
         at = _safe(a - step, L, U, finL, finU, eps)
         gat = _f(ctx, at, kind, param)
         if _finite(gat) and (gat * gb <= 0.0):
@@ -242,13 +242,13 @@ cdef inline double _bisect(
     int maxiter,
     double newt_tol,
 ) noexcept nogil:
-    cdef int it
+    cdef int _it
     cdef double m, fm
     if fa == 0.0:
         return a
     if fb == 0.0:
         return b
-    for it in range(maxiter):
+    for _it in range(maxiter):
         m = 0.5 * (a + b)
         fm = _f(ctx, m, kind, param)
         if (not _finite(fm)):
@@ -290,7 +290,7 @@ cdef double _valley_solve(
     cdef double a, b, x, gL, gU
     cdef double g, h, step, xn, gn, gx
     cdef double lmbda
-    cdef int it, bt
+    cdef int _it, _bt
     cdef bint newton_ok = 0
     cdef double ba, bb, fa, fb
 
@@ -364,7 +364,7 @@ cdef double _valley_solve(
     if finU and (x > U - epsU):
         x = U - epsU
 
-    for it in range(newt_max):
+    for _it in range(newt_max):
         g = _f(ctx, x, kind, param)
         if not _finite(g):
             break
@@ -385,7 +385,7 @@ cdef double _valley_solve(
         gx = fabs(g)
 
         lmbda = 1.0
-        for bt in range(backtrack_max_iters):
+        for _bt in range(backtrack_max_iters):
             if (not _finite(gn)):
                 pass
             elif (gn < gx) or (fabs(xn - x) < newt_tol):
@@ -680,7 +680,7 @@ cpdef tuple _q_window_and_mode(
     Locates the mode of ``exp(-q)`` and the two tail points where
     ``q(z) - q(mode) = log_thresh``, then expands the result to cover the
     observed data range.  The window is the working domain for
-    normalisation, quadrature, and post-fit diagnostics.
+    normalization, quadrature, and post-fit diagnostics.
 
     As with :func:`_valley_q1_shift`, every tolerance is required; the
     values live in :mod:`._defaults`.
@@ -776,7 +776,7 @@ cpdef tuple _q_window_and_mode(
 
 
 # ==========================================================================
-# Vectorised PDF and basis-function evaluation kernels
+# Vectorized PDF and basis-function evaluation kernels
 # ==========================================================================
 cpdef cnp.ndarray _pdf_vec(
     cnp.ndarray x_arr,
@@ -858,7 +858,7 @@ cpdef cnp.ndarray _polyval_vec(
     cnp.ndarray x_arr,
     cnp.ndarray poly_arr,
 ):
-    """Vectorised Horner polynomial evaluation.
+    """Vectorized Horner polynomial evaluation.
     Replacement for numpy.polynomial.polynomial.polyval when called
     on a 1-D array with a small coefficient vector.
     """
@@ -1030,7 +1030,7 @@ cdef int _sn_panel(const _SNGeom* g, double ta, double tb,
     cdef double half = 0.5 * (tb - ta)
     cdef double width = g.hi - g.lo
     cdef double t, om, zz, jac, qz, up_lim, lo_lim
-    cdef int n, k, f
+    cdef int n, _k, f
     up_lim = g.U if g.finU else INFINITY
     lo_lim = g.L if g.finL else -INFINITY
     for n in range(15):
@@ -1070,17 +1070,17 @@ cdef int _sn_panel(const _SNGeom* g, double ta, double tb,
     f = 0
     for n in range(15):
         v[n] = w[n]
-    for k in range(g.n_power):
+    for _k in range(g.n_power):
         gibbus_sn_feature(_SN_WK, _SN_WG, v, z, 15, 1, &kr[f], &ga[f])
         f += 1
     if g.feat_L:
         gibbus_sn_product(w, lL, v, 15)
-        for k in range(g.n_log):
+        for _k in range(g.n_log):
             gibbus_sn_feature(_SN_WK, _SN_WG, v, z, 15, 1, &kr[f], &ga[f])
             f += 1
     if g.feat_U:
         gibbus_sn_product(w, lU, v, 15)
-        for k in range(g.n_log):
+        for _k in range(g.n_log):
             gibbus_sn_feature(_SN_WK, _SN_WG, v, z, 15, 1, &kr[f], &ga[f])
             f += 1
     if g.feat_L:
@@ -1185,7 +1185,7 @@ cdef int _sn_points(double lo, double hi, double mode, double scale,
                     double* out) noexcept nogil:
     """Port of ``numerics._mode_quad_points``: sorted unique interior breakpoints."""
     cdef double vals[16]
-    cdef int n = 0, i, i2, j, m
+    cdef int n = 0, i, i2, j, m, _rep
     cdef double span = hi - lo
     cdef double v, frac
     if _finite(scale) and scale > 0.0 and span / scale > 128.0:
@@ -1211,13 +1211,13 @@ cdef int _sn_points(double lo, double hi, double mode, double scale,
     if _finite(span) and span > 0.0:
         if _finite(L) and lo == L:
             frac = 1.0
-            for i in range(5):
+            for _rep in range(5):
                 frac *= 0.015625            # 2^-6, 2^-12, ..., 2^-30
                 vals[n] = lo + span * frac
                 n += 1
         if _finite(U) and hi == U:
             frac = 1.0
-            for i in range(5):
+            for _rep in range(5):
                 frac *= 0.015625
                 vals[n] = hi - span * frac
                 n += 1
@@ -1239,7 +1239,6 @@ cdef int _sn_points(double lo, double hi, double mode, double scale,
         out[j] = v
         m += 1
     return m
-
 
 
 def state_numerics(

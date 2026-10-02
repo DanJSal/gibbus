@@ -76,7 +76,6 @@ cdef double _bernstein_lower_bound(
     return lower
 
 
-
 cdef double _chebyshev_lower_bound_c(
     const double* coeff,
     Py_ssize_t ncoeff,

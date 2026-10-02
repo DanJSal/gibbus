@@ -372,7 +372,7 @@ cdef class SpectralEvaluator:
         cdef double flo, fhi, target, local_mass, scale, tol
         cdef const double* c = self.coeff + j * self.stride
         cdef int nc = self.ncoeff[j]
-        cdef int it
+        cdef int _it
 
         if frac <= 8.0 * DBL_EPSILON:
             return self.breaks[j]
@@ -394,7 +394,7 @@ cdef class SpectralEvaluator:
             scale = 1e-300
         tol = 8.0 * DBL_EPSILON * scale
 
-        for it in range(64):
+        for _it in range(64):
             _cheb_value_derivative(c, nc, u, &value, &deriv)
             f = value - target
             if f <= 0.0:
@@ -751,7 +751,7 @@ cdef class SpectralEvaluator:
         free(work0); free(work1); free(work2)
 
     cdef object _call_mode(self, object x, bint use_simd):
-        """Dispatch to the vectorised or scalar loop and restore *x*'s shape."""
+        """Dispatch to the vectorized or scalar loop and restore *x*'s shape."""
         cdef object arr_obj = np.asarray(x, dtype=np.float64)
         cdef cnp.ndarray arr = arr_obj
         cdef bint scalar = arr.ndim == 0

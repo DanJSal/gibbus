@@ -8,6 +8,7 @@ checking observable behavior under numerically demanding fixtures.
 Most fits are intentionally small.  Higher-degree and extreme-scale fixtures are
 kept only where the numerical mechanism requires them.
 """
+import itertools
 from types import SimpleNamespace
 
 import numpy as np
@@ -63,7 +64,7 @@ def _total_mass(c, n_seg=16):
     total = 0.0
     if not np.isfinite(lo):
         total += quad(_density(c), -np.inf, a, limit=200)[0]
-    for u, v in zip(edges[:-1], edges[1:], strict=True):
+    for u, v in itertools.pairwise(edges):
         total += quad(_density(c), float(u), float(v),
                       limit=200, epsabs=1e-13, epsrel=1e-13)[0]
     if not np.isfinite(hi):
@@ -178,7 +179,7 @@ def test_density_integrates_to_one(samples, shape, degree):
 
 
 def test_high_degree_density_integrates_to_one():
-    """Large internal sigma must not defeat normalisation quadrature.
+    """Large internal sigma must not defeat normalization quadrature.
 
     A degree-12 single component forced onto this trimodal sample can drive
     its internal ``sigma`` to about ``exp(28)`` while retaining an ordinary
@@ -352,7 +353,7 @@ def test_weighted_bandwidth_is_scale_invariant():
 def test_interval_e_step_matches_independent_component_cdf_oracle():
     """Interval responsibilities must be posterior masses, not midpoint PDFs.
 
-    The components are fitted to ordinary point samples and fully finalised,
+    The components are fitted to ordinary point samples and fully finalized,
     so their public CDFs provide an independent oracle for the lightweight
     quadrature path used by interval EM.  Observation weights may change the
     mean log-likelihood, but not the per-row posterior probabilities.
@@ -399,7 +400,7 @@ def test_interval_e_step_matches_independent_component_cdf_oracle():
 
 
 def test_interval_mixture_relative_sample_weights_are_scale_invariant():
-    """The weighted interval-mixture path must honour relative-weight semantics.
+    """The weighted interval-mixture path must honor relative-weight semantics.
 
     Multiplying every observation weight by a common constant must leave the
     fitted mixture unchanged, including the interval-censored E-step and
@@ -511,7 +512,7 @@ def test_saturated_coarse_interval_mixture_reports_nonidentifiability():
     auto-degree mixture has more free parameters than the two independent bin
     probabilities and reaches the saturated multinomial likelihood.  Component
     shapes inside the bins are therefore unidentified; returning whichever
-    ultra-narrow component happened to finalise would be misleading.
+    ultra-narrow component happened to finalize would be misleading.
     """
     rng = np.random.default_rng(0)
     data = np.concatenate([
@@ -559,7 +560,7 @@ def test_overlapping_interval_saturation_reports_nonidentifiability():
         )
 
 
-def test_nested_interval_pattern_is_recognised_by_identifiability_diagnostic():
+def test_nested_interval_pattern_is_recognized_by_identifiability_diagnostic():
     """The non-identifiability diagnostic must cover nested censoring intervals.
 
     A common intersection lets the unrestricted censored likelihood put all
@@ -747,7 +748,7 @@ def test_degenerate_intervals_reproduce_the_point_fit():
 
 
 def test_far_tail_interval_still_moves_the_public_fit():
-    """A 60-sigma-bin analogue must influence an end-to-end interval fit.
+    """A 60-sigma-bin analog must influence an end-to-end interval fit.
 
     Moving a censored observation farther into the tail must not make its
     likelihood contribution disappear through probability underflow.  The
@@ -864,7 +865,7 @@ def test_disparate_scale_mixture_tracks_narrow_component(ratio):
     The mixture contains 37.5% of its mass in ``N(0, 1.5/ratio)`` and 62.5%
     in ``N(5, 1.5)``.  A correct
     fit should retain both masses and resolve the narrow component on its own
-    physical scale rather than fail finalisation or return an over-broad proxy.
+    physical scale rather than fail finalization or return an over-broad proxy.
     """
     rng = np.random.default_rng(0)
     narrow_sd = 1.5 / ratio

@@ -51,7 +51,7 @@ def neg_log_mix_derivs_batch(double[:, :, ::1] ell_jets, int max_order):
     cdef double* h = NULL
     cdef Py_ssize_t j, r
     cdef int n, m
-    cdef double c, v, acc, total
+    cdef double c, v, acc
     if N < 0:
         raise ValueError("max_order must be >= 0")
     if K < 1:

@@ -35,7 +35,7 @@ from .._defaults import (
 )
 from .._model.coords import _safe_scaled_difference
 from ._interval_integrals import AdaptiveIntervalIntegrator, statistic_kinds
-from .empirical import _normalised_weights
+from .empirical import _normalized_weights
 
 _GL_X, _GL_W = np.polynomial.legendre.leggauss(int(INTERVAL_GL_ORDER))
 _GL_LOG_W = np.log(_GL_W)
@@ -819,7 +819,7 @@ def _build_interval_observations(
         raise ValueError("interval lower endpoints must not exceed upper endpoints")
 
     n = int(x.shape[0])
-    w, total, effective_n = _normalised_weights(n, weights, "interval")
+    w, total, effective_n = _normalized_weights(n, weights, "interval")
 
     canonical_support = support
     point_lower_distance = np.full(n, np.nan, dtype=np.float64)

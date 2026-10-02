@@ -5,14 +5,14 @@ from math import factorial
 
 import numpy as np
 import pytest
+from gibbus._model._moment_kernels import product_moment
+from gibbus._postfit._mix_kernels import neg_log_mix_derivs_batch, neg_logsumexp_batch
+from gibbus._spectral._tail_integrals import TailIntegrator
 from numpy.polynomial.polynomial import polymul
 from scipy.special import betaln, gammaln, logsumexp
 from scipy.stats import beta, gamma, norm
 
 from gibbus import Distribution
-from gibbus._model._moment_kernels import product_moment
-from gibbus._postfit._mix_kernels import neg_log_mix_derivs_batch, neg_logsumexp_batch
-from gibbus._spectral._tail_integrals import TailIntegrator
 
 
 def _python_neg_log_mix_derivs(ell_jets, max_order):
@@ -360,11 +360,12 @@ def test_batched_adaptive_interval_reduction_matches_scalar_and_weighted_sums():
 def test_fused_finite_interval_objective_matches_the_quadrature_plan():
     """The one-pass finite-row kernel reproduces the explicit Gauss--Legendre
     reduction of the quadrature plan."""
+    from gibbus._observations._finite_reductions import evaluate_finite_objective
+
     from gibbus._defaults import INTERVAL_W_EPS_MULT
     from gibbus._fit.objective import _finite_interval_log_kernel
     from gibbus._model.natural_state import _layout_numerics
     from gibbus._model.vec import _q_eval
-    from gibbus._observations._finite_reductions import evaluate_finite_objective
     from gibbus._observations.intervals import (
         _GL_LOG_W,
         _GL_X,

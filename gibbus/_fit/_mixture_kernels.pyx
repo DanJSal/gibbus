@@ -18,7 +18,7 @@ with ``omp simd`` hints (vectorized under ``-fopenmp-simd``).
 
 import numpy as np
 cimport numpy as cnp
-from libc.math cimport exp, log, fabs, INFINITY, isfinite
+from libc.math cimport exp, log, fabs, INFINITY, NAN, isfinite
 from libc.stdlib cimport malloc, free
 
 cnp.import_array()
@@ -148,8 +148,8 @@ cdef int _point_stats(const double* z, const double* raw, bint weighted, Py_ssiz
             for i in range(n):
                 pw[i] *= az[i]
 
-    boundary[0] = 0.0 / 0.0
-    boundary[1] = 0.0 / 0.0
+    boundary[0] = NAN
+    boundary[1] = NAN
     if has_lower:
         if not isfinite(L):
             return 4
@@ -338,7 +338,7 @@ def joint_information(const double[:, ::1] responsibilities, const double[:, ::1
         raise MemoryError("joint information workspace")
     cdef double* mean = work
     cdef double* d = work + N
-    cdef Py_ssize_t i, k, j, a, b, lo, hi, nk
+    cdef Py_ssize_t i, k, j, a, b, lo, nk
     cdef double r, wi, alpha
     cdef const double* cr
     with nogil:

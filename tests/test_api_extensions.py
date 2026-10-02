@@ -9,7 +9,12 @@ import pytest
 from scipy.integrate import IntegrationWarning
 from scipy.stats import norm
 
-from gibbus import Distribution, _defaults, clear_suppressed_failures, suppressed_failures
+from gibbus import (
+    Distribution,
+    _defaults,
+    clear_suppressed_failures,
+    suppressed_failures,
+)
 from gibbus._defaults import SF_HANDOVER_P
 from gibbus._postfit import scoring as scoring_module
 from gibbus._postfit.logspace import log1mexp, log_diff_exp, log_mass_between
@@ -360,6 +365,93 @@ def test_mixture_state_roundtrip_preserves_more_modes_than_components(mixture_fi
     assert restored._mode_cache["base"] == stored_modes
 
 
+def _rebuild_mixture_state(state, *, drop=(), replace=None):
+    """Copy a structured mixture state, dropping or re-typing named fields."""
+    replace = {} if replace is None else replace
+    values = {
+        name: np.asarray(state[name])
+        for name in state.dtype.names
+        if name not in drop
+    }
+    values.update({name: np.asarray(value) for name, value in replace.items()})
+    dtype = [
+        (name, value.dtype) if value.ndim == 0 else (name, value.dtype, value.shape)
+        for name, value in values.items()
+    ]
+    rebuilt = np.zeros((), dtype=dtype)
+    for name, value in values.items():
+        rebuilt[name] = value
+    return rebuilt
+
+
+def test_mixture_state_without_cached_modes_uses_canonical_empty_layout(mixture_fit):
+    c = mixture_fit.copy()
+    c._mode_cache = None
+    state = c.data
+    assert int(state["n_modes"]) == 0
+    assert np.asarray(state["base_modes"]).shape == (0,)
+    restored = Distribution(state)
+    assert restored._mode_cache is None
+    assert restored.modes == mixture_fit.modes
+
+
+@pytest.mark.parametrize("missing", [
+    ("base_modes",),
+    ("n_modes",),
+    ("base_modes", "n_modes"),
+])
+def test_mixture_state_missing_mode_fields_is_rejected(mixture_fit, missing):
+    state = _rebuild_mixture_state(mixture_fit.data, drop=missing)
+    with pytest.raises(ValueError, match="not a gibbus mixture state; missing fields: "
+                       + ", ".join(missing)):
+        Distribution(state)
+
+
+@pytest.mark.parametrize("base_modes,n_modes", [
+    pytest.param([-1.0, 1.0], 1, id="n_modes-smaller"),
+    pytest.param([-1.0, 1.0], 3, id="n_modes-larger"),
+    pytest.param([-1.0, 1.0], -1, id="n_modes-negative"),
+    pytest.param([-1.0, 1.0, np.nan], 2, id="nan-padded"),
+    pytest.param([[-1.0, 1.0]], 2, id="two-dimensional"),
+    pytest.param([-1.0, 1.0], [2], id="n_modes-not-scalar"),
+    pytest.param([-1.0, 1.0], 2.0, id="n_modes-not-integer"),
+])
+def test_mixture_state_inconsistent_mode_layout_is_rejected(mixture_fit, base_modes,
+                                                            n_modes):
+    state = _rebuild_mixture_state(
+        mixture_fit.data,
+        replace={
+            "base_modes": np.asarray(base_modes, dtype=np.float64),
+            "n_modes": np.asarray(n_modes),
+        },
+    )
+    with pytest.raises(ValueError, match="inconsistent n_modes/base_modes"):
+        Distribution(state)
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_mixture_state_non_finite_base_modes_are_rejected(mixture_fit, bad):
+    state = _rebuild_mixture_state(
+        mixture_fit.data,
+        replace={
+            "base_modes": np.array([-1.0, bad], dtype=np.float64),
+            "n_modes": np.int64(2),
+        },
+    )
+    with pytest.raises(ValueError, match="base_modes must be finite"):
+        Distribution(state)
+
+
+def test_malformed_mixture_mode_state_load_is_exception_safe(gaussian_fit, mixture_fit):
+    bad = _rebuild_mixture_state(mixture_fit.data, drop=("n_modes",))
+    target = gaussian_fit.copy()
+    before = target.mean
+    with pytest.raises(ValueError, match="missing fields: n_modes"):
+        target.load(bad)
+    assert target.n_components == 1
+    assert target.mean == before
+
+
 def test_invalid_mixture_state_load_is_exception_safe(gaussian_fit, mixture_fit):
     bad = np.array(mixture_fit.data, copy=True)
     bad["weights"] = [0.9, 0.9]
@@ -680,7 +772,7 @@ def test_goodness_of_fit_monte_carlo_is_deterministic_under_a_seed():
     rng = np.random.default_rng(558)
     data = rng.normal(size=250)
     c = Distribution().fit(data, n_components=1, poly_degree=2, rng=0)
-    kwargs = dict(statistic="ks", calibration="montecarlo", n_resamples=12, rng=7)
+    kwargs = {"statistic": "ks", "calibration": "montecarlo", "n_resamples": 12, "rng": 7}
     assert c.goodness_of_fit(data, **kwargs) == c.goodness_of_fit(data, **kwargs)
 
 
@@ -749,7 +841,7 @@ def test_bootstrap_bands_is_deterministic_under_a_seed():
     data = rng.normal(size=250)
     c = Distribution().fit(data, n_components=1, poly_degree=2, rng=0)
     grid = np.linspace(-1.0, 1.0, 4)
-    kwargs = dict(n_resamples=12, level=0.9, rng=5)
+    kwargs = {"n_resamples": 12, "level": 0.9, "rng": 5}
     first = c.bootstrap_bands(data, grid, **kwargs)
     second = c.bootstrap_bands(data, grid, **kwargs)
     np.testing.assert_array_equal(first["lower"], second["lower"])

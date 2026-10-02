@@ -3,10 +3,6 @@
 import math
 
 import numpy as np
-from numpy.polynomial import chebyshev as C
-from spectral_builder_harness import PythonSpectralCDFBuilder, PythonSpectralPPFBuilder
-
-from gibbus._spectral import chebyshev as chebyshev_helpers
 from gibbus._spectral._certify import chebyshev_lower_bound
 from gibbus._spectral._panel_kernels import (
     chebder as compiled_chebder,
@@ -20,6 +16,10 @@ from gibbus._spectral._panel_kernels import (
 from gibbus._spectral._panel_kernels import (
     lobatto_coefficients as compiled_lobatto_coefficients,
 )
+from numpy.polynomial import chebyshev as C
+from spectral_builder_harness import PythonSpectralCDFBuilder, PythonSpectralPPFBuilder
+
+from gibbus._spectral import chebyshev as chebyshev_helpers
 from gibbus._spectral.cdf import SpectralCDF, density_spec
 from gibbus._spectral.chebyshev import (
     _lobatto_transform,

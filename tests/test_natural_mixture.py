@@ -156,11 +156,11 @@ def test_em_reuses_the_evaluated_input_posterior(monkeypatch):
 def test_default_finalist_continuation_matches_restart():
     """Reusing an explored finalist is equivalent to rerunning that EM phase."""
     x = _mixture_sample(5, 240)
-    kwargs = dict(
-        responsibilities=np.column_stack([x < 0.0, x >= 0.0]).astype(float),
-        paths=(("direct", "raw"),),
-        finalists=1,
-    )
+    kwargs = {
+        "responsibilities": np.column_stack([x < 0.0, x >= 0.0]).astype(float),
+        "paths": (("direct", "raw"),),
+        "finalists": 1,
+    }
     for degree in (4, "auto"):
         continued = _fit_natural_mixture(_REAL_LINE, x, 2, degree, **kwargs)
         restarted = _fit_natural_mixture(

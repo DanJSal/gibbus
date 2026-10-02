@@ -1,6 +1,6 @@
 """Component-count selection battery.
 
-Everything that touches mixture initialisation -- the KDE mode sweep, the
+Everything that touches mixture initialization -- the KDE mode sweep, the
 GMM screen, the log-concave BIC sweep -- changes which *K* comes out the
 other end.  Nothing else in the suite would catch a regression in that,
 so this module pins the selected component count across a spread of
@@ -164,8 +164,8 @@ class TestSkewedSelection:
                            rng=seed).n_components == 1
 
     @pytest.mark.parametrize("dist,kwargs", [
-        ("gamma", dict(shape=5.0, scale=1.0)),
-        ("exponential", dict(scale=1.0)),
+        ("gamma", {"shape": 5.0, "scale": 1.0}),
+        ("exponential", {"scale": 1.0}),
     ])
     def test_other_log_concave_shapes_select_one_component(self, dist, kwargs):
         """Exponential is the sharpest boundary case on the half line."""
@@ -218,10 +218,10 @@ class TestSkewedSelection:
         assert _bic(chosen, data) < _bic(rival, data)
 
 
-class TestValleyInitialisation:
-    """Mixture initialisation from KDE modes and the valleys between them.
+class TestValleyInitialization:
+    """Mixture initialization from KDE modes and the valleys between them.
 
-    The initializer is deterministic, honours ``sample_weights``, and reuses
+    The initializer is deterministic, honors ``sample_weights``, and reuses
     the same KDE structure used by component-count proposal.
     """
 
@@ -251,7 +251,7 @@ class TestValleyInitialisation:
         """The wrapper must still return usable responsibilities there."""
 
         data = _mixture(np.random.default_rng(0), [(0, .5, .5), (0, 3.0, .5)])
-        resp, mix = _init_responsibilities(data, 2, np.random.default_rng(0))
+        resp, _mix = _init_responsibilities(data, 2, np.random.default_rng(0))
         assert resp is not None and resp.shape[1] == 2
         assert np.allclose(resp.sum(axis=1), 1.0)
 
@@ -261,7 +261,7 @@ class TestValleyInitialisation:
         runs = [_valley_init_responsibilities(data, 2)[1] for _ in range(3)]
         assert all(np.array_equal(runs[0], r) for r in runs)
 
-    def test_honours_sample_weights(self):
+    def test_honors_sample_weights(self):
         """The gap GaussianMixture could not close."""
 
         rng = np.random.default_rng(0)
@@ -338,14 +338,14 @@ class TestBoundedSupportSelection:
     either count is correct there.
     """
 
-    CASES = [
+    CASES = (
         ("beta interior mode", lambda r: r.beta(2.0, 5.0, 3000), (0.0, 1.0), 1),
         ("beta two-sided",
          lambda r: np.concatenate([r.beta(2.0, 5.0, 1500),
                                    r.beta(5.0, 2.0, 1500)]), (0.0, 1.0), 2),
         ("uniform", lambda r: r.uniform(0.0, 1.0, 3000), (0.0, 1.0), 1),
         ("lognormal", lambda r: r.lognormal(0.0, 0.6, 3000), (0.0, np.inf), (2, 3)),
-    ]
+    )
 
     @pytest.mark.parametrize("seed", [0, 1, 2])
     @pytest.mark.parametrize("name,builder,support,expected",
@@ -358,7 +358,7 @@ class TestBoundedSupportSelection:
 
     @pytest.mark.parametrize("name,builder,support,expected",
                              CASES, ids=[c[0] for c in CASES])
-    def test_fitted_density_is_normalised_on_its_support(self, name, builder,
+    def test_fitted_density_is_normalized_on_its_support(self, name, builder,
                                                          support, expected):
         """Over-selection was one symptom of the runaway support; this is another."""
         data = np.ascontiguousarray(builder(np.random.default_rng(0)))

@@ -3,6 +3,7 @@ import warnings
 
 import numpy as np
 import pytest
+from gibbus._model._state_kernels import _q_window_and_mode
 from scipy.integrate import IntegrationWarning, quad
 
 from gibbus._defaults import (
@@ -18,7 +19,6 @@ from gibbus._defaults import (
     NEWT_MAX,
     NEWT_TOL,
 )
-from gibbus._model._state_kernels import _q_window_and_mode
 from gibbus._model.coords import _build_fit_coordinate
 from gibbus._model.natural_state import _NaturalCoreState
 from gibbus._model.spec import _build_model_spec
@@ -159,8 +159,9 @@ def test_log_square_with_enabled_zero_amplitude_matches_python_oracle():
 
 def test_fused_power_moments_match_scalar_quadrature_across_supports():
     """Shared adaptive power traversal agrees with the scalar oracle path."""
-    from gibbus._fit.natural_objective import _fit_natural_conic_points
     from gibbus._model._moment_kernels import power_moments
+
+    from gibbus._fit.natural_objective import _fit_natural_conic_points
 
     rng = np.random.default_rng(918311)
     cases = (

@@ -18,5 +18,5 @@ objective actually consumes, so the inner pipeline never revisits raw data:
   stable normalization, and conditional-statistic reduction.
 
 Weight validation and Kish effective counts are shared through
-:func:`gibbus._observations.empirical._normalised_weights`.
+:func:`gibbus._observations.empirical._normalized_weights`.
 """

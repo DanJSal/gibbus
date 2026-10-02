@@ -5,8 +5,8 @@ GCC/Clang ``-O3`` family. Spectral SIMD hot loops provide their own portable
 no-alias/dependency hints for GCC, Clang, and MSVC; generic wheel builds leave
 the actual ISA choice to the compiler target. ``-ffast-math`` is deliberately *not*
 used anywhere because the kernels rely on IEEE NaN/inf semantics
-(``_finite`` checks, deliberate ``0.0/0.0``) that fast-math is free to
-optimise away.
+(``_finite`` checks, deliberate ``NAN``/``INFINITY`` results) that fast-math is free to
+optimize away.
 """
 
 import os
@@ -36,7 +36,7 @@ else:
     EXTRA_LINK_ARGS = []
 
 # Flags used only when the compiler accepts them (probed at build time).
-# -fopenmp-simd honours ``omp simd`` loop hints (vectorized reductions in the
+# -fopenmp-simd honors ``omp simd`` loop hints (vectorized reductions in the
 # solver kernels) without linking an OpenMP runtime; without it the hints are
 # ignored and the loops stay correct, just scalar.
 OPTIONAL_COMPILE_ARGS = [] if sys.platform == "win32" else ["-fopenmp-simd"]
@@ -73,7 +73,7 @@ MODULES = {
 }
 
 # ---------------------------------------------------------------------
-# Cythonize from .pyx.  The .c files are build artefacts: they are not
+# Cythonize from .pyx.  The .c files are build artifacts: they are not
 # committed and not shipped in the sdist, so there is nothing to fall
 # back to.  Cython is a declared build requirement in pyproject.toml.
 # ---------------------------------------------------------------------

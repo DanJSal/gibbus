@@ -392,9 +392,14 @@ def test_compiled_standalone_interval_newton_ignores_global_bound_locally():
 
 def test_state_numerics_decline_a_nonconvex_potential():
     from gibbus._model._state_kernels import state_numerics
+
     from gibbus._model.coords import _build_fit_coordinate
     from gibbus._model.natural import _natural_layout
-    from gibbus._model.natural_state import _MODE_CONTROLS, _layout_numerics, _NaturalCoreState
+    from gibbus._model.natural_state import (
+        _MODE_CONTROLS,
+        _layout_numerics,
+        _NaturalCoreState,
+    )
 
     layout = _natural_layout((-np.inf, np.inf), 4)
     numerics = _layout_numerics(layout)
@@ -465,9 +470,8 @@ def test_compiled_point_statistics_reject_invalid_inputs():
 
 
 def test_mixture_posterior_matches_logsumexp():
-    from scipy.special import logsumexp
-
     from gibbus._fit._mixture_kernels import mixture_posterior
+    from scipy.special import logsumexp
 
     rng = np.random.default_rng(3)
     log_values = rng.normal(size=(50, 3)) * 30.0
@@ -561,8 +565,8 @@ def test_compiled_spectral_builders_reproduce_python_harness():
 
 
 def test_compiled_mixture_spectral_cache_reproduces_python_harness(monkeypatch):
-    import gibbus._api.mixture_stats as mixture_stats
     from gibbus import Distribution
+    from gibbus._api import mixture_stats
 
     rng = np.random.default_rng(9)
     x = np.concatenate([rng.normal(-3, 0.6, 200), rng.gumbel(1.5, 0.8, 300)])

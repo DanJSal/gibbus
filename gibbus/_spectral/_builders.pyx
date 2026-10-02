@@ -31,7 +31,7 @@ cimport numpy as cnp
 from libc.math cimport exp, log, log1p, fabs, hypot, isfinite, isnan, isinf, nextafter
 from libc.math cimport INFINITY, NAN
 from libc.stdlib cimport malloc, free
-from libc.string cimport memcpy, memmove, memset
+from libc.string cimport memmove, memset
 
 from ._certify cimport _chebyshev_lower_bound_c
 
@@ -705,7 +705,7 @@ cdef double _invert_fraction(const CdfEval* ev, int j, double frac) noexcept nog
     cdef double lo = -1.0, hi = 1.0, u, candidate, value, deriv, f
     cdef double flo, fhi, target, local_mass, scale, tol
     cdef const double* c = ev.coeffs + j * ev.stride
-    cdef int nc = ev.ncoeff[j], it
+    cdef int nc = ev.ncoeff[j], _it
     if frac <= 8.0 * _DBL_EPSILON:
         return ev.breaks[j]
     if frac >= 1.0 - 8.0 * _DBL_EPSILON:
@@ -723,7 +723,7 @@ cdef double _invert_fraction(const CdfEval* ev, int j, double frac) noexcept nog
     if scale < 1e-300:
         scale = 1e-300
     tol = 8.0 * _DBL_EPSILON * scale
-    for it in range(64):
+    for _it in range(64):
         _cheb_value_derivative(c, nc, u, &value, &deriv)
         f = value - target
         if f <= 0.0:
@@ -882,7 +882,7 @@ cdef int _fit_ppf_panel(const Density* d, const Map* mp, const Tab* t, const Ppf
                         double za, double zb, int depth, int degree, IPanel* out,
                         double* coeff, double* work, int* depths) noexcept nogil:
     """``SpectralPPF._fit_panel``; returns whether the panel certified."""
-    cdef int D = degree, n = degree - 1, m = 2 * degree + 5, i, k, nd, ndc, nic
+    cdef int n = degree - 1, m = 2 * degree + 5, i, k, nd, ndc, nic
     cdef double r
     cdef double probs[72]
     cdef double z[72]

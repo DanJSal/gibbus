@@ -543,7 +543,7 @@ def _representation_ranks(layout, representation, /):
 
         Rank is invariant under nonzero diagonal row and column scalings.  The
         cone map can nevertheless contain columns separated by many orders of
-        magnitude when a finite support endpoint is remote in the data-centred
+        magnitude when a finite support endpoint is remote in the data-centered
         fitting coordinate.  Testing the raw SVD then measures units/scale
         rather than linear dependence.  Equilibrating both axes keeps the
         existing relative singular-value threshold while making the check

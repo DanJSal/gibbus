@@ -3,7 +3,7 @@
 """Cython extension providing adaptive Gaussian quadrature over the log-concave potential.
 
 This module constructs ``scipy.integrate.quad``-compatible
-``LowLevelCallable`` objects that wrap the fitted unnormalised density
+``LowLevelCallable`` objects that wrap the fitted unnormalized density
 ``exp(-q(x))`` (and weighted variants) in a C struct, then delegates
 integration to SciPy's QUADPACK routines.
 
@@ -266,7 +266,7 @@ def quad_integral(
     limlst: int = 50,
     dmin_log: float | None = None,
 ):
-    """Compute a weighted moment integral of the unnormalised log-concave density.
+    """Compute a weighted moment integral of the unnormalized log-concave density.
 
     Evaluates::
 
@@ -379,8 +379,6 @@ def quad_integral(
         if not (dmin_log_val > 0.0 and np.isfinite(dmin_log_val)):
             raise ValueError("dmin_log must be a finite positive float")
 
-
-
     if terms is None:
         T = np.empty((0, 3), dtype=np.float64)
     else:
@@ -441,7 +439,6 @@ def quad_integral(
             else:
                 b = min(b, U - dmin_log_val, float(np.nextafter(U, -np.inf)))
 
-
     if not (a < b):
         raise ValueError("Buffered integration interval is empty; check L/U and boundary parameters")
 
@@ -460,14 +457,13 @@ def quad_integral(
     )
 
     # Prevent Cython from collecting _refs (and thus _buf) before quad()
-    # completes.  The `len()` call is opaque to the Cython optimiser
+    # completes.  The `len()` call is opaque to the Cython optimizer
     # and forces _refs to be alive at this program point.
     len(_refs)
 
     if int(full_output) != 0:
         return out
     return float(out[0])
-
 
 
 cdef class PreparedQuad:

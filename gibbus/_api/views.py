@@ -2,10 +2,10 @@
 
 A fitted component is evaluated through one of two views:
 
-* :class:`_BaseSpaceView` — the modelled variable *x* directly.
+* :class:`_BaseSpaceView` — the modeled variable *x* directly.
 * :class:`_ExpSpaceView` — the induced density on *y = exp(x)*.
 
-Both are thin: they hold no fitted state of their own beyond memoised
+Both are thin: they hold no fitted state of their own beyond memoized
 exp-space quadrature results, and defer to the parent component for the
 potential, the affine map, and the spectral CDF/PPF.
 
@@ -36,7 +36,9 @@ from .._postfit.regions import hpd as _hpd
 from .._postfit.regions import interval as _interval
 from .._postfit.scoring import canonical_scoring_rows as _canonical_scoring_rows
 from .._postfit.scoring import interval_loglik as _interval_loglik
-from .._postfit.scoring import randomized_quantile_residuals as _randomized_quantile_residuals
+from .._postfit.scoring import (
+    randomized_quantile_residuals as _randomized_quantile_residuals,
+)
 from .._postfit.scoring import scoring_weights as _scoring_weights
 from .._postfit.scoring import warn_out_of_support as _warn_out_of_support
 from .._postfit.survival import cdf_hybrid, log_cdf_hybrid, log_sf_hybrid
@@ -753,9 +755,9 @@ class _BaseSpaceView:
         if not central and not standardized:
             return float(self._p._raw_moment_base(k))
 
-        # Centralise in the fitted canonical coordinate, where the mean is O(1),
+        # Centralize in the fitted canonical coordinate, where the mean is O(1),
         # then apply the affine scale analytically.  This avoids subtracting
-        # translated raw moments such as 1e24 - 1e24 for a distribution centred
+        # translated raw moments such as 1e24 - 1e24 for a distribution centered
         # near 1e12.
         z_mean = float(self._p._canonical_raw_moment(1))
         z_cm = _pf._central_moment_from_raw(
@@ -865,7 +867,7 @@ class _ExpSpaceView:
         return self._q_cache
 
     def _log_raw_moment(self, k: int) -> float:
-        """Return ``log E[Y^k]`` without materialising the dimensional moment.
+        """Return ``log E[Y^k]`` without materializing the dimensional moment.
 
         Parameters
         ----------

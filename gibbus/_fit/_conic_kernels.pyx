@@ -21,7 +21,7 @@ symmetric eigenproblems and one-sided (Hestenes) Jacobi for the SVD of
 ``B``.  Jacobi methods have high relative accuracy, which the certificate
 (smallest eigenvalues near zero) needs.  Inner loops run over contiguous rows
 through restrict-qualified helpers so compilers can vectorize them;
-reductions carry ``omp simd`` hints, honoured under ``-fopenmp-simd`` (no
+reductions carry ``omp simd`` hints, honored under ``-fopenmp-simd`` (no
 OpenMP runtime is linked).
 
 Layout: ``B`` is ``(r, n)`` row-major.  Block ``b`` of size ``k_b`` stores
@@ -309,14 +309,14 @@ cdef void _svd_rows(const double* bmat, int r, int n, double* x, double* u, doub
     (r x r, column j at ``u + j * r``) the left singular vectors, so
     ``B = sum_j sigma_j u_j v_j^T``.
     """
-    cdef int p, q, i, sweep
+    cdef int p, q, i, _sweep
     cdef bint rotated
     cdef double alpha, beta, gamma, zeta, t, c, s, xp, xq
     memcpy(x, bmat, r * n * sizeof(double))
     memset(u, 0, r * r * sizeof(double))
     for p in range(r):
         u[p * r + p] = 1.0
-    for sweep in range(80):
+    for _sweep in range(80):
         rotated = False
         for p in range(r - 1):
             for q in range(p + 1, r):
@@ -836,19 +836,19 @@ cdef void _direction(const Rep* rep, const Hessian* hs, const Kkt* kkt,
 
 cdef double _max_step(const double* m, const double* d, int k, double* work, bint* failed) noexcept nogil:
     """Largest ``alpha`` keeping ``m + alpha d`` PSD (``work``: 5 k^2 + 3 k)."""
-    cdef double* l = work
-    cdef double* y = l + k * k
+    cdef double* chol = work
+    cdef double* y = chol + k * k
     cdef double* yt = y + k * k
     cdef double* x = yt + k * k
     cdef double* eig = x + k * k
     cdef double smallest
-    memcpy(l, m, k * k * sizeof(double))
-    if _cholesky(l, k) != 0:
+    memcpy(chol, m, k * k * sizeof(double))
+    if _cholesky(chol, k) != 0:
         failed[0] = True
         return 0.0
-    _lower_solve_rows(l, d, y, k)
+    _lower_solve_rows(chol, d, y, k)
     _transpose(y, yt, k)
-    _lower_solve_rows(l, yt, x, k)
+    _lower_solve_rows(chol, yt, x, k)
     _symmetrize(x, k)
     smallest = _min_eig(x, k, eig)
     if smallest >= 0.0:
@@ -1260,7 +1260,7 @@ def solve_preconditioned(
     cdef const double[::1] ref = _as_c(reference_dual)
     cdef const Py_ssize_t[::1] deg = _as_c(row_degrees, np.intp)
     cdef const double[::1] blocks = _as_c(blocks_packed)
-    cdef int n = b.shape[1], r = b.shape[0], nb = k.shape[0], kmax = 1
+    cdef int n = b.shape[1], r = b.shape[0], nb = k.shape[0]
     cdef Py_ssize_t qtot = blocks.shape[0], na = a.shape[0]
     cdef cnp.ndarray[cnp.float64_t, ndim=1] endpoint = np.empty(n)
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out_blocks = np.empty(qtot)
@@ -1763,7 +1763,7 @@ cdef int _point_newton_loop(
     cdef double* trial_hessian
     cdef double* trial_means
     cdef double* cold_blocks
-    cdef int iteration, line_it, qp_iterations, status, bb, aa, kk, i
+    cdef int iteration, _line_it, qp_iterations, status, bb, aa, kk, i
     cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
     cdef int first_solve, accepted, any_step
     cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
@@ -1865,7 +1865,7 @@ cdef int _point_newton_loop(
 
         alpha = 1.0
         accepted = 0
-        for line_it in range(max_line_search):
+        for _line_it in range(max_line_search):
             for i in range(n):
                 trial_theta[i] = theta[i] + alpha * (chosen[i] - theta[i])
             for i in range(qtot):
@@ -2023,7 +2023,7 @@ cdef int _interval_newton_loop(
     cdef double* trial_gradient
     cdef double* trial_hessian
     cdef double* cold_blocks
-    cdef int iteration, line_it, qp_iterations, status, bb, aa, kk, i
+    cdef int iteration, _line_it, qp_iterations, status, bb, aa, kk, i
     cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
     cdef int first_solve, accepted, any_step
     cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
@@ -2153,7 +2153,7 @@ cdef int _interval_newton_loop(
 
         alpha = 1.0
         accepted = 0
-        for line_it in range(max_line_search):
+        for _line_it in range(max_line_search):
             for i in range(n):
                 trial_theta[i] = theta[i] + alpha * (chosen[i] - theta[i])
             for i in range(qtot):
@@ -2499,10 +2499,10 @@ def solve_callback_newton(
     cdef object trial
     cdef double bound = INFINITY
     cdef double carried = INFINITY
-    cdef double scale, solved_bound, model_value, gap, scaled_model
+    cdef double scale, solved_bound, model_value, gap, _scaled_model
     cdef double directional, alpha, decrease, certificate
     cdef double chosen_model = 0.0
-    cdef int iteration, ls, qp_iterations
+    cdef int iteration, _ls, qp_iterations
     cdef int evaluations = 0
     cdef int sub_iterations = 0
     cdef int cold_starts = 0
@@ -2519,7 +2519,7 @@ def solve_callback_newton(
         while True:
             (
                 endpoint, endpoint_blocks, model_value, gap, qp_iterations,
-                candidate_dual, scaled_model,
+                candidate_dual, _scaled_model,
             ) = solve_preconditioned(
                 hessian, gradient, theta, b_matrix, a_packed, sizes, a_offsets,
                 q_offsets, reference_dual, row_degrees, start_blocks,
@@ -2567,7 +2567,7 @@ def solve_callback_newton(
 
         alpha = 1.0
         trial = None
-        for ls in range(max_line_search):
+        for _ls in range(max_line_search):
             trial_blocks = (1.0 - alpha) * current_blocks + alpha * chosen_blocks
             trial_params = theta + alpha * step
             evaluations += 1

@@ -22,7 +22,7 @@ def pack_cdf_state(rep):
 
     Panel antiderivatives are shifted to vanish at each panel's left edge
     and divided by the total mass, so the packed coefficients describe a
-    normalised CDF directly and the evaluator needs no runtime scaling.
+    normalized CDF directly and the evaluator needs no runtime scaling.
 
     Parameters
     ----------

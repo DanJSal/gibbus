@@ -2,7 +2,7 @@
 
 Three independent questions, deliberately answered separately:
 
-* **Did the likelihood optimisation converge?** — :attr:`fit_diagnostics`,
+* **Did the likelihood optimization converge?** — :attr:`fit_diagnostics`,
   covering every component's natural-conic certificate plus the EM session
   whenever that in-process diagnostic record is available.
 * **Why was this component count chosen?** — :attr:`selection_diagnostics`.
@@ -15,7 +15,7 @@ converged one unless it is recorded.
 
 These are collected in a mixin rather than as free functions because each is
 a public property whose contract belongs to ``Distribution``; keeping them here
-separates that reporting surface from the estimator's own behaviour.
+separates that reporting surface from the estimator's own behavior.
 """
 
 import copy
@@ -183,7 +183,7 @@ class _DiagnosticsMixin:
             measure, not a ranking metric; ``0.0`` means every panel met
             its internal certification criteria.
             ``mass_defect`` (float) -- ``|1 - total_mass|`` before
-            normalisation; large values mean probability the panels
+            normalization; large values mean probability the panels
             never resolved, typically at a boundary singularity.
             ``worst_panel_error`` (float) -- largest local panel error
             estimate after conversion to probability units.
@@ -197,7 +197,7 @@ class _DiagnosticsMixin:
             bisection rather than fitted inverse panels. Extreme public tail
             queries may subsequently use direct potential-based inversion.
             ``log_concavity_margin`` (float) -- certified lower bound on
-            base-space convexity of the potential, minimised over
+            base-space convexity of the potential, minimized over
             components.  Non-negative means every component's polynomial
             is certified convex; the mixture density itself need not be
             log-concave even when each component is.
@@ -229,7 +229,7 @@ class _DiagnosticsMixin:
             "mass_defect": float(rep.mass_defect),
             "worst_panel_error": float(rep.worst_panel_error),
             "error_estimate": float(rep.cdf_error_estimate),
-            "n_panels": int(len(rep.panels)),
+            "n_panels": len(rep.panels),
             "n_masses_recertified": int(rep.n_masses_recertified),
             "ppf_fallback": bool(self._mix_spectral_ppf_rep is None),
             "log_concavity_margin": self._log_concavity_margin(),

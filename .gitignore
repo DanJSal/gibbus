@@ -9,7 +9,7 @@ gibbus/*.h
 *.pyd
 *.o
 
-# Build artefacts
+# Build artifacts
 build/
 dist/
 *.egg-info/

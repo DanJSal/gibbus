@@ -1,7 +1,7 @@
 """Automatic component-count selection.
 
 This is where *K* is decided.  :func:`._fit.mixture._propose_n_components`
-supplies only the KDE mode count that centres the search; candidates are then
+supplies only the KDE mode count that centers the search; candidates are then
 scored with lightweight log-concave fits, so the screening model belongs to
 the same family as the final fit rather than to a Gaussian surrogate.
 
@@ -48,7 +48,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
                                 subsample="auto"):
     """Choose the component count by BIC.
 
-    The sweep searches a KDE-centred range of candidate counts over validation
+    The sweep searches a KDE-centered range of candidate counts over validation
     degrees, scores candidates on a stratified subsample when the data are
     large, requires minimum effective support per component, counts BIC
     parameters from the fitted faces, and stops early once BIC stops
@@ -97,7 +97,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
     )
     lc_k_hi = min(lc_k_hi, max(n_val // 50, 2))
     lc_k_hi = max(lc_k_hi, lc_k_lo)
-    # The KDE proposal only centres the range.  When the best score sits on
+    # The KDE proposal only centers the range.  When the best score sits on
     # its upper edge the sweep keeps going, one K at a time, until the score
     # stops improving or the hard ceiling is reached: a KDE that smooths two
     # overlapping log-concave components into one mode must not cap K at 2.

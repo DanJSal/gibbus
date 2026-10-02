@@ -2,7 +2,7 @@
 
 This module provides helpers used *after* fitting to compute or update
 derived quantities — moments, summary statistics, support bounds, and
-exp-space raw moments — without re-running the optimiser.
+exp-space raw moments — without re-running the optimizer.
 
 Pipeline position
 -----------------
@@ -12,7 +12,7 @@ This module is called from:
 * ``gibbus._api.component._Component._raw_moment_base`` — for on-demand base-space moment
   computation beyond the cached ``raw_moments`` array.
 * ``gibbus._api.component._Component.transform`` — via :func:`_univariate_affine_update_public`
-  to recompute statistics after an affine reparameterisation.
+  to recompute statistics after an affine reparameterization.
 
 It wraps the Cython kernels ``_state_kernels._valley_q1_shift`` and
 ``_quad_integrals.quad_integral`` with the package-level defaults from
@@ -103,7 +103,7 @@ def _stats_from_raw_moments(m1, m2, m3, m4, /):
             f"Degenerate variance encountered: E[X^2] = {m2f!r} and "
             f"E[X]^2 = {mean * mean!r} agree to within floating point, so "
             f"the fitted density has concentrated onto a point. The "
-            f"likelihood of this family is unbounded, and an optimiser "
+            f"likelihood of this family is unbounded, and an optimizer "
             f"can converge onto such a spike at excessive polynomial "
             f"complexity. Try a lower polynomial degree or a more "
             f"appropriate support/model specification."
@@ -126,7 +126,7 @@ def _stats_from_raw_moments(m1, m2, m3, m4, /):
         skew = float(mu3 / (std ** 3))
         kurt = float(mu4 / (std ** 4))
 
-    return dict(mean=mean, var=var, std=std, skew=skew, kurt=kurt)
+    return {"mean": mean, "var": var, "std": std, "skew": skew, "kurt": kurt}
 
 
 def _stats_from_centered_moments(mean, mu2, mu3, mu4, /):
@@ -150,7 +150,7 @@ def _stats_from_centered_moments(mean, mu2, mu3, mu4, /):
     std = float(np.sqrt(var))
     skew = float(mu3) / (std ** 3) if np.isfinite(mu3) else np.nan
     kurt = float(mu4) / (std ** 4) if np.isfinite(mu4) else np.nan
-    return dict(mean=mean, var=var, std=std, skew=skew, kurt=kurt)
+    return {"mean": mean, "var": var, "std": std, "skew": skew, "kurt": kurt}
 
 
 def _central_moment_from_raw(get_raw, k, mean, /):
@@ -312,7 +312,7 @@ def _support_from_base(base_support, mu_eff, sigma_eff, /):
 
 
 def _moment_from_raw(get_raw, k, mean, std, central, standardized, /):
-    """Derive a central or standardised moment from raw moments.
+    """Derive a central or standardized moment from raw moments.
 
     Parameters
     ----------
@@ -321,9 +321,9 @@ def _moment_from_raw(get_raw, k, mean, std, central, standardized, /):
     k : int
         Moment order.
     mean : float
-        First raw moment (used for central/standardised computation).
+        First raw moment (used for central/standardized computation).
     std : float
-        Standard deviation (used for standardisation).
+        Standard deviation (used for standardization).
     central : bool
         If ``True``, compute the central moment ``E[(X - mean)^k]``.
     standardized : bool
@@ -778,11 +778,11 @@ def _expanded_tilted_log_moment(
     if np.isfinite(right_extent) and right_extent > 64.0:
         right_extent = np.inf
 
-    left_val, left_err = quad(
+    left_val, _left_err = quad(
         lambda y: relative(y, -1.0), 0.0, left_extent,
         epsabs=QUAD_EPSABS, epsrel=QUAD_EPSREL, limit=QUAD_LIMIT,
     )
-    right_val, right_err = quad(
+    right_val, _right_err = quad(
         lambda y: relative(y, 1.0), 0.0, right_extent,
         epsabs=QUAD_EPSABS, epsrel=QUAD_EPSREL, limit=QUAD_LIMIT,
     )
@@ -1037,7 +1037,7 @@ def _univariate_raw_moment(struct, k, /):
 
 
 def _univariate_affine_update_public(struct, mu_new, sigma_new, /):
-    """Recompute user-coordinate statistics after an affine reparameterisation.
+    """Recompute user-coordinate statistics after an affine reparameterization.
 
     When the user calls ``Distribution.transform(mu=..., sigma=...)``, the
     polynomial potential itself does not change — only the affine mapping
@@ -1113,13 +1113,13 @@ def _univariate_affine_update_public(struct, mu_new, sigma_new, /):
     z_stats = _stats_from_raw_moments(*map(float, z_mom[1:5]))
     affine_a = 1.0 / float(sigma_eff_new)
     affine_b = -float(mu_eff_new) / float(sigma_eff_new)
-    stats = dict(
-        mean=float(affine_b + affine_a * z_stats["mean"]),
-        var=float((affine_a * affine_a) * z_stats["var"]),
-        std=float(abs(affine_a) * z_stats["std"]),
-        skew=float((-1.0 if affine_a < 0.0 else 1.0) * z_stats["skew"]),
-        kurt=float(z_stats["kurt"]),
-    )
+    stats = {
+        "mean": float(affine_b + affine_a * z_stats["mean"]),
+        "var": float((affine_a * affine_a) * z_stats["var"]),
+        "std": float(abs(affine_a) * z_stats["std"]),
+        "skew": float((-1.0 if affine_a < 0.0 else 1.0) * z_stats["skew"]),
+        "kurt": float(z_stats["kurt"]),
+    }
 
     if np.isfinite(stats["skew"]) and np.isfinite(stats["kurt"]):
         skew = stats["skew"]
@@ -1137,19 +1137,19 @@ def _univariate_affine_update_public(struct, mu_new, sigma_new, /):
 
     support = _support_from_base(base_support, mu_eff_new, sigma_eff_new)
 
-    return dict(
-        mu=float(mu_new),
-        sigma=float(sigma_new),
-        support=support,
-        median=float(median),
-        mode=float(mode),
-        raw_moments=rm_new,
-        mean=float(stats["mean"]),
-        var=float(stats["var"]),
-        std=float(stats["std"]),
-        skew=float(skew),
-        kurt=float(kurt),
-    )
+    return {
+        "mu": float(mu_new),
+        "sigma": float(sigma_new),
+        "support": support,
+        "median": float(median),
+        "mode": float(mode),
+        "raw_moments": rm_new,
+        "mean": float(stats["mean"]),
+        "var": float(stats["var"]),
+        "std": float(stats["std"]),
+        "skew": float(skew),
+        "kurt": float(kurt),
+    }
 
 
 def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, /):
@@ -1169,7 +1169,7 @@ def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, 
     nearly equal ``O(1)`` log moments, so ``d2 = l2 - 2*l1`` loses most of its
     significant digits.  Below ``EXP_NARROW_D2_THRESHOLD`` the relative
     centered moments are therefore integrated directly instead of being
-    reconstructed from ``expm1`` of cancelling differences.
+    reconstructed from ``expm1`` of canceling differences.
 
     Parameters
     ----------
@@ -1202,15 +1202,15 @@ def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, 
     # variance and standardized shape are undefined.  Expose that fact
     # directly rather than evaluating inf-inf combinations below.
     if np.isposinf(l1):
-        return dict(
-            mean=np.inf,
-            var=np.inf,
-            std=np.inf,
-            skew=np.nan,
-            kurt=np.nan,
-            log_mean=np.inf,
-            cv=np.nan,
-        )
+        return {
+            "mean": np.inf,
+            "var": np.inf,
+            "std": np.inf,
+            "skew": np.nan,
+            "kurt": np.nan,
+            "log_mean": np.inf,
+            "cv": np.nan,
+        }
 
     d2 = float(l2 - 2.0 * l1)
     if d2 < EXP_NARROW_D2_THRESHOLD:
@@ -1251,8 +1251,8 @@ def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, 
     log_std = 0.5 * log_var
     std = float(np.exp(log_std)) if log_std <= log_max else np.inf
 
-    return dict(mean=mean, var=var, std=std, skew=skew, kurt=kurt,
-                log_mean=l1, cv=cv)
+    return {"mean": mean, "var": var, "std": std, "skew": skew, "kurt": kurt,
+            "log_mean": l1, "cv": cv}
 
 def _checked_cv(cv2, subject, /):
     """Return ``sqrt(cv2)`` after rejecting a degenerate relative variance.

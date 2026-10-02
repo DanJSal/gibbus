@@ -66,16 +66,16 @@ class _ObjectiveEvaluation:
 
 
 def _finite_interval_log_kernel(state, support, plan, point_q, /):
-    """Evaluate the unnormalised log kernel over a finite-interval plan.
+    """Evaluate the unnormalized log kernel over a finite-interval plan.
 
     Used by the degree diagnostics, which build the Gauss--Legendre reduction
     of the interval objective.  Exact-point rows evaluate the potential through
-    *point_q* so that preserved sub-ulp boundary distances are honoured.
+    *point_q* so that preserved sub-ulp boundary distances are honored.
 
     Parameters
     ----------
     state : _NaturalCoreState
-        Normalised model state supplying ``q_poly``, ``boundary_amplitudes``
+        Normalized model state supplying ``q_poly``, ``boundary_amplitudes``
         and ``q_shift``.
     support : tuple of (float, float)
         Canonical support.

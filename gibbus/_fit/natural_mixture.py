@@ -51,8 +51,10 @@ from .._model.coords import _build_fit_coordinate, _build_interval_fit_coordinat
 from .._model.natural_state import _NaturalCoreState
 from .._model.spec import _build_model_spec
 from .._model.vec import _q_eval
-from .._observations._finite_reductions import evaluate_finite_log_probabilities_real_line
-from .._observations.empirical import _normalised_weights
+from .._observations._finite_reductions import (
+    evaluate_finite_log_probabilities_real_line,
+)
+from .._observations.empirical import _normalized_weights
 from .._observations.intervals import (
     _GL_LOG_W,
     _GL_X,
@@ -506,7 +508,7 @@ class _ComponentProblem:
             # censoring intervals need only one quadrature contribution.
             # Preserve the original-row Kish effective sample size: sample
             # weights are reliability weights, not frequency counts.
-            normalized, total, effective_n = _normalised_weights(
+            normalized, total, effective_n = _normalized_weights(
                 self.rows.shape[0], weights, "interval"
             )
             first, inverse, n_unique = self._grouping_cache["grouping"]
@@ -595,7 +597,7 @@ class _ComponentProblem:
         """
         if not self.intervals or self._distinct is None:
             raise ValueError("compact_objective requires duplicated interval rows")
-        first, inverse, n_unique = self._grouping_cache["grouping"]
+        first, _inverse, n_unique = self._grouping_cache["grouping"]
         r = np.asarray(responsibilities, dtype=np.float64).reshape(-1)
         if r.size != n_unique or np.any(r < 0.0) or not np.all(np.isfinite(r)):
             raise ValueError("distinct responsibilities must be finite and nonnegative")
@@ -1859,7 +1861,7 @@ def _fit_natural_mixture(
 
     # With automatic degrees, explorations from different initializations can
     # lock different degrees, so their likelihoods compare models of
-    # different size; raw likelihood would always favour the larger one.
+    # different size; raw likelihood would always favor the larger one.
     # Rank them by BIC (per observation, as the likelihoods are), the
     # criterion the component-count selection uses.
     effective_n = 1.0 / float(np.dot(w, w))

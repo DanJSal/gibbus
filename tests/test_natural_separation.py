@@ -1,5 +1,6 @@
 """Definition-level tests for natural full-curvature separation algebra."""
 
+import itertools
 import math
 from fractions import Fraction
 
@@ -153,7 +154,7 @@ def _fraction_variations(sequence, point):
             signs.append(1)
         elif value < 0:
             signs.append(-1)
-    return sum(left != right for left, right in zip(signs, signs[1:], strict=False))
+    return sum(left != right for left, right in itertools.pairwise(signs))
 
 
 def _fraction_root_count(sequence, lower, upper):
@@ -422,7 +423,7 @@ def test_bernstein_subdivision_monotonically_tightens_enclosure():
         _bernstein_interval_bounds(coefficients, -1.3, 2.1, depth)
         for depth in range(6)
     ]
-    for earlier, later in zip(bounds, bounds[1:], strict=False):
+    for earlier, later in itertools.pairwise(bounds):
         assert later[0] >= earlier[0] - 2e-14
         assert later[1] <= earlier[1] + 2e-14
 
@@ -744,7 +745,7 @@ def test_separator_bounded_presence_cases_find_known_interior_violation(amplitud
 def test_separator_half_line_positive_amplitude_known_stationary_violation(
     support, amplitudes, stationary_point
 ):
-    lower, upper = support
+    lower, _upper = support
     a_lower, a_upper = amplitudes
     amplitude = a_lower if np.isfinite(a_lower) else a_upper
     if np.isfinite(lower):

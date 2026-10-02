@@ -504,7 +504,7 @@ cdef class TailIntegrator:
         Same values as :meth:`log_mass` at every anchor (up to the quadrature
         tolerance).  The anchors are ordered toward ``endpoint``; the most
         extreme gets a full adaptive integration and every other one adds the
-        integral up to its neighbour in log space.
+        integral up to its neighbor in log space.
         """
         cdef cnp.ndarray[cnp.float64_t, ndim=1] xs = np.ascontiguousarray(x, dtype=np.float64).reshape(-1)
         cdef Py_ssize_t n = xs.shape[0]

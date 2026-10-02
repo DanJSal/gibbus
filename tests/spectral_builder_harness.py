@@ -14,14 +14,11 @@ compare CDF/PPF values with analytic distributions or external quadrature.
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import replace
 
 import numpy as np
-from numpy.polynomial import chebyshev as C
-from scipy.special import expit
-
-from gibbus._defaults import SPECTRAL_DEGREE_OPTIONS
 from gibbus._spectral._certify import chebyshev_lower_bound
 from gibbus._spectral._panel_kernels import cdf_panel_metrics as _cdf_panel_metrics
 from gibbus._spectral._panel_kernels import chebder as _chebder_kernel
@@ -30,6 +27,10 @@ from gibbus._spectral._panel_kernels import chebval_many as _chebval_many
 from gibbus._spectral._panel_kernels import (
     lobatto_coefficients as _lobatto_coefficients_kernel,
 )
+from numpy.polynomial import chebyshev as C
+from scipy.special import expit
+
+from gibbus._defaults import SPECTRAL_DEGREE_OPTIONS
 from gibbus._spectral.cdf import SpectralCDF, _Map, _Panel
 from gibbus._spectral.chebyshev import (
     _lobatto_transform,
@@ -54,7 +55,7 @@ _RECERTIFY_SUBPANELS = 8
 class PythonSpectralCDFBuilder(SpectralCDF):
     """Spectral CDF built by the test-only Python construction harness.
 
-    Takes a vectorised density callable, or a density description whose
+    Takes a vectorized density callable, or a density description whose
     ``pdf`` is used.  Panel-construction control flow is Python-level; panel
     algebra, normalization, packing, evaluation, and diagnostics reuse the
     production implementation.
@@ -67,8 +68,8 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         Parameters
         ----------
         pdf : callable or None
-            Vectorised density in physical coordinates (need not be
-            normalised); defaults to ``density.pdf``.
+            Vectorized density in physical coordinates (need not be
+            normalized); defaults to ``density.pdf``.
         support : sequence of (float, float)
             Density support.
         density : DensitySpec or None, optional
@@ -137,7 +138,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         L, U : float
             Support endpoints, either of which may be infinite.
         mode : float or None
-            Density mode, used to centre a doubly-infinite map.
+            Density mode, used to center a doubly-infinite map.
         s0 : float
             Baseline scale, typically the fitted standard deviation.
         kind : {"lower", "upper", "real", "lower_centered", "upper_centered"} or None, optional
@@ -474,7 +475,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
             Complete leaf partition, sorted later by the caller.
         """
         leaves = []
-        for a, b in zip(breaks[:-1], breaks[1:], strict=True):
+        for a, b in itertools.pairwise(breaks):
             ok, panel = self._fit_best_panel(float(a), float(b), 0)
             leaves.append((bool(ok), panel))
 
@@ -551,7 +552,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
 
             sub = np.linspace(-1.0, 1.0, _RECERTIFY_SUBPANELS + 1)
             total = 0.0
-            for lo, hi in zip(sub[:-1], sub[1:], strict=True):
+            for lo, hi in itertools.pairwise(sub):
                 sh = 0.5 * (hi - lo)
                 sc = 0.5 * (hi + lo)
                 zz = mid + half * (sc + sh * nodes)

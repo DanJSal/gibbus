@@ -25,7 +25,10 @@ import numpy as np
 from scipy.optimize import nnls
 
 from .._defaults import NUMERIC_FAILURES, _reraise_if_debug
-from . import _conic_kernels, _curvature_certificate  # type: ignore[attr-defined]  # compiled
+from . import (  # type: ignore[attr-defined]  # compiled
+    _conic_kernels,
+    _curvature_certificate,
+)
 from .conic_qp import (
     _ConicQPResult,
     _support_representation,

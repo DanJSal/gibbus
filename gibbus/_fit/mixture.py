@@ -10,11 +10,12 @@ Contents
 * **Initialization**: valley, GMM, and concentric-scale responsibility seeds.
 * **EM helpers**: point and interval E-steps plus mixture-weight updates.
 * **KDE mode counting**: bandwidth sweeps and automatic-K proposals.
-* **Serialisation**: mixture structured-state packing and unpacking.
+* **Serialization**: mixture structured-state packing and unpacking.
 * **Post-fit utilities**: component ordering and mixture mode finding.
 """
 
 
+import itertools
 import weakref
 
 import numpy as np
@@ -117,7 +118,7 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     resulting cells.  Those become Gaussian kernels whose posteriors are
     the returned responsibilities.
 
-    The initializer is deterministic, honours observation weights, and costs
+    The initializer is deterministic, honors observation weights, and costs
     one binning pass plus a few FFTs.  The Gaussian-mixture seed ignores
     observation weights and is therefore used only when the valley path
     cannot represent the requested component structure.
@@ -167,7 +168,7 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     try:
         dens = _binned_kde_sweep(x, grid, bw * mult, weights=w)
     except NUMERIC_FAILURES as exc:
-        _reraise_if_debug(exc, "valley initialisation")
+        _reraise_if_debug(exc, "valley initialization")
         return None, None
 
     # A genuine valley should survive a material change of bandwidth.  A
@@ -202,7 +203,7 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
 
     # Split at the density minimum between consecutive peaks.
     cuts = [float(grid[a + int(np.argmin(chosen[a:b + 1]))])
-            for a, b in zip(peaks[:-1], peaks[1:], strict=True)]
+            for a, b in itertools.pairwise(peaks)]
     edges = np.array([-np.inf, *cuts, np.inf], dtype=np.float64)
 
     cell = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, k - 1)
@@ -229,7 +230,7 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     if np.any(weak_small):
         return None, None
 
-    # A cell narrower than the kernel is an artefact of a shallow
+    # A cell narrower than the kernel is an artifact of a shallow
     # valley, not a component; widen it rather than divide by zero.
     sd = np.maximum(sd, 0.25 * bw)
 
@@ -245,11 +246,11 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
 
 
 def _nested_scale_init_responsibilities(samples_1d, n_components, /, *, weights=None):
-    """Initialise concentric components by radial scale rather than location.
+    """Initialize concentric components by radial scale rather than location.
 
-    The ordinary GMM initialiser is location driven and can converge to a
-    nearly arbitrary left/right split when components share a centre but have
-    very different scales.  This initializer keeps one robust common centre,
+    The ordinary GMM initializer is location driven and can converge to a
+    nearly arbitrary left/right split when components share a center but have
+    very different scales.  This initializer keeps one robust common center,
     orders observations by absolute distance from it, divides that radial
     ordering into equal-weight shells, and estimates one Gaussian scale per
     shell.  The resulting Gaussian posteriors seed EM with a genuine
@@ -354,7 +355,7 @@ def _initial_responsibility_candidates(samples_1d, n_components, rng, /, *, weig
         resp, mix = _gmm_init_responsibilities(samples_1d, n_components, rng)
         candidates.append(("gmm", resp, mix))
     except (*NUMERIC_FAILURES, ValueError, OverflowError) as exc:
-        _reraise_if_debug(exc, "GMM mixture initialisation", routine=True)
+        _reraise_if_debug(exc, "GMM mixture initialization", routine=True)
 
     resp, mix = _nested_scale_init_responsibilities(
         samples_1d, n_components, weights=weights)
@@ -368,7 +369,7 @@ def _init_responsibilities(samples_1d, n_components, rng, /, *, weights=None):
     """Initial responsibilities: valleys where they exist, GMM otherwise.
 
     :func:`_valley_init_responsibilities` is preferred -- it is
-    deterministic, honours *weights*, and reuses the KDE sweep the
+    deterministic, honors *weights*, and reuses the KDE sweep the
     pipeline already runs.  It declines when no bandwidth in the sweep
     resolves exactly *n_components* peaks, which is a real limitation
     rather than a numerical failure.  In practice that means asking for
@@ -406,7 +407,7 @@ def _init_responsibilities(samples_1d, n_components, rng, /, *, weights=None):
 def _gmm_init_responsibilities(samples_1d, n_components, rng, /):
     """Compute initial responsibilities from a one-dimensional Gaussian mixture.
 
-    Fits a ``K``-component Gaussian mixture by EM (k-means++ centres, hard
+    Fits a ``K``-component Gaussian mixture by EM (k-means++ centers, hard
     initial assignment, ``AUTO_GMM_N_INIT`` restarts, the best final average
     log likelihood kept) in the modeled base coordinate and returns its
     posterior responsibilities and weights.  It is a seed only: the natural
@@ -415,11 +416,11 @@ def _gmm_init_responsibilities(samples_1d, n_components, rng, /):
     Parameters
     ----------
     samples_1d : numpy.ndarray, shape (R,)
-        Point samples (or interval midpoints) used for initialisation.
+        Point samples (or interval midpoints) used for initialization.
     n_components : int
         Number of mixture components.
     rng : numpy.random.Generator
-        Random-number generator for the k-means++ centres.
+        Random-number generator for the k-means++ centers.
 
     Returns
     -------
@@ -449,48 +450,48 @@ def _gmm_init_responsibilities(samples_1d, n_components, rng, /):
 
     best = None
     for _ in range(int(AUTO_GMM_N_INIT)):
-        centres = _kmeans_plusplus_1d(fit_x, k, rng)
-        params = _gaussian_mixture_em_1d(fit_x, centres)
+        centers = _kmeans_plusplus_1d(fit_x, k, rng)
+        params = _gaussian_mixture_em_1d(fit_x, centers)
         if params is not None and (best is None or params[3] > best[3]):
             best = params
     if best is None:
-        raise FloatingPointError("Gaussian mixture initialisation failed")
+        raise FloatingPointError("Gaussian mixture initialization failed")
     means, variances, weights, _ = best
     log_resp, _ = _gaussian_log_posterior_1d(x, means, variances, weights)
     return np.exp(log_resp), weights.copy()
 
 
 def _kmeans_plusplus_1d(x, k, rng, /):
-    """Greedy k-means++ centres for one-dimensional data.
+    """Greedy k-means++ centers for one-dimensional data.
 
-    Each new centre is the best of ``2 + floor(log k)`` candidates drawn with
-    probability proportional to the squared distance to the chosen centres.
+    Each new center is the best of ``2 + floor(log k)`` candidates drawn with
+    probability proportional to the squared distance to the chosen centers.
 
     Parameters
     ----------
     x : numpy.ndarray, shape (R,)
         Samples.
     k : int
-        Number of centres.
+        Number of centers.
     rng : numpy.random.Generator
         Random-number generator.
     """
     trials = 2 + int(np.log(k))
-    centres = [float(x[rng.integers(x.size)])]
-    closest = (x - centres[0]) ** 2
+    centers = [float(x[rng.integers(x.size)])]
+    closest = (x - centers[0]) ** 2
     for _ in range(1, k):
         total = float(np.sum(closest))
         if not total > 0.0:
-            centres.append(float(x[rng.integers(x.size)]))
+            centers.append(float(x[rng.integers(x.size)]))
             continue
         cumulative = np.cumsum(closest)
         picks = np.searchsorted(cumulative, rng.random(trials) * total)
         picks = np.minimum(picks, x.size - 1)
         candidate_distances = np.minimum(closest[None, :], (x[None, :] - x[picks, None]) ** 2)
         chosen = int(np.argmin(np.sum(candidate_distances, axis=1)))
-        centres.append(float(x[picks[chosen]]))
+        centers.append(float(x[picks[chosen]]))
         closest = candidate_distances[chosen]
-    return np.asarray(centres, dtype=np.float64)
+    return np.asarray(centers, dtype=np.float64)
 
 
 def _gaussian_log_posterior_1d(x, means, variances, weights, /):
@@ -515,15 +516,15 @@ def _gaussian_log_posterior_1d(x, means, variances, weights, /):
     return log_p - log_norm[:, None], float(np.mean(log_norm))
 
 
-def _gaussian_mixture_em_1d(x, centres, /, *, tol=1e-3, max_iter=100, reg=1e-6):
-    """EM for a one-dimensional Gaussian mixture from hard nearest-centre labels.
+def _gaussian_mixture_em_1d(x, centers, /, *, tol=1e-3, max_iter=100, reg=1e-6):
+    """EM for a one-dimensional Gaussian mixture from hard nearest-center labels.
 
     Parameters
     ----------
     x : numpy.ndarray, shape (R,)
         Samples.
-    centres : numpy.ndarray, shape (K,)
-        Initial centres.
+    centers : numpy.ndarray, shape (K,)
+        Initial centers.
     tol : float, optional
         Stop when the average log likelihood rises by less than this.
     max_iter : int, optional
@@ -537,8 +538,8 @@ def _gaussian_mixture_em_1d(x, centres, /, *, tol=1e-3, max_iter=100, reg=1e-6):
         ``(means, variances, weights, average log likelihood)``, or ``None``
         when a component loses all its mass.
     """
-    k = centres.size
-    labels = np.argmin(np.abs(x[:, None] - centres[None, :]), axis=1)
+    k = centers.size
+    labels = np.argmin(np.abs(x[:, None] - centers[None, :]), axis=1)
     resp = np.zeros((x.size, k), dtype=np.float64)
     resp[np.arange(x.size), labels] = 1.0
     previous = -np.inf
@@ -574,7 +575,7 @@ def _silverman_bandwidth(samples_1d, /, *, n_effective=None, weights=None):
     The spread is ``ddof=1`` when *weights* is None.  When weights are
     given there is no count to correct by -- ``sample_weights`` are
     relative, not frequencies -- so the reliability-weight estimator is
-    used instead, dividing by ``1 - sum(w^2)`` for normalised ``w``.
+    used instead, dividing by ``1 - sum(w^2)`` for normalized ``w``.
     That is Kish's effective sample size ``n_eff = 1 / sum(w^2)`` in the
     form ``(n_eff - 1) / n_eff``, and it reduces exactly to ``ddof=1``
     at uniform weights, so passing uniform weights reproduces passing
@@ -643,9 +644,9 @@ def _binned_kde_sweep(samples_1d, grid, bandwidths, /, *, weights=None):
     one.  The data is zero-padded to at least twice the grid length so
     the circular convolution does not wrap.
 
-    Linear binning (splitting each sample between its two neighbouring
+    Linear binning (splitting each sample between its two neighboring
     grid points) rather than nearest-bin assignment keeps the
-    discretisation error well below the kernel width, which matters
+    discretization error well below the kernel width, which matters
     because the output is used to locate local maxima.
 
     Parameters
@@ -659,7 +660,7 @@ def _binned_kde_sweep(samples_1d, grid, bandwidths, /, *, weights=None):
     weights : numpy.ndarray, shape (R,) or None, optional
         Non-negative sample weights.  ``None`` (default) weights every
         sample equally.  Linear binning makes weighting free, which is
-        what lets the initialiser honour ``sample_weights``.
+        what lets the initializer honor ``sample_weights``.
 
     Returns
     -------
@@ -847,10 +848,10 @@ def _propose_n_components(samples_1d, k_max, rng, /, *, verbose=0):
     sweeps a Gaussian KDE across bandwidths and reports the most
     frequent number of prominent local maxima.  The actual choice is
     made by :func:`gibbus._api.selection.select_n_components`, which scores candidate *K*
-    values with lightweight log-concave fits centred on this proposal.
+    values with lightweight log-concave fits centered on this proposal.
 
     Candidate counts are deliberately scored by the log-concave model family
-    itself.  KDE mode counting only centres the candidate range, while
+    itself.  KDE mode counting only centers the candidate range, while
     ``_valley_init_responsibilities`` supplies inexpensive responsibilities for
     candidate fitting when the modal geometry admits a valley decomposition.
 
@@ -908,7 +909,7 @@ def _e_step(samples_1d, components, weights, space, /, obs_weights=None):
     space : str
         ``"base"`` or ``"exp"``.
     obs_weights : numpy.ndarray, shape (R,) or None, optional
-        User-supplied observation weights, normalised to sum to one.
+        User-supplied observation weights, normalized to sum to one.
         ``None`` means uniform ``1/R``.  Affects only the returned
         log-likelihood; responsibilities are per-observation posteriors
         and are independent of the observation weight.
@@ -995,7 +996,7 @@ def _e_step_intervals(intervals, components, weights, /, obs_weights=None):
     weights : numpy.ndarray, shape (K,)
         Current mixture weights.
     obs_weights : numpy.ndarray, shape (R,) or None, optional
-        User-supplied relative observation weights, normalised to sum to one.
+        User-supplied relative observation weights, normalized to sum to one.
 
     Returns
     -------
@@ -1093,7 +1094,7 @@ def _effective_distinct_point_count(samples_1d, component_weights, /, *, inverse
         Point observations.
     component_weights : numpy.ndarray, shape (R,)
         Responsibility times observation weight for one component.  The
-        vector need not be normalised.
+        vector need not be normalized.
     inverse : numpy.ndarray or None, optional
         Precomputed distinct-location index of ``samples_1d`` (see
         ``_distinct_location_index``).
@@ -1131,14 +1132,14 @@ def _aggregate_interval_weights(intervals, obs_weights=None, /):
     intervals : numpy.ndarray, shape (R, 2)
         Interval-censored observations.
     obs_weights : numpy.ndarray, shape (R,) or None, optional
-        Normalised relative observation weights.
+        Normalized relative observation weights.
 
     Returns
     -------
     unique : numpy.ndarray, shape (B, 2)
         Unique interval rows.
     weights : numpy.ndarray, shape (B,)
-        Aggregated row weights, normalised to sum to one.
+        Aggregated row weights, normalized to sum to one.
     """
     x = np.asarray(intervals, dtype=np.float64)
     first, inverse, _ = _row_grouping(x)
@@ -1165,8 +1166,8 @@ def _interval_observable_dimension(intervals, support, /):
     Each interval probability is a CDF difference between two observed
     endpoints.  Treating endpoints as graph vertices and intervals as graph
     edges, the rank of all observable CDF differences is the incidence-matrix
-    rank.  Adding the support-wide normalisation edge fixes one degree of
-    freedom, so the number returned here is ``rank(edges + normalisation) - 1``.
+    rank.  Adding the support-wide normalization edge fixes one degree of
+    freedom, so the number returned here is ``rank(edges + normalization) - 1``.
 
     This handles overlapping and nested censoring patterns without building a
     potentially large dense interval-by-atom matrix.
@@ -1250,7 +1251,7 @@ def _interval_nonparametric_loglik_bound(intervals, support, /,
     support : tuple of (float, float)
         Model support.
     obs_weights : numpy.ndarray, shape (R,) or None, optional
-        Normalised relative observation weights.
+        Normalized relative observation weights.
     max_iter : int, optional
         Maximum Turnbull iterations.
     tol : float, optional
@@ -1320,13 +1321,13 @@ def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
     intervals : numpy.ndarray, shape (R, 2)
         Interval-censored observations.
     components : sequence of _Component
-        Current EM components; lite and fully finalised states are accepted.
+        Current EM components; lite and fully finalized states are accepted.
     ll : float
         Current weighted mean interval log-likelihood.
     support : tuple of (float, float)
         Shared model support.
     obs_weights : numpy.ndarray, shape (R,) or None, optional
-        Normalised relative observation weights.
+        Normalized relative observation weights.
 
     Returns
     -------
@@ -1350,9 +1351,7 @@ def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
         if state is None:
             return None
         names = getattr(getattr(state, "dtype", None), "names", None)
-        if names is not None and "optimizer_params" in names:
-            n_params += int(np.asarray(state["optimizer_params"]).size)
-        elif isinstance(state, dict) and "optimizer_params" in state:
+        if names is not None and "optimizer_params" in names or isinstance(state, dict) and "optimizer_params" in state:
             n_params += int(np.asarray(state["optimizer_params"]).size)
         else:
             return None
@@ -1395,7 +1394,7 @@ def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
 
 
 # ======================================================================
-# Structured-scalar serialisation helpers
+# Structured-scalar serialization helpers
 # ======================================================================
 
 def _pack_mixture_struct(weights, default_space, comp_states, /,
@@ -1415,8 +1414,10 @@ def _pack_mixture_struct(weights, default_space, comp_states, /,
         Coordinate view the mixture reports in by default.
     comp_states : sequence of numpy.void
         Per-component fitted structured scalars.
-    base_modes : numpy.ndarray, shape (K,) or None, optional
-        Per-component modes in base coordinates, when already known.
+    base_modes : sequence of float or None, optional
+        Mixture modes in base coordinates, when already known.  Stored as a
+        1-D ``base_modes`` array with matching ``n_modes``; ``None`` stores an
+        empty array and ``n_modes == 0``.
 
     Returns
     -------
@@ -1499,7 +1500,9 @@ def _unpack_mixture_struct(struct):
     """
     names = list(struct.dtype.names or ())
     missing = [
-        name for name in ("n_components", "weights", "default_space") if name not in names
+        name
+        for name in ("n_components", "weights", "default_space", "base_modes", "n_modes")
+        if name not in names
     ]
     if missing:
         raise ValueError(
@@ -1623,7 +1626,7 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *,
         return np.asarray(neg_log_base_func(x, 1), dtype=np.float64).reshape(-1) + offset
 
     def height(x):
-        """Value to minimise when breaking ties between near-duplicate roots.
+        """Value to minimize when breaking ties between near-duplicate roots.
 
         The exp-space potential is ``q(x) + x`` (from the Jacobian).
         """
@@ -1645,9 +1648,11 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *,
             return (out(m),)
         # In exp space the root is displaced from the component mode,
         # so it must actually be solved for.
-        if abs(g(m)) < MODE_XTOL * 100:
-            if float(neg_log_base_func(m, 2)) > -MODE_DERIV_TOL:
-                return (out(m),)
+        if (
+            abs(g(m)) < MODE_XTOL * 100
+            and float(neg_log_base_func(m, 2)) > -MODE_DERIV_TOL
+        ):
+            return (out(m),)
         half = max(1.0, abs(m) * 0.1)
         lo, hi = m - half, m + half
         if g(lo) * g(hi) < 0:

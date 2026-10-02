@@ -164,7 +164,7 @@ def exact_tail_log_cdf(potential, x, endpoint, /, *, upper=False):
 
     Infinite tails are integrated in a local hazard-length coordinate.  Finite
     tails are integrated in log-distance from the support endpoint; that
-    coordinate also regularises algebraic boundary singularities.
+    coordinate also regularizes algebraic boundary singularities.
 
     Parameters
     ----------

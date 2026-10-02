@@ -1,7 +1,7 @@
 """Numerical correctness of the fitted densities.
 
 These tests assert the defining properties of a probability density
-rather than fixed numbers, so they stay valid as the optimiser changes.
+rather than fixed numbers, so they stay valid as the optimizer changes.
 """
 import numpy as np
 import pytest
@@ -9,10 +9,10 @@ from scipy import stats
 from scipy.integrate import quad
 from scipy.integrate import quad as _quad
 
-import gibbus._postfit.fitted_state as fitted_state
 from gibbus import Distribution
 from gibbus._api import component as _component
 from gibbus._api import fitting as _fitting
+from gibbus._postfit import fitted_state
 
 
 @pytest.fixture(scope="module")
@@ -163,7 +163,7 @@ class TestLogConcavity:
         assert normal_fit.neg_log(normal_fit.mode, n=1) == pytest.approx(
             0.0, abs=1e-6)
 
-    def test_mode_maximises_pdf(self, mixture_fit):
+    def test_mode_maximizes_pdf(self, mixture_fit):
         xs = np.linspace(-10, 10, 2000)
         assert mixture_fit.pdf(mixture_fit.mode) >= mixture_fit.pdf(xs).max() - 1e-9
 
@@ -282,13 +282,13 @@ class TestMixtureCdfAgreesWithItsComponents:
 
     That is not hypothetical.  One panel accepted at the budget limit
     contributed an analytic mass of 146 against a true total of 1,
-    inflating the normaliser by that factor and crushing every CDF value
+    inflating the normalizer by that factor and crushing every CDF value
     on every panel; the round-trip test passed at 4e-16 throughout.  The
     weighted component sum is an independent reference and needs no
     reference implementation, so it is the check that catches this.
     """
 
-    CASES = [
+    CASES = (
         ("bimodal", lambda r: np.concatenate([r.normal(-3, 1, 2000),
                                               r.normal(3, 1, 2000)]),
          (-np.inf, np.inf), 2),
@@ -300,7 +300,7 @@ class TestMixtureCdfAgreesWithItsComponents:
         ("bounded", lambda r: np.concatenate([r.beta(2.0, 5.0, 2000),
                                               r.beta(5.0, 2.0, 2000)]),
          (0.0, 1.0), 2),
-    ]
+    )
 
     @pytest.mark.parametrize("name,builder,support,k",
                              CASES, ids=[c[0] for c in CASES])
@@ -319,14 +319,14 @@ class TestMixtureCdfAgreesWithItsComponents:
             for w, comp in zip(c.weights, c.components, strict=True)
         )
 
-        # The mixture CDF is renormalised over the declared support, so
+        # The mixture CDF is renormalized over the declared support, so
         # any probability a component placed outside it is divided back
-        # out.  The weighted component sum is not renormalised.  Rescale
+        # out.  The weighted component sum is not renormalized.  Rescale
         # the reference by the mass actually inside the support so the
         # two use the same convention -- otherwise this test would fail
         # on the escaped-mass defect (see
         # TestMixtureMassStaysInsideSupport) rather than on the
-        # normaliser defect it exists to catch.
+        # normalizer defect it exists to catch.
         inside = float(weighted[-1]) + float(
             sum(w * (1.0 - float(np.asarray(comp.cdf(np.array([xs[-1]])),
                                             dtype=float)[0]))
@@ -348,7 +348,7 @@ class TestUncertifiedMassStaysNegligible:
     everywhere, so the depth flag is not the thing to regress on.
     """
 
-    CASES = [
+    CASES = (
         ("normal", lambda r: r.normal(size=3000), (-np.inf, np.inf)),
         ("gamma near-exponential", lambda r: r.gamma(1.05, 1.0, 3000),
          (0.0, np.inf)),
@@ -356,7 +356,7 @@ class TestUncertifiedMassStaysNegligible:
         ("weibull", lambda r: r.weibull(1.1, 3000), (0.0, np.inf)),
         ("beta interior mode", lambda r: r.beta(2.0, 5.0, 3000), (0.0, 1.0)),
         ("beta boundary mode", lambda r: r.beta(1.1, 8.0, 3000), (0.0, 1.0)),
-    ]
+    )
 
     @pytest.mark.parametrize("name,builder,support",
                              CASES, ids=[c[0] for c in CASES])
@@ -445,7 +445,7 @@ class TestNearExponentialFitsAreNotDoubled:
 class TestMixtureMassStaysInsideSupport:
     """A fitted density must not place probability outside its support.
 
-    ``K == 1`` honours this exactly: a fit on ``(0, 1)`` evaluates to
+    ``K == 1`` honors this exactly: a fit on ``(0, 1)`` evaluates to
     zero at -0.5, 1.5 and 5.0.  Mixture components are fitted on that same
     declared support; this regression guards against a degenerate component
     drifting outside it when its responsibility mass collapses.
@@ -454,8 +454,8 @@ class TestMixtureMassStaysInsideSupport:
     responsibilities, so its weighted M-step objective is meaningless
     (its recorded NLL is -345), and the resulting fit drifts.  Its weight
     is small, so the leaked mass is small -- but it is not bounded by
-    anything, and a change that makes the optimiser more persistent can
-    inflate it dramatically.  During this session an optimiser restart
+    anything, and a change that makes the optimizer more persistent can
+    inflate it dramatically.  During this session an optimizer restart
     guard pushed the same component's weight from 7.8e-04 to 0.647,
     which took the in-support mass down to 0.35.  That is the reason to
     fix the leak rather than to tune around it.
@@ -463,7 +463,7 @@ class TestMixtureMassStaysInsideSupport:
     Recorded with numbers rather than as a conclusion, per the project's
     own habit: the fix belongs in the M-step (prune or constrain a
     component whose responsibilities collapse), not in the CDF, which
-    renormalises the leak away and therefore hides it.
+    renormalizes the leak away and therefore hides it.
     """
 
     @staticmethod
@@ -474,7 +474,7 @@ class TestMixtureMassStaysInsideSupport:
         return data, Distribution().fit(data, n_components=2,
                                  support=(0.0, 1.0), rng=1)
 
-    def test_single_component_honours_the_support(self):
+    def test_single_component_honors_the_support(self):
         """The contract, where it currently holds."""
         rng = np.random.default_rng(1)
         data = np.ascontiguousarray(np.concatenate(
@@ -486,7 +486,7 @@ class TestMixtureMassStaysInsideSupport:
     def test_leaked_mass_has_not_grown(self):
         """Bound the known leak so a change that inflates it is caught.
 
-        Not an assertion that the behaviour is correct -- it is not.
+        Not an assertion that the behavior is correct -- it is not.
         The threshold is two orders of magnitude above the measured
         1.7e-03 so that ordinary retuning does not trip it, while the
         failure mode that actually matters (a degenerate component
@@ -509,7 +509,7 @@ class TestMixtureMassStaysInsideSupport:
         Was a strict xfail recording a 1.7e-03 leak.  The cause was
         ``_fit_inputs`` inheriting a seed's support from
         ``base_support`` -- which is in fitting coordinates -- and
-        handing it back to a pipeline that standardises whatever support
+        handing it back to a pipeline that standardizes whatever support
         it is given.  Every warm start therefore widened the support by
         ``1 / scale``, and after ten EM iterations it was effectively
         unbounded.
@@ -521,8 +521,8 @@ class TestMixtureMassStaysInsideSupport:
         assert inside == pytest.approx(1.0, abs=1e-6)
 
 
-class TestNormalisationSurvivesSubnormalZ:
-    """The normaliser must be exact when ``exp(-q)`` underflows.
+class TestNormalizationSurvivesSubnormalZ:
+    """The normalizer must be exact when ``exp(-q)`` underflows.
 
     ``Z = int exp(-q)`` is a product of exponentials and lands in the
     subnormal range on ordinary fits -- a beta mixture component was
@@ -535,7 +535,7 @@ class TestNormalisationSurvivesSubnormalZ:
     panel diagnostics were all clean; only integrating the density
     caught it.  ``GIBBUS_NO_SUFFSTAT=1`` was what exposed it, by landing
     the fit on slightly more extreme parameters -- the second time that
-    A/B has found a normalisation bug the compression was masking.
+    A/B has found a normalization bug the compression was masking.
 
     Asserted on shapes whose fits drive ``q`` far enough negative to
     underflow, at one seed each: this is a numerical-conditioning
@@ -543,13 +543,13 @@ class TestNormalisationSurvivesSubnormalZ:
     without testing anything further.
     """
 
-    CASES = [
+    CASES = (
         ("beta two-sided mixture",
          lambda r: np.concatenate([r.beta(2.0, 5.0, 1200),
                                    r.beta(5.0, 2.0, 1200)]), (0.0, 1.0), 2),
         ("beta boundary mode", lambda r: r.beta(1.1, 8.0, 2000), (0.0, 1.0), 1),
         ("gamma", lambda r: r.gamma(2.0, 1.0, 2000), (0.0, np.inf), 1),
-    ]
+    )
 
     @pytest.mark.parametrize("name,builder,support,k",
                              CASES, ids=[c[0] for c in CASES])
@@ -563,7 +563,7 @@ class TestNormalisationSurvivesSubnormalZ:
             lo, hi, limit=300)[0]
         assert total == pytest.approx(1.0, abs=1e-4)
 
-    def test_log_normaliser_is_finite_where_the_linear_one_underflows(self):
+    def test_log_normalizer_is_finite_where_the_linear_one_underflows(self):
         """``log_Z`` must stay exact where ``Z`` would have lost its bits."""
         data = np.ascontiguousarray(np.concatenate([
             np.random.default_rng(1).beta(2.0, 5.0, 1200),
@@ -637,18 +637,18 @@ class TestMinorityComponentSpectralAccuracy:
                                rng.normal(9.0, 0.4, 100)])
         return np.ascontiguousarray(data)
 
-    def test_components_are_centred_on_themselves(self):
+    def test_components_are_centered_on_themselves(self):
         """Each component normalizes around its own responsibility-weighted data."""
         c = Distribution().fit(self._minority_mixture(), n_components=2,
                         support=(-np.inf, np.inf), rng=0)
         for comp in c.components:
-            centre = float(comp.data["fit_center"])
+            center = float(comp.data["fit_center"])
             scale = float(comp.data["fit_scale"])
             direction = float(comp.data["fit_direction"])
-            z_at_peak = direction * (float(comp.mean) - centre) / scale
+            z_at_peak = direction * (float(comp.mean) - center) / scale
             assert abs(z_at_peak) < 1.0, (
-                f"component at {float(comp.mean):.3f} normalised to "
-                f"center={centre:.3f}, giving z={z_at_peak:.2f}")
+                f"component at {float(comp.mean):.3f} normalized to "
+                f"center={center:.3f}, giving z={z_at_peak:.2f}")
 
     def test_potential_evaluates_without_catastrophic_cancellation(self):
         c = Distribution().fit(self._minority_mixture(), n_components=2,

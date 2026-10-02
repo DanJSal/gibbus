@@ -347,10 +347,10 @@ def test_exponential_half_line_is_not_fooled_by_the_amplitude_boundary():
     _assert_baseline(full, "geom_half_line_exponential_3_4")
 
 
-def test_stranded_warm_start_is_resolved_from_a_centred_start():
+def test_stranded_warm_start_is_resolved_from_a_centered_start():
     """Regression (geometry campaign): Beta(5, 1.5) on (0, 1), both
     amplitudes, degree 8.  The warm-started subproblem inherited a badly
-    centred certificate, stalled with Gram block and dual slack singular in
+    centered certificate, stalled with Gram block and dual slack singular in
     the same direction, and Newton stopped ``non_descent`` with bound 1.3e-6.
     Re-solving from the default start certifies the optimum."""
     samples = np.random.default_rng(270903).beta(5.0, 1.5, 120)

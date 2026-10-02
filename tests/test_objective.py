@@ -9,7 +9,10 @@ from gibbus._fit.natural_objective import (
     _natural_point_stats,
     _prepare_natural_interval_objective,
 )
-from gibbus._fit.objective import _evaluate_interval_objective, _evaluate_point_objective
+from gibbus._fit.objective import (
+    _evaluate_interval_objective,
+    _evaluate_point_objective,
+)
 from gibbus._model.coords import _build_fit_coordinate, _build_interval_fit_coordinate
 from gibbus._model.natural_state import _NaturalCoreState
 from gibbus._model.spec import _build_model_spec

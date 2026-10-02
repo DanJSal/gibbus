@@ -8,8 +8,9 @@ Users never touch this class directly; they interact with
 :class:`~gibbus._api.distribution.Distribution`.
 """
 
+from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any, Mapping, Optional, Tuple, Union
+from typing import Any, Union
 
 import numpy as np
 from numpy.polynomial import Chebyshev, Polynomial
@@ -287,7 +288,7 @@ class _Component:
     users interact with :class:`Distribution` instead.
     """
 
-    def __init__(self, uni_state: Optional[Mapping[str, Union[float, NDArray]]] = None):
+    def __init__(self, uni_state: Mapping[str, float | NDArray] | None = None):
         """Create a component, optionally loading a saved state.
 
         Parameters
@@ -298,7 +299,7 @@ class _Component:
         """
         # ``_data`` is the packed fitted record; None marks an unfitted
         # component.  The remaining fields are derived from it on load.
-        self._data: Optional[np.ndarray] = None
+        self._data: np.ndarray | None = None
         self._window: Any = None
         self.mu: float = float("nan")
         self.sigma: float = float("nan")
@@ -385,7 +386,7 @@ class _Component:
         """Exp-space view."""
         return self._exp_view
 
-    def load(self, uni_state: Mapping[str, Union[float, NDArray]]) -> "_Component":
+    def load(self, uni_state: Mapping[str, float | NDArray]) -> "_Component":
         """Load a previously saved fitted state.
 
         Parameters
@@ -406,14 +407,14 @@ class _Component:
             self,
             samples: ArrayLike,
             *,
-            poly_degree: Optional[Union[int, str]] = None,
-            support: Optional[Tuple[float, float]] = None,
-            log_boundary_lower: Optional[bool] = None,
-            log_boundary_upper: Optional[bool] = None,
+            poly_degree: int | str | None = None,
+            support: tuple[float, float] | None = None,
+            log_boundary_lower: bool | None = None,
+            log_boundary_upper: bool | None = None,
             verbose: int = 0,
             suppress_warnings: bool = False,
-            init_from: Optional[Union["_Component", Mapping[str, Any]]] = None,
-            sample_weights: Optional[ArrayLike] = None,
+            init_from: Union["_Component", Mapping[str, Any]] | None = None,
+            sample_weights: ArrayLike | None = None,
     ) -> "_Component":
         """Fit a log-concave density to the supplied samples.
 

@@ -22,8 +22,9 @@ def product_moment(double[::1] a, double[::1] b, double[::1] moments):
             total += a[i] * b[j] * moments[i + j]
     return total
 
+
 # Gauss--Kronrod 15/7 constants for simultaneous power-moment integration.
-from libc.math cimport exp, fabs, isfinite, log, nextafter, sqrt
+from libc.math cimport exp, fabs, INFINITY, isfinite, log, nextafter
 from libc.stdlib cimport free, malloc
 
 cdef double _PM_XGK[8]
@@ -90,9 +91,9 @@ cdef inline int _pm_node(
         jac = hi - lo
 
     if isfinite(support_lower) and z <= support_lower:
-        z = nextafter(support_lower, support_upper if isfinite(support_upper) else 1.0 / 0.0)
+        z = nextafter(support_lower, support_upper if isfinite(support_upper) else INFINITY)
     if isfinite(support_upper) and z >= support_upper:
-        z = nextafter(support_upper, support_lower if isfinite(support_lower) else -1.0 / 0.0)
+        z = nextafter(support_upper, support_lower if isfinite(support_lower) else -INFINITY)
 
     qz = _pm_polyval(q, nq, z)
     if isfinite(support_lower) and isfinite(a_lower) and a_lower > 0.0:
@@ -180,7 +181,6 @@ cdef int _pm_gk15(
         gauss[k] *= half
         error[k] = fabs(kronrod[k] - gauss[k])
     return 0
-
 
 
 cdef inline void _pm_cleanup(

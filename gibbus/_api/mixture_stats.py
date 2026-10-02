@@ -10,7 +10,7 @@ everything mixture-specific is gathered here:
 * **Potentials** — the mixture negative-log density and its derivatives,
   evaluated through a batched log-sum-exp recurrence rather than a Python
   loop over points.
-* **Spectral cache** — component spectral states remain the serialised
+* **Spectral cache** — component spectral states remain the serialized
   source of truth; the mixture-level CDF/PPF is cheap enough to rebuild
   deterministically after fitting, loading, or an affine transform, and so
   is never packed.
@@ -118,7 +118,7 @@ class _MixtureAnalyticsMixin:
         return float(total)
 
     def _ensure_exp_mixture_stats(self):
-        """Build exp-mixture statistics without materialising raw moments."""
+        """Build exp-mixture statistics without materializing raw moments."""
         return _exp_stats_from_log_moments(
             [self._mixture_exp_log_raw_moment(k) for k in (1, 2, 3, 4)],
             self._mixture_exp_relative_centered_moment,

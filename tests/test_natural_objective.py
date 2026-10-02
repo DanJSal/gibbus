@@ -84,7 +84,7 @@ def test_natural_point_gradient_and_hessian_match_finite_differences():
 
 
 def test_compiled_point_objective_matches_the_generic_evaluator():
-    x, spec, observations, objective = _real_line_problem(4)
+    _x, _spec, observations, objective = _real_line_problem(4)
     params = objective.layout.pack(0.3, [0.8, -0.15, 0.35])
     fast = objective(params)
     generic = _evaluate_point_objective(objective.build_state(params), observations)

@@ -103,7 +103,7 @@ def test_interior_model_minimum_is_the_unconstrained_newton_step():
 
 
 def test_constant_curvature_reduces_to_a_nonnegative_bound():
-    layout, representation, size = _setup(2)
+    _layout, representation, size = _setup(2)
     assert size == 1
     hessian = np.diag([2.0, 5.0])
     theta0 = np.array([0.0, 1.0])

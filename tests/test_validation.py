@@ -284,7 +284,7 @@ class TestNonLogConcaveData:
     def test_heavy_tails_fail_with_actionable_message(self, seed):
         """Cauchy data has no log-concave MLE.
 
-        Whether the optimiser gives up depends on the draw, so this
+        Whether the optimizer gives up depends on the draw, so this
         asserts only that *when* it fails the message is actionable --
         never that it fails on every seed.
         """

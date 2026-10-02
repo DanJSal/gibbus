@@ -11,8 +11,8 @@ composes live beside it:
 
 Base vs exp space
 -----------------
-* **base** space operates on the modelled variable *x* directly.
-* **exp** space treats the modelled variable as *y = exp(x)*, so the fitted
+* **base** space operates on the modeled variable *x* directly.
+* **exp** space treats the modeled variable as *y = exp(x)*, so the fitted
   log-concave density on *x* induces a density on the positive half-line via
   the standard change-of-variables formula.
 
@@ -30,7 +30,7 @@ as pullback (internal coordinate) parameters; see that method's docstring.
 
 import copy as _copy
 from collections.abc import Mapping
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -58,7 +58,9 @@ from .._postfit.resample import bootstrap_curves as _bootstrap_curves
 from .._postfit.resample import simulated_statistics as _simulated_statistics
 from .._postfit.scoring import canonical_scoring_rows as _canonical_scoring_rows
 from .._postfit.scoring import interval_loglik as _interval_loglik
-from .._postfit.scoring import randomized_quantile_residuals as _randomized_quantile_residuals
+from .._postfit.scoring import (
+    randomized_quantile_residuals as _randomized_quantile_residuals,
+)
 from .._postfit.scoring import scoring_weights as _scoring_weights
 from .._postfit.scoring import warn_out_of_support as _warn_out_of_support
 from .._postfit.survival import cdf_hybrid, log_cdf_hybrid, log_sf_hybrid
@@ -106,16 +108,16 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
     moments, tail and information quantities, diagnostics, and affine
     transformations in two coordinate views:
 
-    * :attr:`base` -- operates on the modelled variable *x* directly.
-    * :attr:`exp`  -- treats *y = exp(x)* as the modelled variable, useful
+    * :attr:`base` -- operates on the modeled variable *x* directly.
+    * :attr:`exp`  -- treats *y = exp(x)* as the modeled variable, useful
       when data are naturally positive (e.g. eigenvalues, prices).
 
     For ``n_components=1``, the density is unimodal.  For
     ``n_components > 1``, a mixture of log-concave components is fitted
-    via Expectation-Maximisation (EM), supporting multimodal data.
+    via Expectation-Maximization (EM), supporting multimodal data.
 
     The currently active view is selected by :meth:`set_default` (``"base"``
-    after a fresh fit) and determines the behaviour of the top-level
+    after a fresh fit) and determines the behavior of the top-level
     convenience methods :meth:`pdf`, :meth:`cdf`, :meth:`ppf`, etc.
 
     A fitted instance may be shared between threads after its lazy caches have
@@ -125,7 +127,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
     ----------
     state : numpy.void or None, optional
         A previously saved structured state (as returned by :attr:`data`).
-        If provided, the object is initialised as if :meth:`load` had been
+        If provided, the object is initialized as if :meth:`load` had been
         called.  If ``None`` (default), an unfitted instance is created.
 
     Examples
@@ -165,7 +167,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             leaves the model unfitted.
         """
         # An empty component list is the unfitted state.
-        self._components: List[_Component] = []
+        self._components: list[_Component] = []
         self._weights: np.ndarray = np.ones(0, dtype=np.float64)
         self._default: str = "base"
         self._K: int = 0
@@ -175,10 +177,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._mix_base_ppf = None
         self._mix_spectral_cdf_rep = None
         self._mix_spectral_ppf_rep = None
-        self._stats_cache: Optional[dict] = None
+        self._stats_cache: dict | None = None
         self._cumulant_cache: dict[tuple[str, int], float] = {}
         self._fit_diagnostics_cache = None
-        self._mode_cache: Optional[dict] = None
+        self._mode_cache: dict | None = None
         self._spectral_cache_valid: bool = False
         self._em_diagnostics = None
         self._selection_diagnostics = None
@@ -248,7 +250,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         return self._weights.copy()
 
     @property
-    def components(self) -> List[_Component]:
+    def components(self) -> list[_Component]:
         """Fitted components (read-only list)."""
         self._ensure_fitted()
         return list(self._components)
@@ -330,22 +332,22 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self,
         samples: ArrayLike,
         *,
-        n_components: Union[int, str] = "auto",
-        poly_degree: Optional[Union[int, str]] = None,
-        support: Optional[Tuple[float, float]] = None,
-        log_boundary_lower: Optional[bool] = None,
-        log_boundary_upper: Optional[bool] = None,
+        n_components: int | str = "auto",
+        poly_degree: int | str | None = None,
+        support: tuple[float, float] | None = None,
+        log_boundary_lower: bool | None = None,
+        log_boundary_upper: bool | None = None,
         verbose: int = 0,
         suppress_warnings: bool = False,
         init_from: Optional["Distribution"] = None,
-        sample_weights: Optional[ArrayLike] = None,
-        component_options: Optional[List[Dict[str, Any]]] = None,
-        em_max_iter: Optional[int] = None,
-        em_tol: Optional[float] = None,
+        sample_weights: ArrayLike | None = None,
+        component_options: list[dict[str, Any]] | None = None,
+        em_max_iter: int | None = None,
+        em_tol: float | None = None,
         rng: Any = None,
-        k_max: Optional[int] = None,
+        k_max: int | None = None,
         progressive: bool = True,
-        auto_k_subsample: Union[str, int, bool] = "auto",
+        auto_k_subsample: str | int | bool = "auto",
     ) -> "Distribution":
         """Fit a log-concave density to the supplied samples.
 
@@ -361,7 +363,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         n_components : int or ``'auto'``, optional
             Number of mixture components (default ``'auto'``).
             Ignored when ``init_from`` is given (inherited from seed).
-            ``'auto'`` counts KDE modes to centre a search range, picks
+            ``'auto'`` counts KDE modes to center a search range, picks
             the best *K* by BIC over lightweight log-concave fits, then
             runs the full log-concave EM only once for the chosen *K*.
             ``1`` fits a single unimodal density directly.  An explicit
@@ -409,7 +411,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             EM convergence tolerance.
         rng : optional
             Random-number source for the stratified subsampling used by
-            automatic selection and for the fallback GMM initialiser. For
+            automatic selection and for the fallback GMM initializer. For
             fitting, ``None`` is resolved to deterministic seed 0; pass an
             integer or generator to choose another stream.
         k_max : int or None, optional
@@ -447,7 +449,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Cauchy or Pareto), if a point-data mixture component is
             effectively supported on fewer than two distinct observed
             locations (the classical unconstrained mixture-likelihood
-            singularity), or if the optimiser reaches a degenerate numerical
+            singularity), or if the optimizer reaches a degenerate numerical
             state.  Interval-censored mixtures are not subject to this
             point-density estimability check because their row contributions
             are probability masses rather than point densities.
@@ -508,7 +510,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
     # Evaluation
     # ------------------------------------------------------------------
 
-    def pdf(self, x) -> Union[float, np.ndarray]:
+    def pdf(self, x) -> float | np.ndarray:
         """Evaluate the PDF in the currently active space.
 
         Parameters
@@ -531,7 +533,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             out = out + self._weights[k] * view.pdf(x)
         return float(out) if scalar else out
 
-    def cdf(self, x) -> Union[float, np.ndarray]:
+    def cdf(self, x) -> float | np.ndarray:
         """Evaluate the CDF in the currently active space.
 
         The spectral representation serves the body while lower-tail values
@@ -572,7 +574,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         out = np.where(arr > 0.0, out, np.where(np.isnan(arr), np.nan, 0.0))
         return float(out) if scalar else out
 
-    def ppf(self, p) -> Union[float, np.ndarray]:
+    def ppf(self, p) -> float | np.ndarray:
         """Evaluate the PPF (quantile function) in the currently active space.
 
         Parameters
@@ -723,7 +725,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             )
         return self._mix_base_log_tail_masses(x, endpoint, upper=upper)
 
-    def logpdf(self, x) -> Union[float, np.ndarray]:
+    def logpdf(self, x) -> float | np.ndarray:
         """Evaluate the log density in the currently active space.
 
         Parameters
@@ -740,7 +742,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         out = np.where(np.isnan(arr), np.nan, out)
         return float(out) if scalar else out
 
-    def logcdf(self, x) -> Union[float, np.ndarray]:
+    def logcdf(self, x) -> float | np.ndarray:
         """Evaluate a tail-accurate log CDF.
 
         Parameters
@@ -770,7 +772,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         out = np.where(arr > 0.0, out, np.where(np.isnan(arr), np.nan, -np.inf))
         return float(out) if scalar else out
 
-    def sf(self, x) -> Union[float, np.ndarray]:
+    def sf(self, x) -> float | np.ndarray:
         """Evaluate survival as ``exp(logsf)``.
 
         Parameters
@@ -784,7 +786,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             out = np.exp(self.logsf(x))
         return float(out) if scalar else out
 
-    def logsf(self, x) -> Union[float, np.ndarray]:
+    def logsf(self, x) -> float | np.ndarray:
         """Evaluate a tail-accurate log survival function.
 
         Parameters
@@ -814,7 +816,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         out = np.where(arr > 0.0, out, np.where(np.isnan(arr), np.nan, 0.0))
         return float(out) if scalar else out
 
-    def isf(self, p) -> Union[float, np.ndarray]:
+    def isf(self, p) -> float | np.ndarray:
         """Evaluate inverse survival without forming ``1-p`` in deep tails.
 
         Parameters
@@ -837,7 +839,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             out = np.exp(base)
         return float(out) if scalar else out
 
-    def logppf(self, log_p) -> Union[float, np.ndarray]:
+    def logppf(self, log_p) -> float | np.ndarray:
         """Evaluate quantiles from logarithmic CDF probabilities.
 
         Parameters
@@ -860,7 +862,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             out = np.exp(base)
         return float(out) if scalar else out
 
-    def logisf(self, log_p) -> Union[float, np.ndarray]:
+    def logisf(self, log_p) -> float | np.ndarray:
         """Evaluate upper quantiles from logarithmic survival probabilities.
 
         Parameters
@@ -883,7 +885,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             out = np.exp(base)
         return float(out) if scalar else out
 
-    def log_hazard(self, x) -> Union[float, np.ndarray]:
+    def log_hazard(self, x) -> float | np.ndarray:
         """Evaluate log hazard in the active space.
 
         Parameters
@@ -904,7 +906,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         out = np.where(np.isnan(arr), np.nan, out)
         return float(out) if scalar else out
 
-    def hazard(self, x, n: int = 0) -> Union[float, np.ndarray]:
+    def hazard(self, x, n: int = 0) -> float | np.ndarray:
         """Evaluate the hazard or its first derivative.
 
         Parameters
@@ -924,7 +926,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         out = h if n == 0 else h * (h - np.asarray(self.neg_log(x, 1), dtype=np.float64))
         return float(out) if scalar else out
 
-    def cumulative_hazard(self, x) -> Union[float, np.ndarray]:
+    def cumulative_hazard(self, x) -> float | np.ndarray:
         """Evaluate cumulative hazard ``-logsf(x)``.
 
         Parameters
@@ -937,7 +939,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         out = -np.asarray(self.logsf(x), dtype=np.float64)
         return float(out) if scalar else out
 
-    def mean_residual_life(self, x) -> Union[float, np.ndarray]:
+    def mean_residual_life(self, x) -> float | np.ndarray:
         """Evaluate mean residual life in the active space.
 
         Parameters
@@ -952,7 +954,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             self.neg_log, self.logsf, self.support, self.mean, self.modes, x
         )
 
-    def residual_entropy(self, x) -> Union[float, np.ndarray]:
+    def residual_entropy(self, x) -> float | np.ndarray:
         """Evaluate residual entropy in the active space.
 
         Parameters
@@ -965,7 +967,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return self._components[0].residual_entropy(x)
         return _residual_entropy(self.neg_log, self.logsf, self.support, x)
 
-    def interval(self, level: float) -> Tuple[float, float]:
+    def interval(self, level: float) -> tuple[float, float]:
         """Return an equal-tailed interval.
 
         Parameters
@@ -1172,7 +1174,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
     def goodness_of_fit(self, x, *, statistic: str = "cvm",
                         calibration: str = "asymptotic",
                         n_resamples: int = BOOTSTRAP_DEFAULT_RESAMPLES,
-                        rng=None, fit_kwargs=None) -> Dict[str, Any]:
+                        rng=None, fit_kwargs=None) -> dict[str, Any]:
         """Test the fitted distribution against observations.
 
         Transforms *x* through the fitted CDF and measures how far the
@@ -1227,7 +1229,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         Raises
         ------
         ValueError
-            If *statistic* or *calibration* is unrecognised, or if *x*
+            If *statistic* or *calibration* is unrecognized, or if *x*
             contains interval rows.
         RuntimeError
             If the model is not fitted, or if too many simulated refits
@@ -1286,7 +1288,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
     def bootstrap_bands(self, samples, x, *, quantity: str = "pdf",
                         n_resamples: int = BOOTSTRAP_DEFAULT_RESAMPLES,
                         level: float = 0.95, rng=None,
-                        fit_kwargs=None) -> Dict[str, Any]:
+                        fit_kwargs=None) -> dict[str, Any]:
         """Estimate pointwise uncertainty bands by nonparametric resampling.
 
         Resamples observation rows with replacement, refits, and reports
@@ -1332,7 +1334,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         Raises
         ------
         ValueError
-            If *quantity* is unrecognised, *level* falls outside
+            If *quantity* is unrecognized, *level* falls outside
             ``(0, 1)``, or *x* is empty.
         RuntimeError
             If the model is not fitted, or if too many replicate refits
@@ -1398,7 +1400,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         if overrides is not None and not isinstance(overrides, Mapping):
             raise TypeError("fit_kwargs must be a mapping or None")
         base_support = tuple(map(float, self._components[0].base.support))
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "n_components": self._K,
             "support": base_support,
             "verbose": 0,
@@ -1564,7 +1566,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._ensure_fitted()
         return float(min(comp.log_concavity_margin() for comp in self._components))
 
-    def neg_log(self, x, n: int = 0) -> Union[float, np.ndarray]:
+    def neg_log(self, x, n: int = 0) -> float | np.ndarray:
         """Evaluate the potential (or derivatives) in the currently active space.
 
         Parameters
@@ -1737,7 +1739,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         return float(best)
 
     @property
-    def modes(self) -> Tuple[float, ...]:
+    def modes(self) -> tuple[float, ...]:
         """All local maxima (modes) of the PDF in the currently active space.
 
         For single-component densities the tuple has length 1.  For
@@ -1814,7 +1816,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         return float(self._ensure_stats()["kurt"])
 
     # ------------------------------------------------------------------
-    # Transform / copy / serialisation
+    # Transform / copy / serialization
     # ------------------------------------------------------------------
 
     def transform(self, *, mu: float | None = None, sigma: float | None = None,
@@ -1934,16 +1936,23 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             target._default = default_space
             target._stats_cache = None
             target._mode_cache = None
-            if "base_modes" in names:
-                n_modes = int(state["n_modes"]) if "n_modes" in names else 0
-                raw = np.asarray(state["base_modes"], dtype=np.float64).ravel()
-                if n_modes < 0 or n_modes > raw.size:
-                    raise ValueError("mixture state has inconsistent n_modes/base_modes")
-                base_modes = tuple(
-                    float(value) for value in raw[:n_modes] if np.isfinite(value)
+            raw = np.asarray(state["base_modes"], dtype=np.float64)
+            n_modes = np.asarray(state["n_modes"])
+            if (
+                raw.ndim != 1
+                or n_modes.ndim != 0
+                or not np.issubdtype(n_modes.dtype, np.integer)
+                or int(n_modes) != raw.size
+            ):
+                raise ValueError(
+                    "mixture state has inconsistent n_modes/base_modes: expected a "
+                    "1-D base_modes array with exactly n_modes entries"
                 )
-                if base_modes:
-                    target._mode_cache = {"base": base_modes}
+            if not np.all(np.isfinite(raw)):
+                raise ValueError("mixture state base_modes must be finite")
+            base_modes = tuple(float(value) for value in raw)
+            if base_modes:
+                target._mode_cache = {"base": base_modes}
             if target._K > 1:
                 target._rebuild_spectral_cache()
                 target._spectral_cache_valid = True

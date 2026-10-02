@@ -7,6 +7,7 @@ denominators are included only when the corresponding amplitude is strictly
 positive; an exact zero amplitude is therefore a distinct algebraic case.
 """
 
+import itertools
 import math
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -231,7 +232,7 @@ def _fraction_sign_variations(coefficients, /):
         Exact Bernstein coefficients.
     """
     signs = [1 if value > 0 else -1 for value in coefficients if value != 0]
-    return sum(left != right for left, right in zip(signs, signs[1:], strict=False))
+    return sum(left != right for left, right in itertools.pairwise(signs))
 
 
 def _fraction_to_float_lower(value, /):

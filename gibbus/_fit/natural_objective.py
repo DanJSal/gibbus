@@ -37,7 +37,7 @@ from .._defaults import (
 from .._model.coords import (
     _build_fit_coordinate,
     _build_interval_fit_coordinate,
-    _normalised_nonnegative_weights,
+    _normalized_nonnegative_weights,
     _safe_scaled_difference,
 )
 from .._model.natural_state import _layout_numerics, _NaturalCoreState
@@ -144,7 +144,7 @@ def _natural_point_stats(
         if weights is None:
             wn = np.full(z.size, 1.0 / z.size, dtype=np.float64)
         else:
-            wn = _normalised_nonnegative_weights(weights, z.size)
+            wn = _normalized_nonnegative_weights(weights, z.size)
             if wn is None:
                 raise ValueError("weights must be finite and non-negative with positive total")
 
@@ -385,7 +385,7 @@ def _prepare_natural_point_objective(
 ):
     """Build a natural point objective from samples.
 
-    Builds the data-centred fitting coordinate, the model specification and
+    Builds the data-centered fitting coordinate, the model specification and
     the empirical sufficient statistics; the objective depends on the data
     only through those statistics.
 
@@ -960,7 +960,7 @@ def _natural_interval_start(objective, /):
     With only finite rows this is the natural point fit to the
     uniform-within-row pseudo-statistics (a convex fit); rows with an
     infinite endpoint admit no uniform, so the start is the generic interior
-    point at the coordinate's centre and scale.
+    point at the coordinate's center and scale.
 
     Parameters
     ----------

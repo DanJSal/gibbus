@@ -276,7 +276,7 @@ class _Panel:
     ``False`` marks a panel accepted at the depth, width or budget limit
     rather than on merit.  Its polynomial is not a trustworthy
     approximation, so :meth:`SpectralCDF._recertify_panel_masses` refuses
-    to use its analytic integral in the global normaliser.
+    to use its analytic integral in the global normalizer.
     """
 
     @property
@@ -318,7 +318,7 @@ class SpectralCDF:
             Data description of the density (see :func:`density_spec`); the
             whole construction runs in the compiled builder.
         mode : float or None, optional
-            Density mode, used to centre a doubly-infinite map.
+            Density mode, used to center a doubly-infinite map.
         std : float or None, optional
             Scale proxy used to choose the map scale.
         degree_options : sequence of int or None, optional
@@ -394,7 +394,7 @@ class SpectralCDF:
             Baseline scale for automatic map-scale selection.
         """
         self.support = np.asarray(support, dtype=np.float64)
-        opts = tuple(sorted(set(int(v) for v in degree_options)))
+        opts = tuple(sorted({int(v) for v in degree_options}))
         if not opts or opts[0] < 2:
             raise ValueError("degree_options must contain degrees >= 2")
         self.degree_options = opts
@@ -593,7 +593,7 @@ class SpectralCDF:
     # ------------------------------------------------------------------
 
     def cdf_z(self, z):
-        """Evaluate the normalised CDF at compact coordinates.
+        """Evaluate the normalized CDF at compact coordinates.
 
         Parameters
         ----------
@@ -630,7 +630,7 @@ class SpectralCDF:
         return out.reshape(arr.shape)
 
     def cdf(self, x):
-        """Evaluate the normalised CDF at physical coordinates.
+        """Evaluate the normalized CDF at physical coordinates.
 
         Parameters
         ----------
@@ -736,7 +736,7 @@ class SpectralCDF:
         matters is how much probability sits under polynomials that were
         never certified, which is this.
 
-        Masses are re-measured by quadrature before normalisation (see
+        Masses are re-measured by quadrature before normalization (see
         :meth:`_recertify_panel_masses`), so the numerator is a true mass
         even when the panel's own polynomial was not usable.
 
@@ -754,7 +754,7 @@ class SpectralCDF:
     def mass_defect(self):
         """``|1 - total_mass|``: probability the panels never resolved.
 
-        The representation is renormalised by ``total_mass``, so a defect
+        The representation is renormalized by ``total_mass``, so a defect
         here does not make the CDF invalid -- it stays a proper
         distribution -- but it does mean the CDF is not the integral of
         the density it was built from.  Non-trivial values indicate mass
@@ -797,4 +797,4 @@ def boundary_aware_breaks_from_amplitudes(support, boundary_amplitudes):
         breaks.extend(-1.0 + d for d in offsets)
     if np.isfinite(U) and np.isfinite(aU) and aU > 0.0:
         breaks.extend(1.0 - d for d in offsets)
-    return sorted(set(float(z) for z in breaks if -1.0 < z < 1.0))
+    return sorted({float(z) for z in breaks if -1.0 < z < 1.0})

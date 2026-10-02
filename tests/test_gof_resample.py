@@ -190,7 +190,7 @@ def test_bootstrap_curves_is_deterministic_under_equal_seeds():
     def evaluate(indices):
         return np.array([float(indices.sum())])
 
-    kwargs = dict(n_resamples=20, level=0.95)
+    kwargs = {"n_resamples": 20, "level": 0.95}
     first = bootstrap_curves(evaluate, 30, 1, rng=np.random.default_rng(19), **kwargs)
     second = bootstrap_curves(evaluate, 30, 1, rng=np.random.default_rng(19), **kwargs)
     assert np.array_equal(first["lower"], second["lower"])

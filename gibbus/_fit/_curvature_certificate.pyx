@@ -223,14 +223,13 @@ cdef int _to_bernstein_bounded(const Poly* t, double width, double width_err, Po
     """Bounded: ``x = width s``; power-to-Bernstein on ``[0, 1]``."""
     cdef Poly u
     cdef int d = t.m - 1, j, k, terms
-    cdef double wpow = 1.0, wpow_err = 0.0, prod, s, mag, prop, weight, rel_w
+    cdef double wpow = 1.0, wpow_err = 0.0, prod, s, mag, prop, weight
     u.m = t.m
-    rel_w = width_err / width if width > 0.0 else 0.0
     for j in range(t.m):
         prod = t.v[j] * wpow
         u.v[j] = prod
         u.e[j] = t.e[j] * wpow + fabs(t.v[j]) * wpow_err + t.e[j] * wpow_err + _U * fabs(prod)
-        # next power of the width, error bound relative
+        # next power of the width, with an absolute error bound
         prod = wpow * width
         wpow_err = wpow_err * width + wpow * width_err + wpow_err * width_err + _U * fabs(prod)
         wpow = prod

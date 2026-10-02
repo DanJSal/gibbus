@@ -42,7 +42,7 @@ def validate_statistic(statistic, /):
     Raises
     ------
     ValueError
-        If *statistic* is not a recognised key.
+        If *statistic* is not a recognized key.
     """
     key = str(statistic).strip().lower()
     if key not in GOF_STATISTICS:

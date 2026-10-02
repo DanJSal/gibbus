@@ -1,9 +1,9 @@
 """Post-fit analytics, evaluation closures, and fitted-state packing.
 
-Everything here runs *after* the optimiser has converged:
+Everything here runs *after* the optimizer has converged:
 
 * :mod:`.analytics` — moments, summary statistics, affine updates, and mode
-  finding without re-running the optimiser.
+  finding without re-running the optimizer.
 * :mod:`.evaluators` — cached closures for exact PDF and potential evaluation.
 * :mod:`.fitted_state` — fitted-state packing and validation, including
   the packed spectral CDF/PPF fields.

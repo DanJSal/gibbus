@@ -32,7 +32,7 @@ The public API is the **`Distribution`** class, plus two module-level helpers fo
   - [Summary Statistics (Properties)](#summary-statistics-properties)
   - [Coordinate Spaces — Base vs Exp](#coordinate-spaces--base-vs-exp)
   - [Affine Transforms — `Distribution.transform()`](#affine-transforms--distributiontransform)
-  - [Serialisation — Save & Load](#serialisation--save--load)
+  - [Serialization — Save & Load](#serialization--save--load)
   - [Copying](#copying)
   - [Mixture-Specific API](#mixture-specific-api)
   - [Fit and Selection Diagnostics](#fit-and-selection-diagnostics)
@@ -71,10 +71,10 @@ The public API is the **`Distribution`** class, plus two module-level helpers fo
 - **Full distributional interface**: `pdf`, `logpdf`, `cdf`, `logcdf`, `sf`, `logsf`, `ppf`, `isf`, log-probability quantiles, `sample`, `moment`, `cumulant`, intervals/HPD regions, scoring, information measures, and summary statistics.
 - **Tail-aware numerics**: Dedicated log-domain survival and quantile machinery avoids reducing extreme-tail calculations to numerically fragile expressions such as `1 - cdf(x)`.
 - **Survival analysis**: Tail-accurate hazard, cumulative hazard, mean residual life, and residual entropy. A single fitted log-concave component is IFR by construction, so its hazard is non-decreasing; mixtures do not inherit that guarantee.
-- **Two coordinate views**: Evaluate distributions in base coordinates (modelling *x* directly) or exp coordinates (modelling *y = exp(x)*, useful for positive data such as prices or eigenvalues).
+- **Two coordinate views**: Evaluate distributions in base coordinates (modeling *x* directly) or exp coordinates (modeling *y = exp(x)*, useful for positive data such as prices or eigenvalues).
 - **Affine transforms**: Shift and scale a fitted distribution without re-fitting.
-- **Serialisation**: Save a fitted model as a NumPy structured array and reload it later; fitted `Distribution` objects also support ordinary Python pickling through that stable state representation.
-- **Warm-starting**: Initialise a new fit from a previously fitted model.
+- **Serialization**: Save a fitted model as a NumPy structured array and reload it later; fitted `Distribution` objects also support ordinary Python pickling through that stable state representation.
+- **Warm-starting**: Initialize a new fit from a previously fitted model.
 - **Cython-accelerated kernels**: Performance-critical quadrature, polynomial evaluation, spectral evaluation, and certification routines are implemented in compiled Cython extensions.
 
 ---
@@ -255,7 +255,7 @@ All parameters except `samples` are keyword-only. Returns `self` for method chai
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `samples` | array_like | *(required)* | Observations. Shape `(R,)` or `(R,1)` for point samples; `(R,2)` for interval-censored samples. Point samples must be finite. Interval endpoints may be `-np.inf` or `np.inf` for one-sided censoring, but may not be NaN; an infinite zero-width row is invalid. Reversed rows (`lo > hi`) are swapped silently, and a finite zero-width row is treated as a point. |
-| `n_components` | `int` or `'auto'` | `'auto'` | Number of mixture components. `'auto'` counts KDE modes to centre a search range, picks the best *K* by BIC over lightweight log-concave fits, then runs the full log-concave EM once; `1` = single unimodal fit; `> 1` = EM mixture with exactly that many components. Ignored when `init_from` is given (inherited from seed). |
+| `n_components` | `int` or `'auto'` | `'auto'` | Number of mixture components. `'auto'` counts KDE modes to center a search range, picks the best *K* by BIC over lightweight log-concave fits, then runs the full log-concave EM once; `1` = single unimodal fit; `> 1` = EM mixture with exactly that many components. Ignored when `init_from` is given (inherited from seed). |
 | `poly_degree` | `int`, `'auto'`, or `None` | `None` | Requested degree of the polynomial potential. Must be ≥ 2. On full-infinite support `(-np.inf, np.inf)`, an explicit odd degree is rejected because it is structurally inadmissible; use an even degree. `'auto'` considers only admissible even degrees on full-infinite support. Odd degrees remain available on one-sided or bounded support. `None` (default) means `'auto'` when no seed, or inherit from seed when `init_from` is given. `'auto'` selects the degree with an information-based omitted-statistic test (see `_fit/degree.py`), applied per-component in mixtures on the first M-step; mixture fits from different initializations that locked different degrees are then compared by BIC. BIC also chooses the component count `n_components='auto'`. |
 | `support` | `(float, float)` or `None` | `None` | Domain of the density, e.g. `(-np.inf, np.inf)`, `(0, np.inf)`, `(0, 1)`. `None` means the unconstrained real line `(-np.inf, np.inf)`; structural boundaries such as zero must be supplied explicitly. Ignored when `init_from` is given (inherited from seed). |
 | `log_boundary_lower` | `bool` or `None` | `None` | Allow the direct zero-offset lower-endpoint log term `-aL log(x - L)`, with `aL >= 0` (it may optimize to zero). `None` lets the data decide on a finite lower endpoint: the term is kept only when a one-sided likelihood-ratio test against the fit without it has `p < 0.05`, and never when a positive-weight observation sits exactly at the endpoint. `None` means no term on an infinite endpoint and inherits the seed setting with `init_from`. Global across all mixture components. |
@@ -263,11 +263,11 @@ All parameters except `samples` are keyword-only. Returns `self` for method chai
 | `verbose` | `int` | `0` | Verbosity level for fitting and automatic selection diagnostics. |
 | `suppress_warnings` | `bool` | `False` | Suppress selected numerical warnings. Warning filters are process-global on supported Python versions, so leave this `False` for concurrent fitting. |
 | `init_from` | `Distribution` or `None` | `None` | Warm-start seed from a previously fitted `Distribution`. When given, `n_components`, `support`, and per-component structure are inherited from the seed. Per-component seeds are threaded automatically in seed-component order. |
-| `sample_weights` | array_like or `None` | `None` | Non-negative **relative** observation weights, normalised to sum to 1. A row weighted 6 contributes twice what a row weighted 3 does; the absolute scale carries no meaning, so `[1,1,1]` and `[100,100,100]` are identical. Weights are *not* frequencies: they do not stand for repeated observations, and the model-selection sample size is the number of **rows** regardless of the weights. **Aggregated or binned data is therefore not supported through this argument** — 700 rows representing 1431 observations will be penalised as 700, biasing selection toward under-fitting. Expand such data to one row per observation instead. |
+| `sample_weights` | array_like or `None` | `None` | Non-negative **relative** observation weights, normalized to sum to 1. A row weighted 6 contributes twice what a row weighted 3 does; the absolute scale carries no meaning, so `[1,1,1]` and `[100,100,100]` are identical. Weights are *not* frequencies: they do not stand for repeated observations, and the model-selection sample size is the number of **rows** regardless of the weights. **Aggregated or binned data is therefore not supported through this argument** — 700 rows representing 1431 observations will be penalized as 700, biasing selection toward under-fitting. Expand such data to one row per observation instead. |
 | `component_options` | `list[dict]` or `None` | `None` | Per-component keyword arguments for mixture fitting (length must equal effective `n_components`). Currently only `poly_degree` is allowed per-component; `support`, `sample_weights`, `init_from`, `log_boundary_*` are forbidden (they are global). Must be `None` when `n_components='auto'` and no seed is given. |
 | `em_max_iter` | `int` or `None` | `None` (default: 50) | Maximum EM iterations. |
 | `em_tol` | `float` or `None` | `None` (default: 1e-4) | EM relative log-likelihood convergence tolerance. |
-| `rng` | `None`, `int`, `Generator`, or `RandomState` | `None` | Random-number source for stratified subsampling and the fallback GMM initialiser. For fitting, `None` uses deterministic seed 0; pass an explicit source to choose another stream. Sampling has separate semantics: `sample(..., rng=None)` uses NumPy entropy. |
+| `rng` | `None`, `int`, `Generator`, or `RandomState` | `None` | Random-number source for stratified subsampling and the fallback GMM initializer. For fitting, `None` uses deterministic seed 0; pass an explicit source to choose another stream. Sampling has separate semantics: `sample(..., rng=None)` uses NumPy entropy. |
 | `k_max` | `int` or `None` | `None` (default: 10) | Maximum number of components to consider when `n_components='auto'`. Ignored when `n_components` is an explicit integer. |
 | `progressive` | `bool` | `True` | For mixture fits with an explicit integer `poly_degree > 2`, climb through admissible degrees up to the target and warm-start each rung. Has no effect on single-component fits or when `poly_degree='auto'`. |
 | `auto_k_subsample` | `'auto'`, `int`, or `False` | `'auto'` | Size of the subsample used to *select* the component count when `n_components='auto'`. `'auto'` subsamples only above 20,000 samples; an integer sets the size directly; `False` scores every candidate on the full dataset. Subsampling can change which *K* wins; after selection, the winning *K* is refitted on all observations. Ignored when `n_components` is an explicit integer. |
@@ -343,7 +343,7 @@ Compute the *k*-th moment.
 c.moment(1)                        # raw first moment (mean)
 c.moment(2)                        # raw second moment E[X²]
 c.moment(2, central=True)          # central second moment (variance)
-c.moment(3, standardized=True)     # standardised third moment (skewness)
+c.moment(3, standardized=True)     # standardized third moment (skewness)
 ```
 
 | Parameter | Type | Default | Description |
@@ -541,7 +541,7 @@ The density on *x* induces a density on *y = exp(x)* via the change-of-variables
 pdf_y(y) = pdf_x(log y) / y      for y > 0
 ```
 
-This is useful when modelling inherently positive quantities. The exp-space support is always a subset of `(0, ∞)`.
+This is useful when modeling inherently positive quantities. The exp-space support is always a subset of `(0, ∞)`.
 
 #### Switching the active space
 
@@ -598,7 +598,7 @@ Returns `self` (if `inplace=True`) or a new `Distribution`.
 **Pullback vs pushforward interpretation:**
 
 - **Pushforward** (`pullback=False`): the transformed variable is `Y = mu + sigma * X`. Use this to shift and scale a fitted density.
-- **Pullback** (`pullback=True`): the transformed variable is `Y = (X - mu) / sigma`. This is the inverse map, and is what you want when standardising: a fit on raw data pulled back through its own `(mean, std)` has mean 0 and variance 1.
+- **Pullback** (`pullback=True`): the transformed variable is `Y = (X - mu) / sigma`. This is the inverse map, and is what you want when standardizing: a fit on raw data pulled back through its own `(mean, std)` has mean 0 and variance 1.
 
 The two are exact inverses of each other — pulling back and then pushing forward with the same `(mu, sigma)` reproduces the original density to machine precision — and both are exact change-of-variables, not refits.
 
@@ -616,7 +616,7 @@ For multi-component models, the transform is applied to every component.
 
 
 
-### Serialisation — Save & Load
+### Serialization — Save & Load
 
 The fitted state is stored as a NumPy structured scalar (mixtures wrap their component states in one scalar), enabling save/load without pickle. Loading validates the required fields and their values.
 
@@ -662,7 +662,7 @@ c2 = c.copy()         # independent deep copy
 
 ### Mixture-Specific API
 
-These properties and behaviours are specific to multi-component models (`n_components > 1`).
+These properties and behaviors are specific to multi-component models (`n_components > 1`).
 
 | Property / Method | Description |
 |--------------------|-------------|
@@ -721,7 +721,7 @@ A property (not a method) returning a `dict` that describes how well the CDF/PPF
 | `n_panels` | `int` | Panels in the final representation. |
 | `n_masses_recertified` | `int` or `None` | Panel masses re-verified after construction; `None` when the step does not apply. |
 | `ppf_fallback` | `bool` | Whether the stored spectral inverse fell back to CDF bisection rather than certified inverse panels. Extreme public tail queries may subsequently use direct potential-based tail inversion. |
-| `log_concavity_margin` | `float` | Certified lower bound on base-space convexity of the potential, minimised over components. Non-negative means every component's polynomial is certified convex. The mixture density itself need not be log-concave even when each component is. |
+| `log_concavity_margin` | `float` | Certified lower bound on base-space convexity of the potential, minimized over components. Non-negative means every component's polynomial is certified convex. The mixture density itself need not be log-concave even when each component is. |
 
 ```python
 d = c.spectral_diagnostics
@@ -808,7 +808,7 @@ print(f"Mean: {c.mean:.3f}")
 > decomposition statistically unidentified. The fitter compares the observed
 > interval likelihood with the unrestricted Turnbull likelihood on the censoring
 > endpoints and counts independent probability coordinates from the endpoint
-> graph. If an overparameterised mixture reaches that nonparametric maximum, it
+> graph. If an overparameterized mixture reaches that nonparametric maximum, it
 > is rejected explicitly as non-identifiable. This applies to disjoint,
 > overlapping, and nested interval patterns. Automatic component selection uses
 > the same interval likelihood and excludes such richer candidates rather than
@@ -840,7 +840,7 @@ point-density collapse mechanism does not apply.
 
 ### Warm-Starting from a Previous Fit
 
-Use `init_from` to initialise a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the number of components, support, boundary-basis configuration, and compatible per-component structure are inherited from the seed (unless explicitly overridden):
+Use `init_from` to initialize a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the number of components, support, boundary-basis configuration, and compatible per-component structure are inherited from the seed (unless explicitly overridden):
 
 ```python
 # Single-component warm start
@@ -1003,7 +1003,7 @@ m2 = c.moment(2)              # E[X²]
 mu2 = c.moment(2, central=True)   # E[(X − mean)²] = variance
 mu3 = c.moment(3, central=True)   # E[(X − mean)³]
 
-# Standardised moments
+# Standardized moments
 s3 = c.moment(3, standardized=True)  # skewness
 s4 = c.moment(4, standardized=True)  # kurtosis
 ```
@@ -1042,7 +1042,7 @@ For intervals, rows where `lower > upper` are silently swapped. Endpoints may be
 
 - 1-D array of length *R*.
 - Must be non-negative, finite, and not all zero.
-- Automatically normalised to sum to 1 internally.
+- Automatically normalized to sum to 1 internally.
 
 ---
 
@@ -1057,7 +1057,7 @@ The `support` parameter defines the domain of the density.
 | Bounded | `(0, 1)` | Finite interval |
 | `None` (default) | — | Unconstrained real line `(-np.inf, np.inf)`. Structural boundaries are never inferred from observed extrema; specify them explicitly. |
 
-`support` is a structural modelling choice, not a sample statistic. In particular, an all-positive finite sample does **not** imply a hard boundary at zero. If the variable is non-negative by construction, pass `support=(0, np.inf)` explicitly; otherwise the default fit remains unconstrained on the real line.
+`support` is a structural modeling choice, not a sample statistic. In particular, an all-positive finite sample does **not** imply a hard boundary at zero. If the variable is non-negative by construction, pass `support=(0, np.inf)` explicitly; otherwise the default fit remains unconstrained on the real line.
 
 All samples must lie within the specified support. When `support=None`, the support is the full real line.
 
@@ -1065,7 +1065,7 @@ All samples must lie within the specified support. When `support=None`, the supp
 
 ## Limitations
 
-`gibbus` is a univariate density estimator for point or interval-censored observations; it is not a multivariate model. A finite-sample fit can approximate data generated by a heavy-tailed population, but log-concavity is still a modelling restriction and tail extrapolation should not be interpreted as a heavy-tail model. Automatic component-count selection uses an approximate KDE/BIC screening pipeline (deterministic by default, but still sensitive to subsampling); inspect `selection_diagnostics` or disable selection subsampling when that choice is scientifically material. Fitting is not safe to perform concurrently on the same `Distribution` instance, and opt-in `suppress_warnings=True` uses Python's process-global warning filters (context-local filters are the default only on free-threaded CPython builds).
+`gibbus` is a univariate density estimator for point or interval-censored observations; it is not a multivariate model. A finite-sample fit can approximate data generated by a heavy-tailed population, but log-concavity is still a modeling restriction and tail extrapolation should not be interpreted as a heavy-tail model. Automatic component-count selection uses an approximate KDE/BIC screening pipeline (deterministic by default, but still sensitive to subsampling); inspect `selection_diagnostics` or disable selection subsampling when that choice is scientifically material. Fitting is not safe to perform concurrently on the same `Distribution` instance, and opt-in `suppress_warnings=True` uses Python's process-global warning filters (context-local filters are the default only on free-threaded CPython builds).
 
 
 ## Error Handling
@@ -1124,7 +1124,7 @@ Evaluation of an already-fitted `Distribution` is read-only at the Python level 
 
 - **Fitting cost**: Point optimization cost is essentially independent of sample count after sufficient-statistic construction; model-side normalization/Fisher work scales primarily with `poly_degree`. Natural state normalization and all required Fisher statistics share one compiled adaptive traversal, while the fixed-face Newton loop and conic quadratic subproblems run in Cython without the GIL. Interval fitting remains observation-dependent because each censoring interval contributes a conditional probability/expectation calculation. Ordinary finite rows strictly inside the support use one end-to-end compiled Gauss-Legendre traversal; rows touching a support boundary or containing infinite endpoints use the prepared compiled adaptive interval reducer in batches. Whole-support rows short-circuit to probability one and model covariance where applicable.
 - **Mixture cost**: Each EM iteration re-fits all *K* natural components. Point-component M-steps compress responsibilities into weighted sufficient statistics; interval-component M-steps use the exact weighted censored likelihood. Accepted E-step posteriors are reused by the next M-step, and explored multi-start finalists continue directly into joint Newton polish instead of repeating their EM trajectory. With automatic degrees, explorations that locked different component degrees are ranked by BIC rather than raw likelihood.
-- **Auto component selection** (`n_components="auto"`): First estimates the number of data modes via a KDE bandwidth sweep, then fits lightweight log-concave models for a focused range of *K* values centred on the KDE mode count (extended upward while the largest *K* tried still scores best) and picks the lowest BIC. On large inputs the KDE sweep and the log-concave sweep both run on a stratified subsample (see `auto_k_subsample`), leaving screening cheap relative to the single full log-concave EM run for the winning *K*. Use `k_max` to narrow the search range if desired.
+- **Auto component selection** (`n_components="auto"`): First estimates the number of data modes via a KDE bandwidth sweep, then fits lightweight log-concave models for a focused range of *K* values centered on the KDE mode count (extended upward while the largest *K* tried still scores best) and picks the lowest BIC. On large inputs the KDE sweep and the log-concave sweep both run on a stratified subsample (see `auto_k_subsample`), leaving screening cheap relative to the single full log-concave EM run for the winning *K*. Use `k_max` to narrow the search range if desired.
 
 
 ---

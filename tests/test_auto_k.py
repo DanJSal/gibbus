@@ -168,7 +168,7 @@ class TestSubsampleOption:
 
 
 class TestWeightedSubsampling:
-    def test_weights_are_renormalised_on_subsample(self, big_bimodal):
+    def test_weights_are_renormalized_on_subsample(self, big_bimodal):
         w = np.ones(big_bimodal.size)
         w[big_bimodal.size // 2:] = 5.0
         c = Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0,
@@ -230,9 +230,9 @@ class TestBinnedKDE:
 
 
 class TestGMMInit:
-    """Base-space initialisation contract."""
+    """Base-space initialization contract."""
 
-    def test_returns_normalised_responsibilities(self):
+    def test_returns_normalized_responsibilities(self):
 
         rng = np.random.default_rng(8)
         x = np.concatenate([rng.normal(-3, 0.7, 500), rng.normal(3, 0.7, 500)])

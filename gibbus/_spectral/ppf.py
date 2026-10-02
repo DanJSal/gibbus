@@ -19,6 +19,7 @@ Bernstein lower bounds on each derivative polynomial.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 
 import numpy as np
@@ -144,7 +145,7 @@ class SpectralPPF:
         """
         if not isinstance(spectral_cdf, SpectralCDF):
             raise TypeError("spectral_cdf must be a SpectralCDF")
-        opts = tuple(sorted(set(int(v) for v in degree_options)))
+        opts = tuple(sorted({int(v) for v in degree_options}))
         if not opts or opts[0] < 2:
             raise ValueError("degree_options must contain degrees >= 2")
 
@@ -174,7 +175,7 @@ class SpectralPPF:
         prob_grid = np.array(sorted(set(probs)), dtype=np.float64)
 
         intervals = []
-        for pa, pb in zip(prob_grid[:-1], prob_grid[1:], strict=True):
+        for pa, pb in itertools.pairwise(prob_grid):
             if not pb > pa:
                 continue
             pm = self._prob_mid_logit(pa, pb)
@@ -363,7 +364,7 @@ class SpectralPPF:
         p : float
             Probability in ``[0, 1]``.
         prefer_left : bool, optional
-            Which side to favour when *p* falls exactly on a panel edge.
+            Which side to favor when *p* falls exactly on a panel edge.
 
         Returns
         -------

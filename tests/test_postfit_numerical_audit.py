@@ -3,10 +3,10 @@
 import math
 
 import numpy as np
+from gibbus._model._state_kernels import state_numerics
 from scipy.integrate import quad
 
 from gibbus._defaults import QUAD_EPSABS, QUAD_EPSREL, QUAD_LIMIT
-from gibbus._model._state_kernels import state_numerics
 from gibbus._model.natural_state import _MODE_CONTROLS
 from gibbus._postfit.expectation import expect
 

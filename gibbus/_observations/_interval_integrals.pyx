@@ -20,7 +20,9 @@ state's local scale.
 import numpy as np
 cimport numpy as cnp
 
-from libc.math cimport cos, exp, fabs, isfinite, log, nextafter, sin, sqrt, tan
+from libc.math cimport (
+    cos, exp, INFINITY, isfinite, log, nextafter, sin, sqrt, tan,
+)
 from libc.stdlib cimport free, malloc
 
 cnp.import_array()
@@ -100,12 +102,12 @@ cdef inline double _q_eval_ptr(
     if isfinite(lower) and isfinite(a_lower) and a_lower > 0.0:
         d = z - lower
         if d <= 0.0:
-            return 1.0 / 0.0
+            return INFINITY
         out -= a_lower * log(d)
     if isfinite(upper) and isfinite(a_upper) and a_upper > 0.0:
         d = upper - z
         if d <= 0.0:
-            return 1.0 / 0.0
+            return INFINITY
         out -= a_upper * log(d)
     return out
 
@@ -130,12 +132,12 @@ cdef inline double _q_d1_eval_ptr(
     if isfinite(lower) and isfinite(a_lower) and a_lower > 0.0:
         d = z - lower
         if d <= 0.0:
-            return -1.0 / 0.0
+            return -INFINITY
         out -= a_lower / d
     if isfinite(upper) and isfinite(a_upper) and a_upper > 0.0:
         d = upper - z
         if d <= 0.0:
-            return 1.0 / 0.0
+            return INFINITY
         out += a_upper / d
     return out
 
@@ -157,12 +159,12 @@ cdef inline double _stat_eval(
     if kind == _STAT_LOG_LOWER:
         d = z - lower
         if d <= 0.0:
-            return 1.0 / 0.0
+            return INFINITY
         return -log(d)
     if kind == _STAT_LOG_UPPER:
         d = upper - z
         if d <= 0.0:
-            return 1.0 / 0.0
+            return INFINITY
         return -log(d)
     return 1.0
 
@@ -242,9 +244,9 @@ cdef int _node_accumulate(
     # endpoint.  Such a point has zero measure but endpoint-log statistics are
     # singular there, so move to the nearest representable interior point.
     if isfinite(support_lower) and z <= support_lower:
-        z = nextafter(support_lower, support_upper if isfinite(support_upper) else 1.0 / 0.0)
+        z = nextafter(support_lower, support_upper if isfinite(support_upper) else INFINITY)
     if isfinite(support_upper) and z >= support_upper:
-        z = nextafter(support_upper, support_lower if isfinite(support_lower) else -1.0 / 0.0)
+        z = nextafter(support_upper, support_lower if isfinite(support_lower) else -INFINITY)
 
     qz = _q_eval_ptr(q, nq, support_lower, support_upper, a_lower, a_upper, z)
     if not isfinite(qz):
@@ -379,7 +381,6 @@ cdef int _gk15(
     return 0
 
 
-
 # Failure codes for the allocation-free/GIL-free adaptive natural reducer.
 cdef enum:
     _ADAPT_BAD_ROW = 10
@@ -437,7 +438,7 @@ cdef int _adaptive_natural_row(
     cdef double q_min_x, q_ref, center_x, step, mass, tol
     cdef double total_err, old_err, e1, e2, norm2, mid, old_b
     cdef double tau, node_t, node_z, node_jac, node_q, piece_a, piece_b
-    cdef int transform, status, count, idx, i, zoom_end, levels
+    cdef int transform, status, count, idx, i, zoom_end, levels, _rep
     cdef Py_ssize_t j, k, m, off
 
     if lo != lo or hi != hi or not lo < hi:
@@ -492,9 +493,9 @@ cdef int _adaptive_natural_row(
         map_hi = mode
         transform = 3
     if isfinite(lo) and not center_x > lo:
-        center_x = nextafter(lo, hi if isfinite(hi) else 1.0 / 0.0)
+        center_x = nextafter(lo, hi if isfinite(hi) else INFINITY)
     if isfinite(hi) and not center_x < hi:
-        center_x = nextafter(hi, lo if isfinite(lo) else -1.0 / 0.0)
+        center_x = nextafter(hi, lo if isfinite(lo) else -INFINITY)
     if not isfinite(center_x):
         return _ADAPT_BAD_CENTER
 
@@ -539,7 +540,7 @@ cdef int _adaptive_natural_row(
         total[k] = 0.0
     for i in range(levels + 1):
         piece_b = 1.0
-        for idx in range(i):
+        for _rep in range(i):
             piece_b *= 0.0625
         piece_a = piece_b * 0.0625 if i < levels else 0.0
         if zoom_end == 1:
@@ -893,7 +894,7 @@ cdef class AdaptiveIntervalIntegrator:
         cdef double q_min_x, q_ref, center_x, step, mass, tol
         cdef double total_err, old_err, e1, e2, norm2, mid, old_b
         cdef double tau, node_t, node_z, node_jac, node_q, piece_a, piece_b
-        cdef int transform, status, count, idx, i, zoom_end, levels
+        cdef int transform, status, count, idx, i, zoom_end, levels, _rep
         cdef Py_ssize_t j, k, m, off, alloc_n
         cdef double* refs = NULL
         cdef double* centered = NULL
@@ -965,9 +966,9 @@ cdef class AdaptiveIntervalIntegrator:
             map_hi = self._mode
             transform = 3
         if isfinite(lo) and not center_x > lo:
-            center_x = nextafter(lo, hi if isfinite(hi) else 1.0 / 0.0)
+            center_x = nextafter(lo, hi if isfinite(hi) else INFINITY)
         if isfinite(hi) and not center_x < hi:
-            center_x = nextafter(hi, lo if isfinite(lo) else -1.0 / 0.0)
+            center_x = nextafter(hi, lo if isfinite(lo) else -INFINITY)
         if not isfinite(center_x):
             raise RuntimeError("interval interior reference is non-finite")
 
@@ -1058,7 +1059,7 @@ cdef class AdaptiveIntervalIntegrator:
                 # Piece i spans [16^-(i+1), 16^-i] measured from the zoom end,
                 # except the innermost, which reaches the endpoint itself.
                 piece_b = 1.0
-                for idx in range(i):
+                for _rep in range(i):
                     piece_b *= 0.0625
                 piece_a = piece_b * 0.0625 if i < levels else 0.0
                 if zoom_end == 1:

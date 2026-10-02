@@ -24,7 +24,7 @@ class _EmpiricalStats:
     Parameters
     ----------
     moments : numpy.ndarray, shape (K + 1,)
-        Normalised power moments with ``moments[k] = E_hat[z**k]`` and
+        Normalized power moments with ``moments[k] = E_hat[z**k]`` and
         ``moments[0] == 1`` up to floating-point roundoff.
     boundary_log : numpy.ndarray, shape (2,)
         Expectations of the fixed basis functions ``-log(z-L)`` and
@@ -32,7 +32,7 @@ class _EmpiricalStats:
     support : tuple of (float, float)
         Canonical fitting-coordinate support.
     total_weight : float
-        Sum of the input weights before normalisation, or the number of
+        Sum of the input weights before normalization, or the number of
         observations for unweighted data.
     effective_n : float
         Kish effective sample size ``(sum w)^2 / sum(w^2)``.  Equal weights
@@ -217,13 +217,13 @@ class _EmpiricalStats:
         return float(raw_var / self.effective_n)
 
 
-def _normalised_weights(n, weights, subject="point", /):
-    """Return normalised weights plus total and effective sample size.
+def _normalized_weights(n, weights, subject="point", /):
+    """Return normalized weights plus total and effective sample size.
 
     Shared by the point and interval observation builders: the arithmetic is
     identical, only the noun in the error messages differs.
 
-    Normalisation runs in units of the largest weight so that neither the raw
+    Normalization runs in units of the largest weight so that neither the raw
     sum nor the sum of squares can overflow merely because every relative
     weight shares a large common scale.
 
@@ -240,9 +240,9 @@ def _normalised_weights(n, weights, subject="point", /):
     Returns
     -------
     weights : numpy.ndarray, shape (n,)
-        Normalised weights summing to one.
+        Normalized weights summing to one.
     total_weight : float
-        Pre-normalisation total weight.
+        Pre-normalization total weight.
     effective_n : float
         Kish effective sample size.
 

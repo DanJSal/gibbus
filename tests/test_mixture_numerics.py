@@ -72,7 +72,7 @@ def test_base_mixture_modes_do_not_duplicate_a_slightly_displaced_seed():
 def test_readme_trimodal_example_reports_each_mode_once():
     # The README's trimodal example reported one central mode twice for
     # several data seeds.  Distinct modes of a smooth fit are separated by an
-    # antimode, so no two reported modes can be nanometres apart.
+    # antimode, so no two reported modes can be nanometers apart.
     for seed in (2, 5):
         rng = np.random.default_rng(seed)
         data = np.concatenate([
@@ -100,7 +100,7 @@ def test_exp_mixture_modes_use_transformed_component_seeds():
 
 
 @pytest.mark.parametrize("failure", [ValueError, OverflowError])
-def test_gmm_initialisation_failure_degrades_to_nested_scale(monkeypatch, failure):
+def test_gmm_initialization_failure_degrades_to_nested_scale(monkeypatch, failure):
     data = np.linspace(-2.0, 2.0, 20)
     expected_resp = np.full((data.size, 2), 0.5, dtype=np.float64)
     expected_mix = np.array([0.5, 0.5], dtype=np.float64)
@@ -127,7 +127,7 @@ def test_gmm_initialisation_failure_degrades_to_nested_scale(monkeypatch, failur
     np.testing.assert_array_equal(candidates[0][1], expected_resp)
     np.testing.assert_array_equal(candidates[0][2], expected_mix)
     records = suppressed_failures()
-    assert records[-1]["context"] == "GMM mixture initialisation"
+    assert records[-1]["context"] == "GMM mixture initialization"
     assert records[-1]["type"] == failure.__name__
     clear_suppressed_failures()
 

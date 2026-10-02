@@ -432,21 +432,21 @@ cdef class SpectralPPFEvaluator:
     cdef inline double _invert_tail(self, double p) noexcept nogil:
         """Quantile outside the fitted range, by bisecting the source CDF.
 
-        There is no Python or SciPy fallback behind this: extreme
-        probabilities are resolved entirely here.
+        Inverts the packed spectral CDF in compact ``z`` by monotone
+        bisection.  There is no Python or SciPy fallback behind this:
+        extreme probabilities are resolved entirely here.
         """
-        """Invert the packed spectral CDF in compact z by monotone bisection."""
         cdef double a = -1.0
         cdef double b = 1.0
         cdef double m, fm, fa, fb
-        cdef int it
+        cdef int _it
         fa = -p
         fb = 1.0 - p
         # The endpoint values are exact by construction.  Bisection over the
         # full compact interval is deliberately used rather than an approximate
         # PPF-panel endpoint, so a spectral inverse residual can never destroy
         # the bracket for probabilities just outside [pmin, pmax].
-        for it in range(80):
+        for _it in range(80):
             m = 0.5 * (a + b)
             if m == a or m == b:
                 break
@@ -598,7 +598,6 @@ cdef class SpectralPPFEvaluator:
 
     cdef void _eval_many_simd(self, const double* p, double* out, Py_ssize_t n) noexcept nogil:
         """Cache-blocked panel-bucketed evaluator with transposed Clenshaw."""
-        """Cache-blocked panel-bucketed evaluator with transposed Clenshaw."""
         cdef Py_ssize_t block_cap = 16384
         cdef int32_t* panel_of = NULL
         cdef double* u_orig = NULL
@@ -704,7 +703,7 @@ cdef class SpectralPPFEvaluator:
         free(work0); free(work1); free(work2)
 
     cdef object _call_mode(self, object p, bint use_simd, bint map_to_x):
-        """Dispatch to the vectorised or scalar loop and restore *p*'s shape.
+        """Dispatch to the vectorized or scalar loop and restore *p*'s shape.
 
         *map_to_x* additionally maps the compact result back to physical
         coordinates.
@@ -750,7 +749,7 @@ cdef class SpectralPPFEvaluator:
         return self._call_mode(p, False, True)
 
     def eval_x(self, object p):
-        """Quantiles in physical coordinates, vectorised loop.
+        """Quantiles in physical coordinates, vectorized loop.
 
         Parameters
         ----------

@@ -68,7 +68,7 @@ class TestSampleWeights:
             np.average(bimodal, weights=w), abs=0.05)
 
 
-class TestSerialisation:
+class TestSerialization:
     def test_single_roundtrip_is_exact(self, rng, tmp_path):
         c = Distribution().fit(rng.normal(size=600), n_components=1,
                         support=(-np.inf, np.inf))
@@ -388,7 +388,7 @@ def fitted():
 
 
 class TestEvaluationConventions:
-    """Cross-cutting behaviour of the evaluators that is easy to break
+    """Cross-cutting behavior of the evaluators that is easy to break
     one method at a time: NaN propagation, argument validation, and
     scale invariance of the fit."""
 

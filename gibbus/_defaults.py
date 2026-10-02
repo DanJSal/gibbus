@@ -244,7 +244,7 @@ PROB_EPS: Final = _F64_INFO.eps
 preventing exact 0 or 1 from reaching the PPF."""
 
 TINY_FLOAT: Final = _F64_INFO.tiny
-"""Smallest positive normalised float64; used as a floor when clipping
+"""Smallest positive normalized float64; used as a floor when clipping
 values before taking logarithms -- mixture weights and responsibility row
 sums, interval masses, and tail distances.
 
@@ -385,7 +385,7 @@ QUAD_LIMIT: Final = 100
 
 MAX_CACHED_MOMENTS: Final = 32
 """Number of raw moments stored in the ``raw_moments`` field of the fitted
-structured state.  Moments up to this order are memoised across calls."""
+structured state.  Moments up to this order are memoized across calls."""
 
 # ---------------------------------------------------------------------------
 # Mixture PPF bisection fallback
@@ -410,7 +410,7 @@ split at the current density mode when it lies inside the interval.  Boundary-
 touching positive-width rows and rows with infinite endpoints use the prepared
 adaptive interval reducer instead.  Order 24 gives near-float64 agreement for
 the maintained finite-row gradient stress cases while keeping that path
-vectorised.
+vectorized.
 """
 
 INTERVAL_W_EPS_MULT: Final = 1e-12
@@ -439,7 +439,7 @@ EM_TOL: Final = 1e-4
 """Relative log-likelihood convergence tolerance for EM."""
 
 EM_RESP_FLOOR: Final = 1e-300
-"""Floor applied to per-sample responsibilities before normalisation, to
+"""Floor applied to per-sample responsibilities before normalization, to
 prevent exact-zero weights from reaching the component refit."""
 
 EM_MIN_EFFECTIVE_DISTINCT_N: Final = 2.0
@@ -537,7 +537,7 @@ AUTO_LC_MIN_COMPONENT_N: Final = 30
 """Minimum effective sample count a component must hold for its *K* to be
 a viable BIC candidate.
 
-BIC penalises parameters, not support: a component fitted to a handful of
+BIC penalizes parameters, not support: a component fitted to a handful of
 tail points is cheap in parameters and can win on likelihood, so without
 this a sweep will sometimes prefer a *K* whose extra component carries a
 fraction of a percent of the mass.  Effective count is ``w_j * n``.  A
@@ -598,10 +598,10 @@ percent of the mass.
 AUTO_KDE_SUBSAMPLE_N: Final = 5_000
 """Point budget for KDE mode counting.
 
-The cap regularises the mode-count estimate as well as bounding work.  The
+The cap regularizes the mode-count estimate as well as bounding work.  The
 Silverman bandwidth falls as the sample count rises, so on a large heavy-tailed
 input the lower multipliers can resolve tail noise as extra modes.  Holding the
-count fixed also stabilises the bandwidth scale used by the sweep.
+count fixed also stabilizes the bandwidth scale used by the sweep.
 
 Stratified rather than uniform thinning because the output is a
 component *count*, and a low-weight mode dropping out of the draw would
@@ -670,8 +670,8 @@ perfectly informative.  A bin of width ``w`` contributes at least
 
 MAD_TO_SIGMA: Final = 1.4826
 """Factor converting a median absolute deviation to a Gaussian-consistent
-standard deviation (``1 / Phi^{-1}(3/4)``).  Used to normalise data before
-fitting so the optimiser sees O(1) coordinates."""
+standard deviation (``1 / Phi^{-1}(3/4)``).  Used to normalize data before
+fitting so the optimizer sees O(1) coordinates."""
 
 # ---------------------------------------------------------------------------
 # Spectral CDF / PPF construction

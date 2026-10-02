@@ -7,7 +7,7 @@ cheap.
 
 Pipeline position
 -----------------
-``gibbus._postfit.evaluators`` sits just above the raw vectorised kernels in
+``gibbus._postfit.evaluators`` sits just above the raw vectorized kernels in
 ``_model/vec.py``.  It is called from ``_api/component.py`` (via ``_assign_from_struct``)
 to rebuild the evaluation stack whenever a new fit state is loaded.
 
@@ -22,7 +22,7 @@ Conventions
   ``[aL, aU]``. Distances are fixed at the actual support endpoints.
 """
 
-from functools import lru_cache
+from functools import cache
 from math import factorial
 
 import numpy as np
@@ -113,7 +113,7 @@ def _potential_base_func(support, q_poly, boundary_amplitudes):
 
 
 
-@lru_cache(maxsize=None)
+@cache
 def _stirling1(n):
     """Compute signed Stirling numbers of the first kind ``s(n, k)`` for
     ``k = 0 ... n``.
@@ -219,7 +219,7 @@ def _potential_exp_from_x_potential(pot_x):
 
 
 def _pdf_func(support, q_poly, boundary_amplitudes, /):
-    """Build a closure that evaluates ``exp(-q(z))`` (unnormalised PDF) in internal coordinates.
+    """Build a closure that evaluates ``exp(-q(z))`` (unnormalized PDF) in internal coordinates.
 
     The closure is a thin wrapper over the compiled kernel
     :func:`._state_kernels._pdf_vec`, which is the single PDF

@@ -13,7 +13,7 @@ lives in the API layer rather than importing API objects from ``_fit``.
 """
 
 from dataclasses import dataclass, replace
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -94,24 +94,24 @@ class _FitRequest:
     """
 
     samples: ArrayLike
-    n_components: Union[int, str]
-    poly_degree: Optional[Union[int, str]]
-    support: Optional[Tuple[float, float]]
-    log_boundary_lower: Optional[bool]
-    log_boundary_upper: Optional[bool]
+    n_components: int | str
+    poly_degree: int | str | None
+    support: tuple[float, float] | None
+    log_boundary_lower: bool | None
+    log_boundary_upper: bool | None
     verbose: int
     suppress_warnings: bool
     init_from: Any
-    sample_weights: Optional[ArrayLike]
-    component_options: Optional[List[Dict[str, Any]]]
-    em_max_iter: Optional[int]
-    em_tol: Optional[float]
+    sample_weights: ArrayLike | None
+    component_options: list[dict[str, Any]] | None
+    em_max_iter: int | None
+    em_tol: float | None
     rng: Any
-    k_max: Optional[int]
+    k_max: int | None
     progressive: bool
-    auto_k_subsample: Union[str, int, bool]
-    seed_components: Optional[List[_Component]] = None
-    seed_weights: Optional[np.ndarray] = None
+    auto_k_subsample: str | int | bool
+    seed_components: list[_Component] | None = None
+    seed_weights: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -130,10 +130,10 @@ class _FitResult:
         Diagnostics from the final EM fit, when applicable.
     """
 
-    components: List[_Component]
+    components: list[_Component]
     weights: np.ndarray
-    selection_diagnostics: Optional[Dict[str, Any]] = None
-    em_diagnostics: Optional[Dict[str, Any]] = None
+    selection_diagnostics: dict[str, Any] | None = None
+    em_diagnostics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -177,18 +177,18 @@ class _MixtureContext:
     """
 
     samples_rk: np.ndarray
-    n_components: Union[int, str]
-    support: Tuple[float, float]
-    component_options: Optional[List[Dict[str, Any]]]
+    n_components: int | str
+    support: tuple[float, float]
+    component_options: list[dict[str, Any]] | None
     verbose: int
     suppress_warnings: bool
-    observation_weights: Optional[np.ndarray]
+    observation_weights: np.ndarray | None
     generator: np.random.Generator
     fit_generator: np.random.Generator
     samples_1d: np.ndarray
     n_columns: int
-    log_boundary_lower: Union[bool, str]
-    log_boundary_upper: Union[bool, str]
+    log_boundary_lower: bool | str
+    log_boundary_upper: bool | str
     em_max_iter: int
     em_tol: float
 
@@ -215,11 +215,11 @@ class _MixtureInitialization:
     """
 
     n_components: int
-    responsibilities: Optional[np.ndarray]
-    weights: Optional[np.ndarray]
-    component_options: List[Dict[str, Any]]
-    candidates: Optional[list]
-    selection_diagnostics: Optional[Dict[str, Any]]
+    responsibilities: np.ndarray | None
+    weights: np.ndarray | None
+    component_options: list[dict[str, Any]]
+    candidates: list | None
+    selection_diagnostics: dict[str, Any] | None
 
 
 def _as_integer(value, name, /):
@@ -248,7 +248,7 @@ def _as_integer(value, name, /):
         as_float = float(value)
     except (TypeError, ValueError):
         raise ValueError(f"{name} must be an integer, got {value!r}.") from None
-    if as_float != as_float or as_float in (float("inf"), float("-inf")):
+    if np.isnan(as_float) or as_float in (float("inf"), float("-inf")):
         raise ValueError(f"{name} must be a finite integer, got {value!r}.")
     if as_float != int(as_float):
         raise ValueError(f"{name} must be an integer, got {value!r}.")
@@ -295,7 +295,7 @@ def _check_optional_fit_controls(request, /):
             raise ValueError(
                 f"em_tol must be a positive float or None, got {request.em_tol!r}."
             ) from None
-        if not em_tol > 0.0 or em_tol in (float("inf"),) or em_tol != em_tol:
+        if not em_tol > 0.0 or em_tol in (float("inf"),) or np.isnan(em_tol):
             raise ValueError(
                 f"em_tol must be finite and > 0 or None, got {em_tol}."
             )
@@ -544,7 +544,7 @@ def _prepare_mixture_context(request, /):
     )
 
 
-def _initialise_mixture(request, context, /):
+def _initialize_mixture(request, context, /):
     """Resolve seeded, automatic-K, or explicit-K initialization.
 
     Parameters
@@ -731,7 +731,7 @@ def _fit_mixture_with_boundary_policy(context, n_components, degree_policy,
         ran).
     """
     rows = context.samples_rk
-    options = dict(max_em_steps=context.em_max_iter, em_tolerance=context.em_tol)
+    options = {"max_em_steps": context.em_max_iter, "em_tolerance": context.em_tol}
 
     def fit(lo, up):
         return _fit_natural_mixture(
@@ -844,7 +844,7 @@ def _run_mixture_fit(request, /):
         return a single component while retaining its selection diagnostics.
     """
     context = _prepare_mixture_context(request)
-    initialization = _initialise_mixture(request, context)
+    initialization = _initialize_mixture(request, context)
 
     if initialization.n_components == 1:
         result = _run_single_fit(

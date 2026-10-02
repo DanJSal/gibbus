@@ -16,7 +16,11 @@ from .._defaults import (
 )
 from .._fit.boundary import _amplitude_standard_errors
 from .._model.coords import _FitCoordinate
-from .._spectral.cdf import SpectralCDF, boundary_aware_breaks_from_amplitudes, density_spec
+from .._spectral.cdf import (
+    SpectralCDF,
+    boundary_aware_breaks_from_amplitudes,
+    density_spec,
+)
 from .._spectral.ppf import SpectralPPF
 from .._spectral.runtime import fallback_ppf_state, pack_cdf_state, pack_ppf_state
 from .analytics import _powaff_moment_from_z_moments, _stats_from_raw_moments
@@ -193,13 +197,13 @@ def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
         ) from exc
     z_stats = _stats_from_raw_moments(*map(float, z_mom[1:5]))
     alpha_sign = -1.0 if alpha < 0.0 else 1.0
-    stats = dict(
-        mean=float(beta + alpha * z_stats["mean"]),
-        var=float((alpha * alpha) * z_stats["var"]),
-        std=float(abs(alpha) * z_stats["std"]),
-        skew=float(alpha_sign * z_stats["skew"]),
-        kurt=float(z_stats["kurt"]),
-    )
+    stats = {
+        "mean": float(beta + alpha * z_stats["mean"]),
+        "var": float((alpha * alpha) * z_stats["var"]),
+        "std": float(abs(alpha) * z_stats["std"]),
+        "skew": float(alpha_sign * z_stats["skew"]),
+        "kurt": float(z_stats["kurt"]),
+    }
 
     z_std_sq = max(0.0, float(z_mom[2] - z_mom[1] * z_mom[1]))
     z_std = float(np.sqrt(z_std_sq))
@@ -247,48 +251,48 @@ def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
     canonical_raw_moments[:5] = z_mom
 
     converged = str(result.status) in {"converged", "converged_approximately"}
-    data = dict(
-        q_poly=q_poly,
-        boundary_amplitudes=amps,
-        boundary_allowed=allowed,
-        support=support,
-        canonical_support=np.asarray(spec.support, dtype=np.float64),
-        window=np.asarray(state.window, dtype=np.float64),
-        canonical_mode=float(state.mode),
-        mode=mode,
-        median=median,
-        mean=float(stats["mean"]),
-        var=float(stats["var"]),
-        std=float(stats["std"]),
-        skew=float(stats["skew"]),
-        kurt=float(stats["kurt"]),
-        raw_moments=raw_moments,
-        canonical_raw_moments=canonical_raw_moments,
-        fit_center=float(coord.center),
-        fit_scale=float(coord.scale),
-        fit_direction=float(coord.direction),
-        mu=0.0,
-        sigma=1.0,
-        pullback=True,
-        default_space=np.str_("base"),
-        optimizer_params=np.asarray(result.params, dtype=np.float64),
-        requested_poly_degree=int(spec.requested_poly_degree),
-        effective_poly_degree=int(spec.effective_poly_degree),
-        nll=float(result.objective_value),
-        optimizer_success=np.int8(converged),
-        optimizer_status=np.str_(result.status),
-        optimizer_message=np.str_(result.status.replace("_", " ")),
-        optimizer_n_iterations=np.int64(result.newton_iterations),
-        optimizer_n_evaluations=np.int64(result.objective_evaluations),
-        optimizer_subproblem_iterations=np.int64(result.subproblem_iterations),
-        optimizer_decrease_bound=float(result.final_decrease_bound),
-        effective_curvature_degree=np.int64(result.effective_curvature_degree),
-        lower_amplitude_active=np.int8(bool(result.lower_amplitude_active)),
-        upper_amplitude_active=np.int8(bool(result.upper_amplitude_active)),
-        separator_certified=np.int8(
+    data = {
+        "q_poly": q_poly,
+        "boundary_amplitudes": amps,
+        "boundary_allowed": allowed,
+        "support": support,
+        "canonical_support": np.asarray(spec.support, dtype=np.float64),
+        "window": np.asarray(state.window, dtype=np.float64),
+        "canonical_mode": float(state.mode),
+        "mode": mode,
+        "median": median,
+        "mean": float(stats["mean"]),
+        "var": float(stats["var"]),
+        "std": float(stats["std"]),
+        "skew": float(stats["skew"]),
+        "kurt": float(stats["kurt"]),
+        "raw_moments": raw_moments,
+        "canonical_raw_moments": canonical_raw_moments,
+        "fit_center": float(coord.center),
+        "fit_scale": float(coord.scale),
+        "fit_direction": float(coord.direction),
+        "mu": 0.0,
+        "sigma": 1.0,
+        "pullback": True,
+        "default_space": np.str_("base"),
+        "optimizer_params": np.asarray(result.params, dtype=np.float64),
+        "requested_poly_degree": int(spec.requested_poly_degree),
+        "effective_poly_degree": int(spec.effective_poly_degree),
+        "nll": float(result.objective_value),
+        "optimizer_success": np.int8(converged),
+        "optimizer_status": np.str_(result.status),
+        "optimizer_message": np.str_(result.status.replace("_", " ")),
+        "optimizer_n_iterations": np.int64(result.newton_iterations),
+        "optimizer_n_evaluations": np.int64(result.objective_evaluations),
+        "optimizer_subproblem_iterations": np.int64(result.subproblem_iterations),
+        "optimizer_decrease_bound": float(result.final_decrease_bound),
+        "effective_curvature_degree": np.int64(result.effective_curvature_degree),
+        "lower_amplitude_active": np.int8(bool(result.lower_amplitude_active)),
+        "upper_amplitude_active": np.int8(bool(result.upper_amplitude_active)),
+        "separator_certified": np.int8(
             result.final_separation is None or bool(result.final_separation.feasible)
         ),
-    )
+    }
     evaluation = result.evaluation
     information = getattr(evaluation, "observed_hessian", None)
     if information is None and evaluation is not None:
