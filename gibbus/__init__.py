@@ -86,4 +86,3 @@ __all__ = [
     "clear_suppressed_failures",
     "__version__",
 ]
-

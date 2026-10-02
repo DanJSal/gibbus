@@ -22,8 +22,7 @@ def _normal_mixture_potential(mus, sigmas, weights):
         x = float(x)
         z = (x - mus) / sigmas
         log_terms = (
-            np.log(weights) - np.log(sigmas) - 0.5 * np.log(2.0 * np.pi)
-            - 0.5 * z * z
+            np.log(weights) - np.log(sigmas) - 0.5 * np.log(2.0 * np.pi) - 0.5 * z * z
         )
         log_pdf = float(logsumexp(log_terms))
         responsibilities = np.exp(log_terms - log_pdf)
@@ -34,11 +33,8 @@ def _normal_mixture_potential(mus, sigmas, weights):
         if n == 1:
             return -score
         if n == 2:
-            second_terms = (
-                (x - mus) ** 2 / sigmas ** 4 - 1.0 / sigmas ** 2
-            )
-            pdf_second_over_pdf = float(
-                np.dot(responsibilities, second_terms))
+            second_terms = (x - mus) ** 2 / sigmas**4 - 1.0 / sigmas**2
+            pdf_second_over_pdf = float(np.dot(responsibilities, second_terms))
             return score * score - pdf_second_over_pdf
         raise AssertionError("test potential only supplies derivatives through order 2")
 
@@ -47,8 +43,7 @@ def _normal_mixture_potential(mus, sigmas, weights):
 
 def test_mode_root_scan_finds_even_number_of_roots_with_same_sign_samples():
     candidates = []
-    _collect_roots_bisection_func(
-        lambda x: (x - 0.2) * (x - 0.3), 0.0, 1.0, candidates)
+    _collect_roots_bisection_func(lambda x: (x - 0.2) * (x - 0.3), 0.0, 1.0, candidates)
     assert sorted(candidates) == pytest.approx([0.2, 0.3], abs=2e-10)
 
 
@@ -75,12 +70,17 @@ def test_readme_trimodal_example_reports_each_mode_once():
     # antimode, so no two reported modes can be nanometers apart.
     for seed in (2, 5):
         rng = np.random.default_rng(seed)
-        data = np.concatenate([
-            rng.normal(-5, 0.8, 200), rng.normal(0, 1.0, 300), rng.normal(5, 0.6, 200),
-        ])
+        data = np.concatenate(
+            [
+                rng.normal(-5, 0.8, 200),
+                rng.normal(0, 1.0, 300),
+                rng.normal(5, 0.6, 200),
+            ]
+        )
         c = Distribution().fit(data, n_components=3, support=(-np.inf, np.inf), rng=42)
         modes = np.asarray(c.modes)
         assert np.diff(modes).min() > 1e-3, modes
+
 
 def test_exp_mixture_modes_use_transformed_component_seeds():
     # For N(0, sigma^2), the exp-space component mode is at log y=-sigma^2.
@@ -116,7 +116,9 @@ def test_gmm_initialization_failure_degrades_to_nested_scale(monkeypatch, failur
 
     monkeypatch.setattr(mixture_module, "_valley_init_responsibilities", no_valley)
     monkeypatch.setattr(mixture_module, "_gmm_init_responsibilities", failing_gmm)
-    monkeypatch.setattr(mixture_module, "_nested_scale_init_responsibilities", nested_scale)
+    monkeypatch.setattr(
+        mixture_module, "_nested_scale_init_responsibilities", nested_scale
+    )
 
     clear_suppressed_failures()
     candidates = mixture_module._initial_responsibility_candidates(
@@ -134,10 +136,14 @@ def test_gmm_initialization_failure_degrades_to_nested_scale(monkeypatch, failur
 
 def test_mixture_spectral_scale_survives_large_common_translation():
     rng = np.random.default_rng(0)
-    data = np.ascontiguousarray(np.concatenate([
-        rng.normal(-3.0, 1.0, 800),
-        rng.normal(3.0, 1.0, 800),
-    ]))
+    data = np.ascontiguousarray(
+        np.concatenate(
+            [
+                rng.normal(-3.0, 1.0, 800),
+                rng.normal(3.0, 1.0, 800),
+            ]
+        )
+    )
     base = Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
     probs = np.array([0.01, 0.1, 0.5, 0.9, 0.99])
     base_q = np.asarray(base.ppf(probs), dtype=np.float64)

@@ -133,10 +133,9 @@ def _fraction_polyder(coefficients, /):
     """
     if len(coefficients) <= 1:
         return [Fraction(0)]
-    return _fraction_trim([
-        Fraction(index) * coefficients[index]
-        for index in range(1, len(coefficients))
-    ])
+    return _fraction_trim(
+        [Fraction(index) * coefficients[index] for index in range(1, len(coefficients))]
+    )
 
 
 def _fraction_polyval(coefficients, point, /):
@@ -277,7 +276,9 @@ def _exact_float_polynomial(coefficients, /):
     coefficients : array_like
         Finite binary64 ascending coefficients.
     """
-    return _fraction_trim([_as_exact_fraction(value) for value in _trim_exact(coefficients)])
+    return _fraction_trim(
+        [_as_exact_fraction(value) for value in _trim_exact(coefficients)]
+    )
 
 
 def _curvature_polynomials(q_d2, support, boundary_amplitudes, /):
@@ -422,9 +423,7 @@ def _exact_curvature_polynomials(q_d2, support, boundary_amplitudes, /):
         sign = _fraction_polyadd(
             sign, [value * _as_exact_fraction(a_upper) for value in lower_sq]
         )
-        stationary = _fraction_polymul(
-            _fraction_polymul(lower_cube, upper_cube), p_d1
-        )
+        stationary = _fraction_polymul(_fraction_polymul(lower_cube, upper_cube), p_d1)
         stationary = _fraction_polyadd(
             stationary,
             [value * (-2 * _as_exact_fraction(a_lower)) for value in upper_cube],
@@ -573,7 +572,6 @@ def _curvature_boundary_values(q_d2, support, boundary_amplitudes, /):
     )
 
 
-
 def _fraction_bernstein_interval_bounds(
     coefficients,
     lower,
@@ -612,8 +610,12 @@ def _fraction_bernstein_interval_bounds(
             continue
         current_lower = min(current)
         current_upper = max(current)
-        lower_bound = current_lower if lower_bound is None else min(lower_bound, current_lower)
-        upper_bound = current_upper if upper_bound is None else max(upper_bound, current_upper)
+        lower_bound = (
+            current_lower if lower_bound is None else min(lower_bound, current_lower)
+        )
+        upper_bound = (
+            current_upper if upper_bound is None else max(upper_bound, current_upper)
+        )
     return lower_bound, upper_bound
 
 
@@ -675,7 +677,9 @@ def _fraction_polynomial_root_bound(coefficients, /):
     leading = abs(coeffs[-1])
     if leading == 0:
         raise ValueError("root-bound polynomial must have nonzero leading coefficient")
-    return Fraction(1) + max((abs(value) / leading for value in coeffs[:-1]), default=Fraction(0))
+    return Fraction(1) + max(
+        (abs(value) / leading for value in coeffs[:-1]), default=Fraction(0)
+    )
 
 
 def _stationary_root_brackets_exact(
@@ -746,7 +750,9 @@ def _stationary_root_brackets_exact(
         if variations == 1:
             exact_brackets.append((left_endpoint, right_endpoint, 1))
             continue
-        if (right_endpoint - left_endpoint <= exact_width_limit) or depth >= depth_limit:
+        if (
+            right_endpoint - left_endpoint <= exact_width_limit
+        ) or depth >= depth_limit:
             exact_brackets.append((left_endpoint, right_endpoint, int(variations)))
             continue
         left_coeffs, right_coeffs = _fraction_split_bernstein_half(current)
@@ -1032,9 +1038,7 @@ class _SeparationResult:
         return self.status == "feasible"
 
 
-def _exact_denominator_multiplier_polynomial(
-    support, lower_active, upper_active, /
-):
+def _exact_denominator_multiplier_polynomial(support, lower_active, upper_active, /):
     """Return the exact squared denominator multiplier for binary64 support.
 
     Parameters
@@ -1162,9 +1166,7 @@ def _float_near_fraction_point(point, lower, upper, /):
     return None
 
 
-def _certified_float_violation_point(
-    sign_polynomial, lower, upper, support, /
-):
+def _certified_float_violation_point(sign_polynomial, lower, upper, support, /):
     """Find a representable interior point where an exact sign polynomial is negative.
 
     Parameters
@@ -1179,9 +1181,7 @@ def _certified_float_violation_point(
     support_lower, support_upper = map(float, support)
     candidates = []
     for exact_point in (lower, (lower + upper) / 2, upper):
-        candidate = _float_near_fraction_point(
-            exact_point, lower, upper
-        )
+        candidate = _float_near_fraction_point(exact_point, lower, upper)
         if candidate is not None:
             candidates.append(candidate)
 
@@ -1289,8 +1289,19 @@ def _separate_full_curvature(
         upper_active,
     )
 
-    def result(status, kind=None, location=None, value=None, *, roots=0,
-               maxima=0, pruned=0, refined=0, ambiguous=0, subdivisions=0):
+    def result(
+        status,
+        kind=None,
+        location=None,
+        value=None,
+        *,
+        roots=0,
+        maxima=0,
+        pruned=0,
+        refined=0,
+        ambiguous=0,
+        subdivisions=0,
+    ):
         return _SeparationResult(
             status=status,
             violation_kind=kind,
@@ -1430,9 +1441,7 @@ def _separate_full_curvature(
                     tolerance_sign_exact, local_left, local_right, bounds
                 )
                 if location is not None:
-                    curvature = _full_curvature_value(
-                        p, bounds, amplitudes, location
-                    )
+                    curvature = _full_curvature_value(p, bounds, amplitudes, location)
                     return result(
                         "violated",
                         "stationary",
@@ -1466,7 +1475,10 @@ def _separate_full_curvature(
                     subdivisions=isolated.subdivisions,
                 )
 
-            if local_right - local_left <= exact_root_width or local_depth >= max_root_depth:
+            if (
+                local_right - local_left <= exact_root_width
+                or local_depth >= max_root_depth
+            ):
                 ambiguous_intervals += 1
                 break
 
@@ -1485,9 +1497,7 @@ def _separate_full_curvature(
                     tolerance_sign_exact, local_left, local_right, bounds
                 )
                 if location is not None:
-                    curvature = _full_curvature_value(
-                        p, bounds, amplitudes, location
-                    )
+                    curvature = _full_curvature_value(p, bounds, amplitudes, location)
                     return result(
                         "violated",
                         "stationary",

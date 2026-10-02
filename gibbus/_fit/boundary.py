@@ -63,8 +63,19 @@ def _boundary_p_value(nll_without, nll_with, effective_n, /):
     return 0.5 * float(chi2.sf(lr, 1))
 
 
-def _select_boundary_terms(fit, nll, amplitude, lower, upper, effective_n, /, *,
-                           fit_reduced=None, refit=None, alpha=BOUNDARY_ALPHA):
+def _select_boundary_terms(
+    fit,
+    nll,
+    amplitude,
+    lower,
+    upper,
+    effective_n,
+    /,
+    *,
+    fit_reduced=None,
+    refit=None,
+    alpha=BOUNDARY_ALPHA,
+):
     """Fit with automatic boundary terms decided by one-sided LR tests.
 
     Parameters
@@ -136,11 +147,16 @@ def _select_boundary_terms(fit, nll, amplitude, lower, upper, effective_n, /, *,
         dropped = True
     if dropped and refit is not None:
         current = refit(flags["lower"], flags["upper"])
-    return current, (flags["lower"], flags["upper"]), (p_values["lower"], p_values["upper"])
+    return (
+        current,
+        (flags["lower"], flags["upper"]),
+        (p_values["lower"], p_values["upper"]),
+    )
 
 
-def _amplitude_standard_errors(params, information, layout, spec, effective_curvature_degree,
-                               effective_n, /):
+def _amplitude_standard_errors(
+    params, information, layout, spec, effective_curvature_degree, effective_n, /
+):
     """Standard errors of the physical-side amplitudes on the final face.
 
     Parameters
@@ -214,6 +230,7 @@ def _weakly_identified_sides(amplitudes, standard_errors, /):
     a = np.nan_to_num(np.asarray(amplitudes, dtype=np.float64), nan=0.0)
     se = np.asarray(standard_errors, dtype=np.float64)
     return tuple(
-        side for side, value, error in zip(_SIDES, a, se, strict=True)
+        side
+        for side, value, error in zip(_SIDES, a, se, strict=True)
         if value > 0.0 and not np.isnan(error) and value < 2.0 * error
     )

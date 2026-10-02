@@ -30,8 +30,15 @@ def _vectorize_scalar(func, x, *args):
 
 
 def log_sf_hybrid(
-    potential, spectral_cdf, x, upper_endpoint, /, *, lower_endpoint=-np.inf,
-    log_tail_mass=None, log_tail_masses=None,
+    potential,
+    spectral_cdf,
+    x,
+    upper_endpoint,
+    /,
+    *,
+    lower_endpoint=-np.inf,
+    log_tail_mass=None,
+    log_tail_masses=None,
 ):
     """Evaluate log survival using spectral body values and exact tail quadrature.
 
@@ -82,10 +89,16 @@ def log_sf_hybrid(
     return float(out) if scalar else out
 
 
-
 def cdf_hybrid(
-    potential, spectral_cdf, x, lower_endpoint, /, *, upper_endpoint=np.inf,
-    log_tail_mass=None, log_tail_masses=None,
+    potential,
+    spectral_cdf,
+    x,
+    lower_endpoint,
+    /,
+    *,
+    upper_endpoint=np.inf,
+    log_tail_mass=None,
+    log_tail_masses=None,
 ):
     """Evaluate the CDF with exact lower-tail quadrature below the handover.
 
@@ -150,8 +163,15 @@ def cdf_hybrid(
 
 
 def log_cdf_hybrid(
-    potential, spectral_cdf, x, lower_endpoint, /, *, upper_endpoint=np.inf,
-    log_tail_mass=None, log_tail_masses=None,
+    potential,
+    spectral_cdf,
+    x,
+    lower_endpoint,
+    /,
+    *,
+    upper_endpoint=np.inf,
+    log_tail_mass=None,
+    log_tail_masses=None,
 ):
     """Evaluate log CDF using spectral body values and exact tail quadrature.
 
@@ -223,9 +243,7 @@ def _quad_with_ledger(func, a, b, /, *, epsabs, epsrel, limit, context):
     context : str
         Failure-ledger context for any reported integration problem.
     """
-    result = quad(
-        func, a, b, epsabs=epsabs, epsrel=epsrel, limit=limit, full_output=1
-    )
+    result = quad(func, a, b, epsabs=epsabs, epsrel=epsrel, limit=limit, full_output=1)
     if len(result) > 3:
         _reraise_if_debug(RuntimeError(str(result[3])), context)
     return float(result[0]), float(result[1])
@@ -260,7 +278,11 @@ def mean_residual_life(potential, logsf, support, mean, mode, x, /):
         """Retain the old survival integral only for pathological scaling."""
         value, err = _quad_with_ledger(
             lambda t: float(np.exp(float(logsf(t)) - ls_start)),
-            start, upper, epsabs=1e-11, epsrel=1e-10, limit=200,
+            start,
+            upper,
+            epsabs=1e-11,
+            epsrel=1e-10,
+            limit=200,
             context="mean residual life fallback quadrature",
         )
         if err > EXPECT_MAX_RELATIVE_ERROR * max(abs(value), 1.0):
@@ -371,13 +393,20 @@ def residual_entropy(potential, logsf, support, x, /):
         ls = float(logsf(start))
         if np.isneginf(ls):
             return -np.inf
+
         def integrand(t):
             q = float(potential(t, 0))
             if not np.isfinite(q):
                 return 0.0
             return q * float(np.exp(-q - ls))
+
         value, err = _quad_with_ledger(
-            integrand, start, upper, epsabs=1e-10, epsrel=1e-9, limit=200,
+            integrand,
+            start,
+            upper,
+            epsabs=1e-10,
+            epsrel=1e-9,
+            limit=200,
             context="residual entropy quadrature",
         )
         if err > EXPECT_MAX_RELATIVE_ERROR * max(abs(value), 1.0):
@@ -454,7 +483,11 @@ def isf(potential, ppf, support, p, /, *, log_tail_mass=None):
             if seed_hi is None:
                 seed_hi = float(np.asarray(ppf(1.0 - SF_HANDOVER_P)))
             out[i] = invert_tail(
-                potential, float(np.log(prob)), hi, seed_hi, upper=True,
+                potential,
+                float(np.log(prob)),
+                hi,
+                seed_hi,
+                upper=True,
                 log_tail_mass=log_tail_mass,
             )
         else:
@@ -501,12 +534,21 @@ def logppf(potential, ppf, support, log_p, /, *, log_tail_mass=None):
         elif lp < log_handover:
             if seed_lo is None:
                 seed_lo = float(np.asarray(ppf(SF_HANDOVER_P)))
-            out[i] = invert_tail(potential, float(lp), lo, seed_lo, upper=False, log_tail_mass=log_tail_mass)
+            out[i] = invert_tail(
+                potential,
+                float(lp),
+                lo,
+                seed_lo,
+                upper=False,
+                log_tail_mass=log_tail_mass,
+            )
         elif lp >= log_upper_body:
             if seed_hi is None:
                 seed_hi = float(np.asarray(ppf(1.0 - SF_HANDOVER_P)))
             lsf = float(log1mexp(lp))
-            out[i] = invert_tail(potential, lsf, hi, seed_hi, upper=True, log_tail_mass=log_tail_mass)
+            out[i] = invert_tail(
+                potential, lsf, hi, seed_hi, upper=True, log_tail_mass=log_tail_mass
+            )
         else:
             out[i] = float(ppf(np.exp(lp)))
     out = out.reshape(arr.shape)
@@ -551,12 +593,21 @@ def logisf(potential, ppf, support, log_p, /, *, log_tail_mass=None):
         elif lp < log_handover:
             if seed_hi is None:
                 seed_hi = float(np.asarray(ppf(1.0 - SF_HANDOVER_P)))
-            out[i] = invert_tail(potential, float(lp), hi, seed_hi, upper=True, log_tail_mass=log_tail_mass)
+            out[i] = invert_tail(
+                potential,
+                float(lp),
+                hi,
+                seed_hi,
+                upper=True,
+                log_tail_mass=log_tail_mass,
+            )
         elif lp >= log_upper_body:
             if seed_lo is None:
                 seed_lo = float(np.asarray(ppf(SF_HANDOVER_P)))
             lcdf = float(log1mexp(lp))
-            out[i] = invert_tail(potential, lcdf, lo, seed_lo, upper=False, log_tail_mass=log_tail_mass)
+            out[i] = invert_tail(
+                potential, lcdf, lo, seed_lo, upper=False, log_tail_mass=log_tail_mass
+            )
         else:
             out[i] = float(ppf(1.0 - np.exp(lp)))
     out = out.reshape(arr.shape)

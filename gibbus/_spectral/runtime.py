@@ -14,7 +14,14 @@ from numpy.polynomial import chebyshev as C
 from ._cdf_eval import SpectralEvaluator
 from ._ppf_eval import SpectralPPFEvaluator
 
-_KIND_TO_CODE = {"finite": 0, "lower": 1, "upper": 2, "real": 3, "lower_centered": 4, "upper_centered": 5}
+_KIND_TO_CODE = {
+    "finite": 0,
+    "lower": 1,
+    "upper": 2,
+    "real": 3,
+    "lower_centered": 4,
+    "upper_centered": 5,
+}
 
 
 def pack_cdf_state(rep):
@@ -46,7 +53,7 @@ def pack_cdf_state(rep):
         ic = np.asarray(panel.icoeff, dtype=np.float64).copy()
         ic[0] -= C.chebval(-1.0, ic)
         ic /= rep.total_mass
-        coeffs[j, :ic.size] = ic
+        coeffs[j, : ic.size] = ic
         ncoeff[j] = ic.size
 
     # Convergence diagnostics. Construction degrades rather than raises
@@ -56,8 +63,9 @@ def pack_cdf_state(rep):
     # expressed on the probability scale: uncertified mass, normalization
     # defect, certified local error, and their combined CDF-health estimate.
     worst_error = float(rep.worst_panel_error)
-    hit_cap = bool(rep.max_depth_used >= int(rep.max_depth)
-                   or rep.panel_budget_exhausted)
+    hit_cap = bool(
+        rep.max_depth_used >= int(rep.max_depth) or rep.panel_budget_exhausted
+    )
 
     mp = rep.map
     return {
@@ -98,7 +106,7 @@ def pack_ppf_state(rep):
     ncoeff = np.empty(m, dtype=np.int32)
     for j, panel in enumerate(rep.panels):
         c = np.asarray(panel.coeff, dtype=np.float64)
-        coeffs[j, :c.size] = c
+        coeffs[j, : c.size] = c
         ncoeff[j] = c.size
     breaks_z = np.array(
         [rep.panels[0].za] + [panel.zb for panel in rep.panels],
@@ -177,7 +185,10 @@ def build_cdf_evaluator(data):
     params = np.asarray(data["cdf_map_params"], dtype=np.float64)
     return SpectralEvaluator(
         kind,
-        float(params[0]), float(params[1]), float(params[2]), float(params[3]),
+        float(params[0]),
+        float(params[1]),
+        float(params[2]),
+        float(params[3]),
         np.asarray(data["cdf_breaks"], dtype=np.float64),
         np.asarray(data["cdf_offsets"], dtype=np.float64),
         coeffs,
@@ -224,9 +235,13 @@ def build_ppf_evaluator(data):
     )
     params = np.asarray(data["cdf_map_params"], dtype=np.float64)
     return SpectralPPFEvaluator(
-        float(data["ppf_pmin"]), float(data["ppf_pmax"]),
+        float(data["ppf_pmin"]),
+        float(data["ppf_pmax"]),
         kind,
-        float(params[0]), float(params[1]), float(params[2]), float(params[3]),
+        float(params[0]),
+        float(params[1]),
+        float(params[2]),
+        float(params[3]),
         np.asarray(data["ppf_breaks_r"], dtype=np.float64),
         np.asarray(data["ppf_breaks_z"], dtype=np.float64),
         coeffs,

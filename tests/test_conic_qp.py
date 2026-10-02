@@ -130,8 +130,10 @@ def test_random_models_are_solved_to_a_certified_duality_gap(degree):
         # Returned endpoints are reconstructed from their Gram certificate.
         curvature = representation.gram_map(result.blocks)
         np.testing.assert_allclose(
-            result.params[layout.curvature_slice], curvature,
-            rtol=0.0, atol=1e-13 * max(1.0, np.abs(curvature).max()),
+            result.params[layout.curvature_slice],
+            curvature,
+            rtol=0.0,
+            atol=1e-13 * max(1.0, np.abs(curvature).max()),
         )
         block = result.blocks[0]  # PSD Gram certificate (to roundoff)
         assert np.linalg.eigvalsh(block).min() >= -1e-12 * max(1.0, np.abs(block).max())
@@ -220,7 +222,9 @@ def test_gram_redundancy_matches_the_real_line_count():
         gram = matrices[:, upper_a, upper_b]
         kernel = gram.shape[1] - np.linalg.matrix_rank(gram)
         assert kernel == (size - 1) * (size - 2) // 2
-        row_rank, cone_rank, cone_columns = _representation_ranks(layout, representation)
+        row_rank, cone_rank, cone_columns = _representation_ranks(
+            layout, representation
+        )
         assert row_rank == representation.n_rows
         assert cone_rank == cone_columns == layout.curvature_degree + 1
 
@@ -239,7 +243,9 @@ def test_every_description_passes_its_rank_checks():
             amplitude_choices.append((None, False))
         for effective in faces:
             for lower, upper in amplitude_choices:
-                representation = _support_representation(layout, effective, lower, upper)
+                representation = _support_representation(
+                    layout, effective, lower, upper
+                )
                 row_rank, cone_rank, cone_columns = _representation_ranks(
                     layout, representation
                 )
@@ -338,8 +344,13 @@ def test_negative_polynomial_part_compensated_by_amplitude_is_representable():
     params = layout.pack(0.2, curvature, [0.5, np.nan])
     candidate = layout.build_candidate(params)
     assert _separate_full_curvature(
-        candidate.q_d2, np.asarray(layout.support), candidate.boundary_amplitudes,
-        1e-12, 1e-10, 80, 2,
+        candidate.q_d2,
+        np.asarray(layout.support),
+        candidate.boundary_amplitudes,
+        1e-12,
+        1e-10,
+        80,
+        2,
     ).feasible
     n = layout.n_params
     representation = _support_representation(layout)

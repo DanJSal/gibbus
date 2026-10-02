@@ -88,7 +88,9 @@ class _PreparedAdaptiveIntervalReducer:
         interval : array_like, shape (2,)
             Ordered canonical interval endpoints.
         """
-        log_probability, mean, covariance, extra_mean = self._integrator.reduce(interval)
+        log_probability, mean, covariance, extra_mean = self._integrator.reduce(
+            interval
+        )
         return _AdaptiveIntervalReduction(
             log_probability=float(log_probability),
             mean=np.asarray(mean, dtype=np.float64),
@@ -173,13 +175,17 @@ def _prepare_adaptive_interval_reducer(
         try:
             kinds[i] = int(_STATISTIC_KIND[kind])
         except KeyError as exc:
-            raise ValueError(f"unknown adaptive interval statistic kind {kind!r}") from exc
+            raise ValueError(
+                f"unknown adaptive interval statistic kind {kind!r}"
+            ) from exc
         if kind == "poly":
             coeff = np.asarray(payload, dtype=np.float64).reshape(-1)
             if coeff.size < 1 or not np.all(np.isfinite(coeff)):
-                raise ValueError("interval polynomial statistic must be finite and non-empty")
+                raise ValueError(
+                    "interval polynomial statistic must be finite and non-empty"
+                )
             lengths[i] = int(coeff.size)
-            coefficients[i, :coeff.size] = coeff
+            coefficients[i, : coeff.size] = coeff
         elif kind == "power":
             order = int(payload)
             if order < 0:
@@ -487,7 +493,10 @@ class _FiniteIntervalQuadrature:
         out = logsumexp(lk + self.log_weights, axis=1)
         if np.any(self.point_limit):
             pm = _point_limit_values(
-                point_log_kernel, self.point_limit, self.intervals.shape[0], "point_log_kernel"
+                point_log_kernel,
+                self.point_limit,
+                self.intervals.shape[0],
+                "point_log_kernel",
             )
             widths = self.widths[self.point_limit]
             log_width = np.zeros_like(widths)
@@ -708,8 +717,15 @@ def _row_grouping(rows, /):
     return grouping
 
 
-def _merge_duplicate_intervals(intervals, weights, lower_distance=None,
-                               upper_distance=None, /, *, grouping_cache=None):
+def _merge_duplicate_intervals(
+    intervals,
+    weights,
+    lower_distance=None,
+    upper_distance=None,
+    /,
+    *,
+    grouping_cache=None,
+):
     """Merge identical canonical rows while preserving exact-point geometry.
 
     Exact physical points can map to the same canonical float even though
@@ -735,10 +751,16 @@ def _merge_duplicate_intervals(intervals, weights, lower_distance=None,
     x = np.asarray(intervals, dtype=np.float64)
     w = np.asarray(weights, dtype=np.float64).reshape(-1)
     n = x.shape[0]
-    ld = (np.full(n, np.nan, dtype=np.float64) if lower_distance is None
-          else np.asarray(lower_distance, dtype=np.float64).reshape(-1))
-    ud = (np.full(n, np.nan, dtype=np.float64) if upper_distance is None
-          else np.asarray(upper_distance, dtype=np.float64).reshape(-1))
+    ld = (
+        np.full(n, np.nan, dtype=np.float64)
+        if lower_distance is None
+        else np.asarray(lower_distance, dtype=np.float64).reshape(-1)
+    )
+    ud = (
+        np.full(n, np.nan, dtype=np.float64)
+        if upper_distance is None
+        else np.asarray(upper_distance, dtype=np.float64).reshape(-1)
+    )
     if ld.size != n or ud.size != n:
         raise ValueError("boundary-distance metadata must match interval rows")
 
@@ -747,11 +769,13 @@ def _merge_duplicate_intervals(intervals, weights, lower_distance=None,
     # non-point rows from comparing equal.
     grouping = None if grouping_cache is None else grouping_cache.get("grouping")
     if grouping is None or grouping[1].shape[0] != n:
-        key = np.column_stack((
-            x,
-            np.where(np.isfinite(ld), ld, -1.0),
-            np.where(np.isfinite(ud), ud, -1.0),
-        ))
+        key = np.column_stack(
+            (
+                x,
+                np.where(np.isfinite(ld), ld, -1.0),
+                np.where(np.isfinite(ud), ud, -1.0),
+            )
+        )
         first, inverse, n_unique = _lexicographic_grouping(key)
         grouping = (first, inverse.reshape(-1), int(n_unique))
         if grouping_cache is not None:
@@ -775,7 +799,13 @@ def _merge_duplicate_intervals(intervals, weights, lower_distance=None,
 
 
 def _build_interval_observations(
-    intervals, weights=None, /, *, coordinate=None, support=None, deduplicate=True,
+    intervals,
+    weights=None,
+    /,
+    *,
+    coordinate=None,
+    support=None,
+    deduplicate=True,
     grouping_cache=None,
 ):
     """Build the canonical interval-observation representation.
@@ -866,7 +896,10 @@ def _build_interval_observations(
 
     if deduplicate:
         x, w, point_lower_distance, point_upper_distance = _merge_duplicate_intervals(
-            x, w, point_lower_distance, point_upper_distance,
+            x,
+            w,
+            point_lower_distance,
+            point_upper_distance,
             grouping_cache=grouping_cache,
         )
 
@@ -878,8 +911,12 @@ def _build_interval_observations(
         total_weight=float(total),
         effective_n=float(effective_n),
         n_observations=n,
-        point_lower_distance=np.ascontiguousarray(point_lower_distance, dtype=np.float64),
-        point_upper_distance=np.ascontiguousarray(point_upper_distance, dtype=np.float64),
+        point_lower_distance=np.ascontiguousarray(
+            point_lower_distance, dtype=np.float64
+        ),
+        point_upper_distance=np.ascontiguousarray(
+            point_upper_distance, dtype=np.float64
+        ),
     )
 
 
@@ -1014,6 +1051,4 @@ def _point_limit_values(values, mask, n_rows, name, /):
         return arr[mask]
     if arr.shape[0] == n_point:
         return arr
-    raise ValueError(
-        f"{name} must have leading dimension n_rows or n_point_limit"
-    )
+    raise ValueError(f"{name} must have leading dimension n_rows or n_point_limit")

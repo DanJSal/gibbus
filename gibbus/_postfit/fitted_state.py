@@ -28,20 +28,59 @@ from .analytics import _powaff_moment_from_z_moments, _stats_from_raw_moments
 # Fields every fitted state must carry; the spectral CDF/PPF evaluators check
 # their own array geometry when they are rebuilt.
 _STATE_FIELDS = (
-    "q_poly", "boundary_amplitudes", "boundary_allowed", "support",
-    "canonical_support", "window", "canonical_mode", "mode", "median", "mean",
-    "var", "std", "skew", "kurt", "raw_moments", "canonical_raw_moments",
-    "fit_center", "fit_scale", "fit_direction", "mu", "sigma", "pullback",
-    "default_space", "optimizer_params", "requested_poly_degree",
-    "effective_poly_degree", "nll", "cdf_map_params", "cdf_npanels",
-    "cdf_coeff_stride", "cdf_breaks", "cdf_offsets", "cdf_coeffs", "ppf_pmin",
-    "ppf_pmax", "ppf_npanels", "ppf_coeff_stride", "ppf_breaks_r",
-    "ppf_breaks_z", "ppf_coeffs", "boundary_standard_errors",
-    "boundary_p_values", "optimizer_success", "optimizer_status",
-    "optimizer_message", "optimizer_n_iterations", "optimizer_n_evaluations",
-    "optimizer_subproblem_iterations", "optimizer_decrease_bound",
-    "effective_curvature_degree", "lower_amplitude_active",
-    "upper_amplitude_active", "separator_certified",
+    "q_poly",
+    "boundary_amplitudes",
+    "boundary_allowed",
+    "support",
+    "canonical_support",
+    "window",
+    "canonical_mode",
+    "mode",
+    "median",
+    "mean",
+    "var",
+    "std",
+    "skew",
+    "kurt",
+    "raw_moments",
+    "canonical_raw_moments",
+    "fit_center",
+    "fit_scale",
+    "fit_direction",
+    "mu",
+    "sigma",
+    "pullback",
+    "default_space",
+    "optimizer_params",
+    "requested_poly_degree",
+    "effective_poly_degree",
+    "nll",
+    "cdf_map_params",
+    "cdf_npanels",
+    "cdf_coeff_stride",
+    "cdf_breaks",
+    "cdf_offsets",
+    "cdf_coeffs",
+    "ppf_pmin",
+    "ppf_pmax",
+    "ppf_npanels",
+    "ppf_coeff_stride",
+    "ppf_breaks_r",
+    "ppf_breaks_z",
+    "ppf_coeffs",
+    "boundary_standard_errors",
+    "boundary_p_values",
+    "optimizer_success",
+    "optimizer_status",
+    "optimizer_message",
+    "optimizer_n_iterations",
+    "optimizer_n_evaluations",
+    "optimizer_subproblem_iterations",
+    "optimizer_decrease_bound",
+    "effective_curvature_degree",
+    "lower_amplitude_active",
+    "upper_amplitude_active",
+    "separator_certified",
 )
 
 
@@ -140,8 +179,16 @@ def _structured_scalar(data, /):
     return out
 
 
-def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
-                        boundary_p_values=(np.nan, np.nan)):
+def _pack_natural_state(
+    state,
+    spec,
+    coord,
+    result,
+    /,
+    *,
+    effective_n=np.nan,
+    boundary_p_values=(np.nan, np.nan),
+):
     """Pack a normalized natural state plus its conic-solver record.
 
     Parameters
@@ -176,10 +223,13 @@ def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
         np.asarray(state.boundary_amplitudes, dtype=np.float64), nan=0.0
     )
     amps = _canonical_boundary_amplitudes(canonical_amps, coord.direction)
-    allowed = np.array([
-        spec.physical_lower_a_index is not None,
-        spec.physical_upper_a_index is not None,
-    ], dtype=bool)
+    allowed = np.array(
+        [
+            spec.physical_lower_a_index is not None,
+            spec.physical_upper_a_index is not None,
+        ],
+        dtype=bool,
+    )
 
     z_mom = np.asarray(state.moments.power(4), dtype=np.float64)
     alpha = float(coord.direction * coord.scale)
@@ -207,14 +257,25 @@ def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
 
     z_std_sq = max(0.0, float(z_mom[2] - z_mom[1] * z_mom[1]))
     z_std = float(np.sqrt(z_std_sq))
-    initial_breaks = boundary_aware_breaks_from_amplitudes(
-        spec.support, canonical_amps
-    )
+    initial_breaks = boundary_aware_breaks_from_amplitudes(spec.support, canonical_amps)
     support_z = np.asarray(spec.support, dtype=np.float64)
     density = density_spec(
-        [(state.q_poly, support_z[0], support_z[1], canonical_amps[0],
-          canonical_amps[1], float(state.log_Z), 0.0, 1.0, 1.0, 1.0,
-          -np.inf, np.inf)],
+        [
+            (
+                state.q_poly,
+                support_z[0],
+                support_z[1],
+                canonical_amps[0],
+                canonical_amps[1],
+                float(state.log_Z),
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                -np.inf,
+                np.inf,
+            )
+        ],
         view=False,
     )
     cdf_rep = SpectralCDF(
@@ -237,7 +298,8 @@ def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
         spectral_state["ppf_fallback"] = np.int32(0)
 
     z_median = (
-        float(ppf_rep.ppf(0.5)) if ppf_rep is not None
+        float(ppf_rep.ppf(0.5))
+        if ppf_rep is not None
         else float(_median_z_from_cdf(cdf_rep))
     )
     support = _user_support(coord)
@@ -245,9 +307,7 @@ def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
     median = float(coord.from_canonical(z_median))
     raw_moments = np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64)
     raw_moments[:5] = x_mom
-    canonical_raw_moments = np.full(
-        int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64
-    )
+    canonical_raw_moments = np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64)
     canonical_raw_moments[:5] = z_mom
 
     converged = str(result.status) in {"converged", "converged_approximately"}
@@ -301,18 +361,25 @@ def _pack_natural_state(state, spec, coord, result, /, *, effective_n=np.nan,
         np.full(2, np.nan, dtype=np.float64)
         if information is None or not np.isfinite(effective_n)
         else _amplitude_standard_errors(
-            result.params, information, spec.layout, spec,
-            int(result.effective_curvature_degree), float(effective_n),
+            result.params,
+            information,
+            spec.layout,
+            spec,
+            int(result.effective_curvature_degree),
+            float(effective_n),
         )
     )
     data["boundary_standard_errors"] = standard_errors
-    data["boundary_p_values"] = np.asarray(boundary_p_values, dtype=np.float64).reshape(2)
+    data["boundary_p_values"] = np.asarray(boundary_p_values, dtype=np.float64).reshape(
+        2
+    )
     data.update(spectral_state)
     return _structured_scalar(data)
 
 
-def _pack_natural_fit(objective, result, /, *, effective_n=np.nan,
-                      boundary_p_values=(np.nan, np.nan)):
+def _pack_natural_fit(
+    objective, result, /, *, effective_n=np.nan, boundary_p_values=(np.nan, np.nan)
+):
     """Pack one completed natural-coordinate fit for public evaluation.
 
     Parameters
@@ -341,8 +408,9 @@ def _pack_natural_fit(objective, result, /, *, effective_n=np.nan,
     )
 
 
-def _pack_natural_component(component, /, *, effective_n=np.nan,
-                            boundary_p_values=(np.nan, np.nan)):
+def _pack_natural_component(
+    component, /, *, effective_n=np.nan, boundary_p_values=(np.nan, np.nan)
+):
     """Pack one finalized component of a natural mixture fit.
 
     Parameters
@@ -362,8 +430,12 @@ def _pack_natural_component(component, /, *, effective_n=np.nan,
     """
     result = component.solver_result
     return _pack_natural_state(
-        component.state(), component.spec, component.coordinate, result,
-        effective_n=effective_n, boundary_p_values=boundary_p_values,
+        component.state(),
+        component.spec,
+        component.coordinate,
+        result,
+        effective_n=effective_n,
+        boundary_p_values=boundary_p_values,
     )
 
 
@@ -431,7 +503,9 @@ def _check_state_invariants(struct, /):
     scale = float(struct["fit_scale"])
     if not np.isfinite(scale) or scale <= 0.0:
         raise ValueError(f"state fit_scale must be finite and positive, got {scale}")
-    if not np.isfinite(float(struct["mu"])) or not np.isfinite(float(struct["fit_center"])):
+    if not np.isfinite(float(struct["mu"])) or not np.isfinite(
+        float(struct["fit_center"])
+    ):
         raise ValueError("state mu and fit_center must be finite")
     if float(struct["fit_direction"]) not in (-1.0, 1.0):
         raise ValueError("state fit_direction must be -1 or +1")
@@ -461,7 +535,9 @@ def _check_state_invariants(struct, /):
             raise ValueError("cdf_coeffs must be finite")
         params = field("cdf_map_params")
         if np.any(np.isnan(params)) or not np.all(np.isfinite(params[2:])):
-            raise ValueError("cdf_map_params must be finite apart from support endpoints")
+            raise ValueError(
+                "cdf_map_params must be finite apart from support endpoints"
+            )
 
     pmin = float(struct["ppf_pmin"])
     pmax = float(struct["ppf_pmax"])
@@ -472,7 +548,11 @@ def _check_state_invariants(struct, /):
         # query through CDF inversion, and carries no usable panel geometry.
         if not (0.0 <= pmin < pmax <= 1.0):
             raise ValueError("ppf_pmin and ppf_pmax must satisfy 0 <= pmin < pmax <= 1")
-        _check_finite_increasing(field("ppf_breaks_r")[: ppf_panels + 1], "ppf_breaks_r")
-        _check_finite_increasing(field("ppf_breaks_z")[: ppf_panels + 1], "ppf_breaks_z")
+        _check_finite_increasing(
+            field("ppf_breaks_r")[: ppf_panels + 1], "ppf_breaks_r"
+        )
+        _check_finite_increasing(
+            field("ppf_breaks_z")[: ppf_panels + 1], "ppf_breaks_z"
+        )
         if not np.all(np.isfinite(field("ppf_coeffs")[: ppf_panels * ppf_stride])):
             raise ValueError("ppf_coeffs must be finite")

@@ -113,8 +113,12 @@ def test_candidate_polynomial_derivatives_recover_natural_curvature(
     raw = layout.pack(0.37, curvature, np.array([0.2, 0.4]))
     candidate = layout.build_candidate(raw)
     np.testing.assert_allclose(candidate.q_d2, curvature, rtol=0.0, atol=5e-16)
-    np.testing.assert_allclose(polyder(candidate.q_poly), candidate.q_d1, rtol=0.0, atol=0.0)
-    np.testing.assert_allclose(polyder(candidate.q_d1), candidate.q_d2, rtol=0.0, atol=5e-16)
+    np.testing.assert_allclose(
+        polyder(candidate.q_poly), candidate.q_d1, rtol=0.0, atol=0.0
+    )
+    np.testing.assert_allclose(
+        polyder(candidate.q_d1), candidate.q_d2, rtol=0.0, atol=5e-16
+    )
     assert candidate.q_poly[0] == 0.0
     assert candidate.q_poly[1] == 0.37
 
@@ -191,6 +195,7 @@ def test_tiny_positive_boundary_amplitude_remains_singular_at_endpoint():
     assert candidate.q_d1_full(layout.support_lower) == -np.inf
     assert candidate.q_d2_full(layout.support_lower) == np.inf
 
+
 @pytest.mark.parametrize(
     "support,lower_enabled,upper_enabled,points",
     [
@@ -218,8 +223,7 @@ def test_full_potential_is_affine_in_natural_coordinates(
     candidate_mix = layout.build_candidate(theta_mix)
     for evaluator in ("q", "q_d1_full", "q_d2_full"):
         lhs = getattr(candidate_mix, evaluator)(points)
-        rhs = (
-            weight * getattr(candidate_a, evaluator)(points)
-            + (1.0 - weight) * getattr(candidate_b, evaluator)(points)
-        )
+        rhs = weight * getattr(candidate_a, evaluator)(points) + (
+            1.0 - weight
+        ) * getattr(candidate_b, evaluator)(points)
         np.testing.assert_allclose(lhs, rhs, rtol=2e-14, atol=2e-14)

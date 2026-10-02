@@ -38,11 +38,16 @@ def _terms_for_quad(support, boundary_amplitudes, /):
         terms.append((L, -1.0, aL))
     if np.isfinite(U) and np.isfinite(aU) and aU > 0.0:
         terms.append((U, +1.0, aU))
-    return np.asarray(terms, dtype=np.float64) if terms else np.empty((0, 3), dtype=np.float64)
+    return (
+        np.asarray(terms, dtype=np.float64)
+        if terms
+        else np.empty((0, 3), dtype=np.float64)
+    )
 
 
-
-def _complete_boundary_terms(support, boundary_amplitudes, lower_enabled, upper_enabled, /):
+def _complete_boundary_terms(
+    support, boundary_amplitudes, lower_enabled, upper_enabled, /
+):
     """Build boundary descriptors for every enabled canonical endpoint basis.
 
     Unlike :func:`_terms_for_quad`, this retains enabled terms whose current
@@ -80,9 +85,11 @@ def _complete_boundary_terms(support, boundary_amplitudes, lower_enabled, upper_
         rows.append((U, 1.0, float(amps[1])))
     terms = (
         np.asarray(rows, dtype=np.float64)
-        if rows else np.empty((0, 3), dtype=np.float64)
+        if rows
+        else np.empty((0, 3), dtype=np.float64)
     )
     return terms, mapping
+
 
 def _build_quad_kernel(q_poly, support, boundary_amplitudes, /):
     """Prepare the shifted polynomial and active boundary quadrature terms.
@@ -107,6 +114,7 @@ def _build_quad_kernel(q_poly, support, boundary_amplitudes, /):
 
 _MODE_QUAD_SPAN_TRIGGER = 128.0
 _MODE_QUAD_RADIUS = 8.0
+
 
 def _mode_quad_points(window, mode, local_scale, support=None, core_window=None, /):
     """Return interior quadrature breakpoints around a narrow density mode.
@@ -146,11 +154,9 @@ def _mode_quad_points(window, mode, local_scale, support=None, core_window=None,
     s = float(local_scale)
     vals = [m]
     span = hi - lo
-    wide = (np.isfinite(s) and s > 0.0
-            and span / s > _MODE_QUAD_SPAN_TRIGGER)
+    wide = np.isfinite(s) and s > 0.0 and span / s > _MODE_QUAD_SPAN_TRIGGER
     if wide:
-        vals = [m - _MODE_QUAD_RADIUS * s, m,
-                m + _MODE_QUAD_RADIUS * s]
+        vals = [m - _MODE_QUAD_RADIUS * s, m, m + _MODE_QUAD_RADIUS * s]
         if core_window is not None:
             core = np.asarray(core_window, dtype=np.float64).reshape(2)
             vals.extend(float(v) for v in core if np.isfinite(v))
@@ -167,8 +173,5 @@ def _mode_quad_points(window, mode, local_scale, support=None, core_window=None,
         if np.isfinite(U) and hi == U:
             vals.extend(hi - span * f for f in fractions)
 
-    clean = sorted({
-        float(v) for v in vals
-        if np.isfinite(v) and lo < float(v) < hi
-    })
+    clean = sorted({float(v) for v in vals if np.isfinite(v) and lo < float(v) < hi})
     return clean

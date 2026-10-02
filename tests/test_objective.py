@@ -1,4 +1,5 @@
 """Definition-level tests for point and interval likelihood geometry."""
+
 import numpy as np
 import pytest
 from scipy.integrate import quad
@@ -25,8 +26,9 @@ from gibbus._observations.intervals import (
 from gibbus._observations.points import _PointObservations
 
 
-def _build_empirical_stats(z, weights, max_order, support, /, *,
-                           has_lower_log=False, has_upper_log=False):
+def _build_empirical_stats(
+    z, weights, max_order, support, /, *, has_lower_log=False, has_upper_log=False
+):
     return _natural_point_stats(
         z, weights, max_order, support, has_lower_log, has_upper_log
     )
@@ -89,14 +91,14 @@ def test_point_nll_and_gradient_match_direct_raw_evaluation_without_raw_hot_path
 
     q_values = _q_eval(z, spec.support, state.q_poly, state.boundary_amplitudes, 0)
     expected_nll = (
-        float(np.dot(weights, q_values))
-        + state.log_Z
-        + np.log(spec.coordinate.scale)
+        float(np.dot(weights, q_values)) + state.log_Z + np.log(spec.coordinate.scale)
     )
-    expected_empirical_h = np.array([
-        np.dot(weights, partial.evaluate(z, spec.support))
-        for partial in state.partials
-    ])
+    expected_empirical_h = np.array(
+        [
+            np.dot(weights, partial.evaluate(z, spec.support))
+            for partial in state.partials
+        ]
+    )
     expected_gradient = expected_empirical_h - got.model_partial_means
 
     assert got.nll == pytest.approx(expected_nll, rel=2e-14, abs=2e-14)
@@ -176,18 +178,39 @@ def test_point_objective_rejects_mismatched_support_summary():
 @pytest.mark.parametrize(
     "support,x,degree,boundaries,params",
     [
-        ((-np.inf, np.inf), [-2.5, -0.7, 0.1, 1.4, 3.2], 4,
-         (False, False), [-0.08, 0.85, 0.22, 0.15]),
-        ((0.0, np.inf), [0.25, 0.7, 1.3, 2.4, 4.8], 3,
-         (True, False), [0.3, 0.9, 0.25, 0.35]),
-        ((-np.inf, 5.0), [-3.0, -0.4, 1.2, 3.3, 4.6], 3,
-         (False, True), [0.28, 0.8, 0.2, 0.5]),
-        ((-2.0, 4.0), [-1.6, -0.4, 0.8, 2.1, 3.5], 4,
-         (True, True), [0.11, 0.7, 0.2, -0.12, 0.3, 0.55]),
+        (
+            (-np.inf, np.inf),
+            [-2.5, -0.7, 0.1, 1.4, 3.2],
+            4,
+            (False, False),
+            [-0.08, 0.85, 0.22, 0.15],
+        ),
+        (
+            (0.0, np.inf),
+            [0.25, 0.7, 1.3, 2.4, 4.8],
+            3,
+            (True, False),
+            [0.3, 0.9, 0.25, 0.35],
+        ),
+        (
+            (-np.inf, 5.0),
+            [-3.0, -0.4, 1.2, 3.3, 4.6],
+            3,
+            (False, True),
+            [0.28, 0.8, 0.2, 0.5],
+        ),
+        (
+            (-2.0, 4.0),
+            [-1.6, -0.4, 0.8, 2.1, 3.5],
+            4,
+            (True, True),
+            [0.11, 0.7, 0.2, -0.12, 0.3, 0.55],
+        ),
     ],
 )
 def test_raw_vs_statistics_equivalence_across_support_geometries(
-        support, x, degree, boundaries, params):
+    support, x, degree, boundaries, params
+):
     x = np.asarray(x, dtype=float)
     weights = np.arange(1.0, x.size + 1.0)
     weights /= weights.sum()
@@ -209,10 +232,12 @@ def test_raw_vs_statistics_equivalence_across_support_geometries(
 
     q = _q_eval(z, spec.support, state.q_poly, state.boundary_amplitudes, 0)
     raw_nll = float(np.dot(weights, q) + state.log_Z + np.log(coord.scale))
-    raw_empirical_h = np.array([
-        np.dot(weights, partial.evaluate(z, spec.support))
-        for partial in state.partials
-    ])
+    raw_empirical_h = np.array(
+        [
+            np.dot(weights, partial.evaluate(z, spec.support))
+            for partial in state.partials
+        ]
+    )
     assert got.nll == pytest.approx(raw_nll, rel=3e-13, abs=3e-13)
     assert np.allclose(
         got.gradient,
@@ -235,7 +260,6 @@ def test_interval_objective_matches_direct_probability_integrals():
     bounds = (float(obs.intervals[:, 0].min()), float(obs.intervals[:, 1].max()))
     fun = _interval_objective(spec, obs, bounds)
     ev = fun(params)
-
 
     state = _state(spec, params, bounds)
     direct = []
@@ -263,16 +287,20 @@ def test_interval_objective_gradient_and_hessian_match_finite_differences():
     fd_grad = np.empty_like(params)
     for j in range(params.size):
         step = eps * max(1.0, abs(params[j]))
-        p1 = params.copy(); p1[j] += step
-        p0 = params.copy(); p0[j] -= step
+        p1 = params.copy()
+        p1[j] += step
+        p0 = params.copy()
+        p0[j] -= step
         fd_grad[j] = (fun(p1).nll - fun(p0).nll) / (2.0 * step)
     assert np.allclose(ev.gradient, fd_grad, rtol=3e-5, atol=3e-6)
 
     fd_h = np.empty_like(ev.hessian)
     for j in range(params.size):
         step = eps * max(1.0, abs(params[j]))
-        p1 = params.copy(); p1[j] += step
-        p0 = params.copy(); p0[j] -= step
+        p1 = params.copy()
+        p1[j] += step
+        p0 = params.copy()
+        p0[j] -= step
         fd_h[:, j] = (fun(p1).gradient - fun(p0).gradient) / (2.0 * step)
     assert np.allclose(ev.hessian, fd_h, rtol=2e-4, atol=2e-5)
     assert np.allclose(ev.hessian, ev.hessian.T, atol=2e-10)
@@ -305,10 +333,12 @@ def test_near_exponential_right_tail_reducer_preserves_high_order_moments():
     compare the entire partial-mean vector with independent quadrature.
     """
     edges = np.arange(0.0, 2.0001, 0.25)
-    intervals = np.vstack([
-        np.column_stack([edges[:-1], edges[1:]]),
-        [2.0, np.inf],
-    ])
+    intervals = np.vstack(
+        [
+            np.column_stack([edges[:-1], edges[1:]]),
+            [2.0, np.inf],
+        ]
+    )
     weights = np.r_[
         np.exp(-edges[:-1]) - np.exp(-edges[1:]),
         np.exp(-2.0),
@@ -332,19 +362,22 @@ def test_near_exponential_right_tail_reducer_preserves_high_order_moments():
     reduced = _prepare_partial_interval_reducer(state).reduce(interval)
     lo = float(interval[0])
     mass = quad(state.pdf, lo, np.inf, epsabs=1e-12, epsrel=1e-12, limit=300)[0]
-    expected = np.array([
-        quad(
-            lambda z, partial=partial: (
-                partial.evaluate(np.array([z]), spec.support)[0] * state.pdf(z)
-            ),
-            lo,
-            np.inf,
-            epsabs=1e-12,
-            epsrel=1e-11,
-            limit=300,
-        )[0] / mass
-        for partial in state.partials
-    ])
+    expected = np.array(
+        [
+            quad(
+                lambda z, partial=partial: (
+                    partial.evaluate(np.array([z]), spec.support)[0] * state.pdf(z)
+                ),
+                lo,
+                np.inf,
+                epsabs=1e-12,
+                epsrel=1e-11,
+                limit=300,
+            )[0]
+            / mass
+            for partial in state.partials
+        ]
+    )
 
     assert reduced.log_probability == pytest.approx(np.log(mass), abs=2e-12)
     np.testing.assert_allclose(reduced.mean, expected, rtol=2e-10, atol=2e-11)
@@ -352,12 +385,14 @@ def test_near_exponential_right_tail_reducer_preserves_high_order_moments():
 
 def test_infinite_interval_objective_matches_direct_tail_probabilities_and_derivatives():
     support = (-np.inf, np.inf)
-    intervals = np.array([
-        [-np.inf, -0.8],
-        [-0.25, 0.35],
-        [0.9, np.inf],
-        [-np.inf, np.inf],
-    ])
+    intervals = np.array(
+        [
+            [-np.inf, -0.8],
+            [-0.25, 0.35],
+            [0.9, np.inf],
+            [-np.inf, np.inf],
+        ]
+    )
     weights = np.array([0.2, 0.35, 0.3, 0.15])
     coord = _build_interval_fit_coordinate(support, intervals, weights)
     obs = _build_interval_observations(intervals, weights, coordinate=coord)
@@ -376,16 +411,21 @@ def test_infinite_interval_objective_matches_direct_tail_probabilities_and_deriv
         else:
             mass = quad(lambda z: state.pdf(z), lo, hi, epsabs=1e-11, epsrel=1e-11)[0]
         direct_terms.append(-np.log(mass))
-    assert ev.nll == pytest.approx(float(np.dot(obs.weights, direct_terms)), rel=3e-8, abs=3e-8)
+    assert ev.nll == pytest.approx(
+        float(np.dot(obs.weights, direct_terms)), rel=3e-8, abs=3e-8
+    )
 
     eps = 2e-6
     fd_grad = np.empty_like(params)
     fd_h = np.empty_like(ev.hessian)
     for j in range(params.size):
         step = eps * max(1.0, abs(params[j]))
-        p1 = params.copy(); p1[j] += step
-        p0 = params.copy(); p0[j] -= step
-        e1 = fun(p1); e0 = fun(p0)
+        p1 = params.copy()
+        p1[j] += step
+        p0 = params.copy()
+        p0[j] -= step
+        e1 = fun(p1)
+        e0 = fun(p0)
         fd_grad[j] = (e1.nll - e0.nll) / (2.0 * step)
         fd_h[:, j] = (e1.gradient - e0.gradient) / (2.0 * step)
     assert np.allclose(ev.gradient, fd_grad, rtol=6e-5, atol=6e-6)
@@ -418,22 +458,27 @@ def test_exact_boundary_rounded_point_uses_preserved_log_distance():
     fd = np.empty_like(params)
     for j in range(params.size):
         step = eps * max(1.0, abs(params[j]))
-        p1 = params.copy(); p1[j] += step
-        p0 = params.copy(); p0[j] -= step
+        p1 = params.copy()
+        p1[j] += step
+        p0 = params.copy()
+        p0[j] -= step
         fd[j] = (fun(p1).nll - fun(p0).nll) / (2.0 * step)
     assert np.allclose(ev.gradient, fd, rtol=2e-6, atol=2e-7)
 
 
 def test_boundary_interval_adaptive_refinement_avoids_endpoint_log_collision(
-        monkeypatch):
+    monkeypatch,
+):
 
-    intervals = np.array([
-        [0.0, 1e-9],
-        [0.01, 0.01],
-        [0.1, 0.1],
-        [0.4, 0.4],
-        [1.0, 1.0],
-    ])
+    intervals = np.array(
+        [
+            [0.0, 1e-9],
+            [0.01, 0.01],
+            [0.1, 0.1],
+            [0.4, 0.4],
+            [1.0, 1.0],
+        ]
+    )
     objective = _prepare_natural_interval_objective(
         (0.0, np.inf), intervals, 2, True, False, None
     )

@@ -131,7 +131,9 @@ class _NaturalComponent:
 
     def state(self):
         """Return the normalized component state."""
-        return _NaturalCoreState(self.coordinate, self.layout, self.params, self.z_data_bounds)
+        return _NaturalCoreState(
+            self.coordinate, self.layout, self.params, self.z_data_bounds
+        )
 
 
 @dataclass(frozen=True)
@@ -328,12 +330,16 @@ def _basis(layout, support, z, /, *, lower_distance=None, upper_distance=None):
             columns.append(partial.evaluate(values, support))
             continue
         if partial.boundary_side == _LOWER:
-            distance = values - lower if lower_distance is None else np.asarray(
-                lower_distance, dtype=np.float64
+            distance = (
+                values - lower
+                if lower_distance is None
+                else np.asarray(lower_distance, dtype=np.float64)
             )
         else:
-            distance = upper - values if upper_distance is None else np.asarray(
-                upper_distance, dtype=np.float64
+            distance = (
+                upper - values
+                if upper_distance is None
+                else np.asarray(upper_distance, dtype=np.float64)
             )
         with np.errstate(divide="ignore", invalid="ignore"):
             columns.append(-np.log(distance))
@@ -395,7 +401,8 @@ class _ComponentProblem:
             if n_unique < rows.shape[0]:
                 coordinate_rows = np.ascontiguousarray(rows[first], dtype=np.float64)
                 coordinate_weights = np.bincount(
-                    inverse, weights=np.asarray(initial_weights, dtype=np.float64),
+                    inverse,
+                    weights=np.asarray(initial_weights, dtype=np.float64),
                     minlength=n_unique,
                 ).astype(np.float64)
             if np.all(np.isfinite(coordinate_rows)):
@@ -403,8 +410,12 @@ class _ComponentProblem:
                     coordinate_rows
                 )
                 coordinate = _build_fit_coordinate(
-                    support, mid, coordinate_weights, width,
-                    order=mid_order, width_order=width_order,
+                    support,
+                    mid,
+                    coordinate_weights,
+                    width,
+                    order=mid_order,
+                    width_order=width_order,
                 )
             else:
                 coordinate = _build_interval_fit_coordinate(
@@ -466,8 +477,11 @@ class _ComponentProblem:
         if cached is not None and cached[0] is layout:
             return cached[1]
         basis = _basis(
-            layout, support, self.z,
-            lower_distance=self.lower_distance, upper_distance=self.upper_distance,
+            layout,
+            support,
+            self.z,
+            lower_distance=self.lower_distance,
+            upper_distance=self.upper_distance,
         )
         basis.setflags(write=False)
         self._point_basis = (layout, basis)
@@ -500,7 +514,9 @@ class _ComponentProblem:
         distinct = self._distinct
         if distinct is None:
             observations = _build_interval_observations(
-                self.rows, weights, coordinate=self.coordinate,
+                self.rows,
+                weights,
+                coordinate=self.coordinate,
                 grouping_cache=self._grouping_cache,
             )
         else:
@@ -565,12 +581,12 @@ class _ComponentProblem:
         inverse = distinct[1]
         n_unique = distinct[0].shape[0]
         w = np.asarray(observation_weights, dtype=np.float64).reshape(-1)
-        group_sum = np.bincount(
-            inverse, weights=w, minlength=n_unique
-        ).astype(np.float64)
-        group_sq = np.bincount(
-            inverse, weights=w * w, minlength=n_unique
-        ).astype(np.float64)
+        group_sum = np.bincount(inverse, weights=w, minlength=n_unique).astype(
+            np.float64
+        )
+        group_sq = np.bincount(inverse, weights=w * w, minlength=n_unique).astype(
+            np.float64
+        )
         self._observation_group_cache = (observation_weights, group_sum, group_sq)
         return group_sum, group_sq
 
@@ -633,7 +649,9 @@ class _ComponentProblem:
             self.spec, observations, self.z_data_bounds, nonparametric_bound=False
         )
 
-    def fit_compact(self, responsibilities, observation_weights, previous, /, **options):
+    def fit_compact(
+        self, responsibilities, observation_weights, previous, /, **options
+    ):
         """Run one duplicated-interval M-step without expanding row weights.
 
         Parameters
@@ -705,7 +723,9 @@ class _ComponentProblem:
                     q = q - a_lower * np.log(self.lower_distance)
                 if np.isfinite(a_upper) and a_upper > 0.0:
                     q = q - a_upper * np.log(self.upper_distance)
-            log_values = -np.asarray(q, dtype=np.float64) - float(state.log_Z) - self.log_scale
+            log_values = (
+                -np.asarray(q, dtype=np.float64) - float(state.log_Z) - self.log_scale
+            )
             means = self.point_basis(layout, support) if moments else None
             return log_values, means, None
 
@@ -750,7 +770,9 @@ class _ComponentProblem:
         if np.any(point):
             zp = z[point, 0]
             q = _q_eval(zp, support, state.q_poly, state.boundary_amplitudes, 0)
-            log_values[point] = -np.asarray(q, dtype=np.float64) - float(state.log_Z) - self.log_scale
+            log_values[point] = (
+                -np.asarray(q, dtype=np.float64) - float(state.log_Z) - self.log_scale
+            )
             if moments:
                 means[point] = _basis(layout, support, zp)
         if np.any(whole):
@@ -893,8 +915,10 @@ def _e_step(
         log_likelihood, responsibilities = _posterior(
             columns, log_weights, grouped_weights
         )
-        return (log_likelihood, responsibilities) if compact else (
-            log_likelihood, responsibilities[inverse]
+        return (
+            (log_likelihood, responsibilities)
+            if compact
+            else (log_likelihood, responsibilities[inverse])
         )
 
     columns = []
@@ -932,9 +956,11 @@ class _JointMixtureObjective:
         # so the objective runs on distinct rows with their weights added.
         distinct = self.problems[0].distinct_rows if self.problems else None
         self._row_weights = (
-            observation_weights if distinct is None
-            else np.bincount(distinct[1], weights=observation_weights,
-                             minlength=distinct[0].shape[0])
+            observation_weights
+            if distinct is None
+            else np.bincount(
+                distinct[1], weights=observation_weights, minlength=distinct[0].shape[0]
+            )
         )
         self._distinct = distinct is not None
         self.sizes = [layout.n_params for layout in layouts]
@@ -951,10 +977,10 @@ class _JointMixtureObjective:
             Joint variable.
         """
         params = [
-            np.asarray(x[self.offsets[k]: self.offsets[k + 1]], dtype=np.float64)
+            np.asarray(x[self.offsets[k] : self.offsets[k + 1]], dtype=np.float64)
             for k in range(self.n_components)
         ]
-        eta = np.concatenate((x[self.offsets[-1]:], [0.0]))
+        eta = np.concatenate((x[self.offsets[-1] :], [0.0]))
         return params, eta - _logsumexp(eta)
 
     def join(self, params, log_weights, /):
@@ -985,7 +1011,9 @@ class _JointMixtureObjective:
         centered = []
         within = []
         fishers = []
-        for problem, layout, theta in zip(self.problems, self.layouts, params, strict=True):
+        for problem, layout, theta in zip(
+            self.problems, self.layouts, params, strict=True
+        ):
             state = _NaturalCoreState(
                 problem.coordinate, layout, theta, problem.z_data_bounds
             )
@@ -997,7 +1025,9 @@ class _JointMixtureObjective:
             centered.append(means - mu)
             within.append(covariances)
             fishers.append(0.5 * (fisher + fisher.T))
-        log_likelihood, responsibility = _posterior(log_values, log_weights, self._row_weights)
+        log_likelihood, responsibility = _posterior(
+            log_values, log_weights, self._row_weights
+        )
         w = self._row_weights
         mass = w @ responsibility
         pi = np.exp(log_weights)
@@ -1046,16 +1076,20 @@ def _joint_representation(representations, n_free, /):
     b = np.zeros((row_offsets[-1], col_offsets[-1] + n_free), dtype=np.float64)
     matrices = []
     for k, rep in enumerate(representations):
-        b[row_offsets[k]: row_offsets[k + 1], col_offsets[k]: col_offsets[k + 1]] = rep.b_matrix
+        b[row_offsets[k] : row_offsets[k + 1], col_offsets[k] : col_offsets[k + 1]] = (
+            rep.b_matrix
+        )
         for block in rep.row_matrices:
             padded = np.zeros((row_offsets[-1],) + block.shape[1:], dtype=np.float64)
-            padded[row_offsets[k]: row_offsets[k + 1]] = block
+            padded[row_offsets[k] : row_offsets[k + 1]] = block
             matrices.append(padded)
     return _ConicRepresentation(
         b_matrix=b,
         row_matrices=tuple(matrices),
         reference_dual=np.concatenate([rep.reference_dual for rep in representations]),
-        row_degrees=np.concatenate([np.asarray(rep.row_degrees) for rep in representations]),
+        row_degrees=np.concatenate(
+            [np.asarray(rep.row_degrees) for rep in representations]
+        ),
     )
 
 
@@ -1077,7 +1111,9 @@ def _face_representation(layout, result, /):
     )
 
 
-def _evaluated_em_state(problems, layouts, results, log_weights, observation_weights, /):
+def _evaluated_em_state(
+    problems, layouts, results, log_weights, observation_weights, /
+):
     """Evaluate a mixture point once and retain its posterior for the next EM map.
 
     Parameters
@@ -1102,7 +1138,11 @@ def _evaluated_em_state(problems, layouts, results, log_weights, observation_wei
         problems and problems[0].intervals and problems[0].distinct_rows is not None
     )
     log_likelihood, responsibilities = _e_step(
-        problems, layouts, [r.params for r in results], log_weights, observation_weights,
+        problems,
+        layouts,
+        [r.params for r in results],
+        log_weights,
+        observation_weights,
         compact=compact,
     )
     return _EMState(
@@ -1137,7 +1177,9 @@ def _em_map(state, problems, observation_weights, /, **options):
     """
     responsibilities = state.responsibilities
     compact = bool(
-        problems and problems[0].intervals and problems[0].distinct_rows is not None
+        problems
+        and problems[0].intervals
+        and problems[0].distinct_rows is not None
         and responsibilities.shape[0] == problems[0].distinct_rows[0].shape[0]
     )
     if problems and not problems[0].intervals:
@@ -1157,7 +1199,9 @@ def _em_map(state, problems, observation_weights, /, **options):
     else:
         for k, problem in enumerate(problems):
             _, result = problem.fit(
-                observation_weights * responsibilities[:, k], state.results[k], **options
+                observation_weights * responsibilities[:, k],
+                state.results[k],
+                **options,
             )
             updated.append(result)
         mass = observation_weights @ responsibilities
@@ -1197,7 +1241,7 @@ def _unstack(vector, reference, layouts, /):
     offset = 0
     results = []
     for result, layout in zip(reference, layouts, strict=True):
-        params = np.asarray(vector[offset: offset + layout.n_params], dtype=np.float64)
+        params = np.asarray(vector[offset : offset + layout.n_params], dtype=np.float64)
         offset += layout.n_params
         for index in (layout.lower_a_index, layout.upper_a_index):
             if index is not None and params[index] < 0.0:
@@ -1209,8 +1253,19 @@ def _unstack(vector, reference, layouts, /):
     return results, log_weights - _logsumexp(log_weights)
 
 
-def _em_phase(state, problems, layouts, observation_weights, /, *, max_steps, tolerance,
-              accelerate, history, **options):
+def _em_phase(
+    state,
+    problems,
+    layouts,
+    observation_weights,
+    /,
+    *,
+    max_steps,
+    tolerance,
+    accelerate,
+    history,
+    **options,
+):
     """Run SQUAREM-accelerated EM until the likelihood stalls.
 
     Parameters
@@ -1240,9 +1295,13 @@ def _em_phase(state, problems, layouts, observation_weights, /, *, max_steps, to
     steps : int
         EM map evaluations used.
     """
+
     def em(point_state):
         point_results, point_log_weights = _em_map(
-            point_state, problems, observation_weights, **options,
+            point_state,
+            problems,
+            observation_weights,
+            **options,
         )
         return _evaluated_em_state(
             problems, layouts, point_results, point_log_weights, observation_weights
@@ -1264,7 +1323,9 @@ def _em_phase(state, problems, layouts, observation_weights, /, *, max_steps, to
             # steps, so the iteration stays monotone.
             x0 = _stack(state.results, state.log_weights)
             step = _stack(state1.results, state1.log_weights) - x0
-            curvature = _stack(state2.results, state2.log_weights) - 2.0 * (x0 + step) + x0
+            curvature = (
+                _stack(state2.results, state2.log_weights) - 2.0 * (x0 + step) + x0
+            )
             norm = float(np.linalg.norm(curvature))
             alpha = -float(np.linalg.norm(step)) / norm if norm > 0.0 else -1.0
             for _ in range(4):
@@ -1272,7 +1333,8 @@ def _em_phase(state, problems, layouts, observation_weights, /, *, max_steps, to
                     break
                 point = _unstack(
                     x0 - 2.0 * alpha * step + alpha * alpha * curvature,
-                    state2.results, layouts,
+                    state2.results,
+                    layouts,
                 )
                 if point is not None:
                     try:
@@ -1282,7 +1344,9 @@ def _em_phase(state, problems, layouts, observation_weights, /, *, max_steps, to
                         trial = em(point_state)
                         steps += 1
                     except NUMERIC_FAILURES as exc:
-                        _reraise_if_debug(exc, "SQUAREM stabilization step", routine=True)
+                        _reraise_if_debug(
+                            exc, "SQUAREM stabilization step", routine=True
+                        )
                         trial = None
                     if trial is not None and trial.log_likelihood >= new.log_likelihood:
                         new = trial
@@ -1320,7 +1384,10 @@ def _polish(state, problems, layouts, observation_weights, options, /):
     results, log_weights = state.results, state.log_weights
     objective = _JointMixtureObjective(problems, layouts, observation_weights)
     representation = _joint_representation(
-        [_face_representation(layout, r) for layout, r in zip(layouts, results, strict=True)],
+        [
+            _face_representation(layout, r)
+            for layout, r in zip(layouts, results, strict=True)
+        ],
         len(results) - 1,
     )
     x0 = objective.join([r.params for r in results], log_weights)
@@ -1364,7 +1431,9 @@ def _degree_policies(degree, count, /):
     for value in values:
         if isinstance(value, str):
             if value.lower() != "auto":
-                raise ValueError("per-component degree policy must be an integer or 'auto'")
+                raise ValueError(
+                    "per-component degree policy must be an integer or 'auto'"
+                )
             out.append("auto")
         else:
             out.append(int(value))
@@ -1447,8 +1516,17 @@ def _needs_wider_search(fit, rows, observation_weights, /):
 
 
 def _policy_initial_components(
-    support, rows, policies, lower, upper, observation_weights, responsibilities, /,
-    *, degree_config=None, **options,
+    support,
+    rows,
+    policies,
+    lower,
+    upper,
+    observation_weights,
+    responsibilities,
+    /,
+    *,
+    degree_config=None,
+    **options,
 ):
     """Run the first M-step for heterogeneous fixed/automatic degree policies.
 
@@ -1488,13 +1566,23 @@ def _policy_initial_components(
         if policy == "auto":
             if rows.shape[1] == 1:
                 objective, result = _fit_natural_conic_points_auto(
-                    support, rows[:, 0], lower, upper, component_weights,
-                    degree_config=degree_config, **options,
+                    support,
+                    rows[:, 0],
+                    lower,
+                    upper,
+                    component_weights,
+                    degree_config=degree_config,
+                    **options,
                 )
             else:
                 objective, result = _fit_natural_conic_intervals_auto(
-                    support, rows, lower, upper, component_weights,
-                    degree_config=degree_config, **options,
+                    support,
+                    rows,
+                    lower,
+                    upper,
+                    component_weights,
+                    degree_config=degree_config,
+                    **options,
                 )
             selected = int(objective.spec.requested_poly_degree)
             problem = _ComponentProblem(
@@ -1594,8 +1682,15 @@ def _run_natural_em(
         policies = _degree_policies(degree, k_count)
         if any(policy == "auto" for policy in policies):
             problems, layouts, results = _policy_initial_components(
-                support, rows, policies, lower, upper, w, r,
-                degree_config=degree_config, **options,
+                support,
+                rows,
+                policies,
+                lower,
+                upper,
+                w,
+                r,
+                degree_config=degree_config,
+                **options,
             )
         else:
             degrees = tuple(int(value) for value in policies)
@@ -1610,9 +1705,7 @@ def _run_natural_em(
                 results.append(result)
                 layouts.append(objective.layout)
         log_weights = _log_mixture_weights(w @ r)
-        state = _evaluated_em_state(
-            problems, layouts, results, log_weights, w
-        )
+        state = _evaluated_em_state(problems, layouts, results, log_weights, w)
         history = [state.log_likelihood]
         em_steps = 0
         rounds = 0
@@ -1644,9 +1737,15 @@ def _run_natural_em(
                 break
             rounds += 1
             state, steps = _em_phase(
-                state, problems, layouts, w,
-                max_steps=max_em_steps, tolerance=em_tolerance, accelerate=accelerate,
-                history=history, **options,
+                state,
+                problems,
+                layouts,
+                w,
+                max_steps=max_em_steps,
+                tolerance=em_tolerance,
+                accelerate=accelerate,
+                history=history,
+                **options,
             )
             em_steps += steps
         if not polish:
@@ -1662,23 +1761,25 @@ def _run_natural_em(
             # The polish never raises the NLL above its start; guard anyway.
             status = "em_only"
             break
-        polished = [replace(res, params=p) for res, p in zip(state.results, params, strict=True)]
+        polished = [
+            replace(res, params=p) for res, p in zip(state.results, params, strict=True)
+        ]
         history.append(polished_ll)
         _, polished_posterior = _e_step(
             problems, layouts, [x.params for x in polished], log_weights, w
         )
         state = _EMState(
-            tuple(polished), np.asarray(log_weights, dtype=np.float64),
-            polished_ll, polished_posterior,
+            tuple(polished),
+            np.asarray(log_weights, dtype=np.float64),
+            polished_ll,
+            polished_posterior,
         )
         status, bound = run.status, float(run.decrease_bound)
         if status not in _CONVERGED:
             need_em = True
             continue
         # Verification: one EM step from the polished point.
-        verified, verified_log_weights = _em_map(
-            state, problems, w, **options
-        )
+        verified, verified_log_weights = _em_map(state, problems, w, **options)
         em_steps += 1
         verified_state = _evaluated_em_state(
             problems, layouts, verified, verified_log_weights, w
@@ -1757,7 +1858,12 @@ def _fit_natural_mixture(
     *,
     rng=0,
     responsibilities=None,
-    paths=(("ladder", "raw"), ("ladder", "sharpened"), ("direct", "raw"), ("direct", "sharpened")),
+    paths=(
+        ("ladder", "raw"),
+        ("ladder", "sharpened"),
+        ("direct", "raw"),
+        ("direct", "sharpened"),
+    ),
     finalists=2,
     degree_config=None,
     **options,
@@ -1834,23 +1940,27 @@ def _fit_natural_mixture(
         candidates = [("given", np.asarray(responsibilities, dtype=np.float64), None)]
     else:
         representatives = (
-            rows[:, 0] if rows.shape[1] == 1 else _interval_initial_representatives(rows, support)
+            rows[:, 0]
+            if rows.shape[1] == 1
+            else _interval_initial_representatives(rows, support)
         )
-        generator = rng if isinstance(rng, np.random.Generator) else np.random.default_rng(rng)
+        generator = (
+            rng if isinstance(rng, np.random.Generator) else np.random.default_rng(rng)
+        )
         candidates = _initial_responsibility_candidates(
             representatives, int(n_components), generator, weights=weights
         )
     policies = _degree_policies(poly_degree, int(n_components))
     has_auto_degree = any(policy == "auto" for policy in policies)
     uniform_fixed = (
-        not has_auto_degree
-        and len({int(policy) for policy in policies}) == 1
+        not has_auto_degree and len({int(policy) for policy in policies}) == 1
     )
     degree = int(policies[0]) if uniform_fixed else policies
     lower, upper = bool(allow_lower_boundary), bool(allow_upper_boundary)
     rungs = (
-        [] if not uniform_fixed else
-        [int(d) for d in _admissible_degrees(support, degree) if int(d) < degree]
+        []
+        if not uniform_fixed
+        else [int(d) for d in _admissible_degrees(support, degree) if int(d) < degree]
     )
 
     def prepare(posterior, treatment):
@@ -1909,23 +2019,46 @@ def _fit_natural_mixture(
                     if schedule == "ladder":
                         for rung in rungs:
                             posterior = _run_natural_em(
-                                support, rows, rung, False, False, w,
-                                prepare(posterior, treatment), polish=False,
+                                support,
+                                rows,
+                                rung,
+                                False,
+                                False,
+                                w,
+                                prepare(posterior, treatment),
+                                polish=False,
                             ).responsibilities
                     start = prepare(posterior, treatment)
                     if reuse_exploration:
                         exploration, continuation = _run_natural_em(
-                            support, rows, degree, lower, upper, w, start, polish=False,
-                            degree_config=degree_config, _return_continuation=True,
+                            support,
+                            rows,
+                            degree,
+                            lower,
+                            upper,
+                            w,
+                            start,
+                            polish=False,
+                            degree_config=degree_config,
+                            _return_continuation=True,
                         )
                     else:
                         exploration = _run_natural_em(
-                            support, rows, degree, lower, upper, w, start, polish=False,
+                            support,
+                            rows,
+                            degree,
+                            lower,
+                            upper,
+                            w,
+                            start,
+                            polish=False,
                             degree_config=degree_config,
                         )
                         continuation = None
                 except (*NUMERIC_FAILURES, ValueError) as exc:
-                    _reraise_if_debug(exc, f"natural mixture EM from {label}", routine=True)
+                    _reraise_if_debug(
+                        exc, f"natural mixture EM from {label}", routine=True
+                    )
                     failure = exc
                     continue
                 locked_degrees = tuple(
@@ -1937,15 +2070,27 @@ def _fit_natural_mixture(
                 )
         explored.sort(key=lambda item: -item[0])
         best = None
-        for _, label, start, locked_degrees, continuation in explored[: max(1, int(finalists))]:
+        for _, label, start, locked_degrees, continuation in explored[
+            : max(1, int(finalists))
+        ]:
             final_degree = locked_degrees if has_auto_degree else degree
             try:
                 fit = _run_natural_em(
-                    support, rows, final_degree, lower, upper, w, start,
-                    initialization=label, _continuation=continuation, **options,
+                    support,
+                    rows,
+                    final_degree,
+                    lower,
+                    upper,
+                    w,
+                    start,
+                    initialization=label,
+                    _continuation=continuation,
+                    **options,
                 )
             except (*NUMERIC_FAILURES, ValueError) as exc:
-                _reraise_if_debug(exc, f"natural mixture fit from {label}", routine=True)
+                _reraise_if_debug(
+                    exc, f"natural mixture fit from {label}", routine=True
+                )
                 failure = exc
                 continue
             if best is None or rank(fit) > rank(best):
@@ -1964,7 +2109,10 @@ def _fit_natural_mixture(
         # likelihood.  Widen the search to the other families and keep the
         # better of the two by the same score.
         alternatives = _initial_responsibility_candidates(
-            representatives, int(n_components), generator, weights=weights,
+            representatives,
+            int(n_components),
+            generator,
+            weights=weights,
             include_valley=False,
         )
         other, other_failure = search(alternatives)
@@ -1972,7 +2120,9 @@ def _fit_natural_mixture(
             best = other
         failure = failure if failure is not None else other_failure
     if best is None:
-        if failure is not None and "point-mixture component is not estimable" in str(failure):
+        if failure is not None and "point-mixture component is not estimable" in str(
+            failure
+        ):
             raise failure
         raise RuntimeError("no mixture initialization produced a fit") from failure
     return best

@@ -126,12 +126,12 @@ c = Distribution().fit(samples, support=(-np.inf, np.inf))
 c.mean, c.std, c.mode, c.median
 
 # Evaluate the density
-c.pdf(0.0)           # scalar → float
-c.pdf([-1, 0, 1])   # array  → ndarray
+c.pdf(0.0)  # scalar → float
+c.pdf([-1, 0, 1])  # array  → ndarray
 
 # CDF and quantile function
-c.cdf(0.0)           # ≈ 0.5
-c.ppf(0.25)          # lower quartile
+c.cdf(0.0)  # ≈ 0.5
+c.ppf(0.25)  # lower quartile
 
 # Draw random samples
 c.sample(100, rng=rng)
@@ -142,16 +142,18 @@ c.sample(100, rng=rng)
 By default, `fit()` uses `n_components="auto"`. A KDE bandwidth sweep estimates the number of data modes and focuses the candidate range; lightweight log-concave fits are then compared by BIC to choose *K*. For interval-censored data, candidates are scored on their actual interval probability masses rather than midpoint-density surrogates. The full log-concave mixture is fitted only once for the selected *K*:
 
 ```python
-bimodal = np.concatenate([
-    rng.normal(-2, 0.5, 300),
-    rng.normal( 2, 0.5, 300),
-])
+bimodal = np.concatenate(
+    [
+        rng.normal(-2, 0.5, 300),
+        rng.normal(2, 0.5, 300),
+    ]
+)
 
 c2 = Distribution().fit(bimodal, support=(-np.inf, np.inf))
 
-c2.n_components      # automatically chosen
-c2.modes             # tuple of mode locations
-c2.weights           # array of mixture weights
+c2.n_components  # automatically chosen
+c2.modes  # tuple of mode locations
+c2.weights  # array of mixture weights
 ```
 
 Use `k_max` to limit the search range:
@@ -167,10 +169,10 @@ You can still specify an explicit number of components:
 ```python
 c2 = Distribution().fit(bimodal, n_components=2, support=(-np.inf, np.inf))
 
-c2.pdf(0.0)         # valley between the two modes
-c2.n_components      # 2
-c2.weights           # array of mixture weights
-c2.modes             # tuple of mode locations
+c2.pdf(0.0)  # valley between the two modes
+c2.n_components  # 2
+c2.weights  # array of mixture weights
+c2.modes  # tuple of mode locations
 ```
 
 ---
@@ -185,9 +187,9 @@ import gibbus
 from gibbus import Distribution
 
 rng = np.random.default_rng(0)
-data = rng.normal(size=500)          # training sample
-holdout = rng.normal(size=300)       # held-out observations
-x = np.array([-1.0, 0.0, 2.5])       # evaluation points
+data = rng.normal(size=500)  # training sample
+holdout = rng.normal(size=300)  # held-out observations
+x = np.array([-1.0, 0.0, 2.5])  # evaluation points
 
 c = Distribution().fit(data, support=(-np.inf, np.inf))
 other = Distribution().fit(rng.normal(0.3, 1.2, 500), support=(-np.inf, np.inf))
@@ -247,7 +249,7 @@ See [Debugging silent fallbacks](#debugging-silent-fallbacks) for how these inte
 ### Fitting — `Distribution.fit()`
 
 ```python
-c = Distribution().fit(data, support=(-np.inf, np.inf))   # fit(samples, **options)
+c = Distribution().fit(data, support=(-np.inf, np.inf))  # fit(samples, **options)
 ```
 
 All parameters except `samples` are keyword-only. Returns `self` for method chaining.
@@ -285,7 +287,7 @@ Density, CDF, and negative-log evaluators propagate NaN in `x`. The PPF is stric
 Evaluate the probability density function.
 
 ```python
-c.pdf(0.0)             # → float
+c.pdf(0.0)  # → float
 c.pdf([-1.0, 0.0, 1.0])  # → ndarray of shape (3,)
 ```
 
@@ -302,7 +304,7 @@ c.cdf(0.0)  # ≈ 0.5 for a symmetric density centered at 0
 Evaluate the percent-point function (quantile / inverse CDF).
 
 ```python
-c.ppf(0.5)    # median
+c.ppf(0.5)  # median
 c.ppf(0.025)  # 2.5th percentile
 ```
 
@@ -313,7 +315,7 @@ Raises `ValueError` if any element of `p` is non-finite or outside `[0, 1]`.
 Evaluate the negative-log density (the "potential") or its *n*-th derivative.
 
 ```python
-c.neg_log(0.0)       # -log pdf(0)
+c.neg_log(0.0)  # -log pdf(0)
 c.neg_log(0.0, n=1)  # first derivative of -log pdf at 0
 c.neg_log(0.0, n=2)  # second derivative (curvature)
 ```
@@ -325,9 +327,9 @@ Raises `ValueError` if `n < 0`.
 Draw random samples via inverse-CDF (quantile) sampling.
 
 ```python
-c.sample()              # single float
-c.sample(1000)          # ndarray of shape (1000,)
-c.sample(100, rng=42)   # reproducible with an int seed
+c.sample()  # single float
+c.sample(1000)  # ndarray of shape (1000,)
+c.sample(100, rng=42)  # reproducible with an int seed
 ```
 
 | Parameter | Type | Description |
@@ -340,10 +342,10 @@ c.sample(100, rng=42)   # reproducible with an int seed
 Compute the *k*-th moment.
 
 ```python
-c.moment(1)                        # raw first moment (mean)
-c.moment(2)                        # raw second moment E[X²]
-c.moment(2, central=True)          # central second moment (variance)
-c.moment(3, standardized=True)     # standardized third moment (skewness)
+c.moment(1)  # raw first moment (mean)
+c.moment(2)  # raw second moment E[X²]
+c.moment(2, central=True)  # central second moment (variance)
+c.moment(3, standardized=True)  # standardized third moment (skewness)
 ```
 
 | Parameter | Type | Default | Description |
@@ -357,10 +359,10 @@ c.moment(3, standardized=True)     # standardized third moment (skewness)
 Compute the *k*-th cumulant using centered moments, which keeps the calculation stable under large translations. Orders start at 1.
 
 ```python
-c.cumulant(1)   # mean
-c.cumulant(2)   # variance
-c.cumulant(3)   # third central moment
-c.cumulant(4)   # fourth central moment - 3 * variance**2
+c.cumulant(1)  # mean
+c.cumulant(2)  # variance
+c.cumulant(3)  # third central moment
+c.cumulant(4)  # fourth central moment - 3 * variance**2
 ```
 
 For affine pushforwards `Y = a + bX`, cumulants obey `κ₁(Y) = a + b κ₁(X)` and `κₖ(Y) = b^k κₖ(X)` for `k >= 2`.
@@ -380,7 +382,7 @@ c.logcdf(x)
 c.logsf(x)
 c.sf(x)
 
-c.isf(1e-100)          # upper quantile without forming 1 - 1e-100
+c.isf(1e-100)  # upper quantile without forming 1 - 1e-100
 c.logisf(np.log(1e-300))
 c.logppf(np.log(1e-300))
 ```
@@ -399,7 +401,7 @@ c.hazard(x, n=1)
 c.cumulative_hazard(x)
 c.mean_residual_life(x)
 c.residual_entropy(x)
-c.tail_rate("upper")     # base space only
+c.tail_rate("upper")  # base space only
 ```
 
 The same extension adds equal-tailed intervals and highest-density regions,
@@ -408,7 +410,7 @@ SciPy-style frozen adapter:
 
 ```python
 c.interval(0.95)
-c.hpd(0.95)                         # always shape (m, 2)
+c.hpd(0.95)  # always shape (m, 2)
 c.expect(lambda x: x**2)
 c.entropy()
 c.cross_entropy(other)
@@ -416,7 +418,7 @@ c.kl_divergence(other)
 c.loglik(holdout)
 c.quantile_residuals(holdout, rng=0)
 conditional = c.truncate(lower=0.0, upper=2.0)
-rv = c.frozen()                     # live view; follows parent transforms/refits
+rv = c.frozen()  # live view; follows parent transforms/refits
 ```
 
 In exp space, probability tails and equal-tailed intervals are exact transforms of
@@ -434,7 +436,7 @@ uniform weight, and `"ad"` weights by `1 / (u (1 - u))`, concentrating on the
 tails — where a log-concave model is most likely to be wrong.
 
 ```python
-c.goodness_of_fit(holdout)                       # Cramer-von Mises, asymptotic
+c.goodness_of_fit(holdout)  # Cramer-von Mises, asymptotic
 c.goodness_of_fit(holdout, statistic="ks")
 ```
 
@@ -455,12 +457,13 @@ held-out observations. Use the calibration that matches how the observations wer
 obtained. When you must check in sample, calibrate by simulation:
 
 ```python
-result = c.goodness_of_fit(data, statistic="ad", calibration="montecarlo",
-                           n_resamples=500, rng=0)
-result["value"]             # Anderson-Darling statistic
-result["pvalue"]            # calibrated against simulated refits
+result = c.goodness_of_fit(
+    data, statistic="ad", calibration="montecarlo", n_resamples=500, rng=0
+)
+result["value"]  # Anderson-Darling statistic
+result["pvalue"]  # calibrated against simulated refits
 result["pvalue_valid_for"]  # 'the sample the model was fitted to'
-result["n_failed"]          # simulated refits that declined
+result["n_failed"]  # simulated refits that declined
 ```
 
 Anderson-Darling has no closed-form null distribution available here, so
@@ -477,13 +480,14 @@ the resulting curves. The fitted state does not retain the training data, so it
 must be supplied again.
 
 ```python
-band = c.bootstrap_bands(data, np.linspace(-3, 3, 200),
-                         quantity="pdf", n_resamples=500, level=0.95, rng=0)
+band = c.bootstrap_bands(
+    data, np.linspace(-3, 3, 200), quantity="pdf", n_resamples=500, level=0.95, rng=0
+)
 
-band["x"], band["estimate"]     # the point estimate on the same grid
-band["lower"], band["upper"]    # pointwise percentile bands
-band["n_failed"]                # replicates whose refit declined
-band["coverage_kind"]           # 'pointwise'
+band["x"], band["estimate"]  # the point estimate on the same grid
+band["lower"], band["upper"]  # pointwise percentile bands
+band["n_failed"]  # replicates whose refit declined
+band["coverage_kind"]  # 'pointwise'
 ```
 
 `quantity` may be `"pdf"`, `"cdf"`, or `"sf"`, evaluated in the currently active
@@ -546,11 +550,11 @@ This is useful when modeling inherently positive quantities. The exp-space suppo
 #### Switching the active space
 
 ```python
-c.set_default("exp")   # switch to exp space
-c.mean                  # now returns E[exp(X)]
-c.pdf(1.0)              # evaluates the exp-space PDF
+c.set_default("exp")  # switch to exp space
+c.mean  # now returns E[exp(X)]
+c.pdf(1.0)  # evaluates the exp-space PDF
 
-c.set_default("base")   # switch back
+c.set_default("base")  # switch back
 ```
 
 `set_default()` returns `self` for chaining.
@@ -560,10 +564,10 @@ c.set_default("base")   # switch back
 For single-component models, the `.base` and `.exp` properties give view objects with the same evaluation interface (`pdf`, `cdf`, `ppf`, `neg_log`, `sample`, `moment`, `cumulant`, and all summary statistics):
 
 ```python
-c.base.pdf(0.0)    # always base-space, regardless of the active default
-c.exp.pdf(1.0)     # always exp-space
-c.base.mean        # base-space mean
-c.exp.mean         # exp-space mean
+c.base.pdf(0.0)  # always base-space, regardless of the active default
+c.exp.pdf(1.0)  # always exp-space
+c.base.mean  # base-space mean
+c.exp.mean  # exp-space mean
 ```
 
 For multi-component models, `.base` and `.exp` are not available at the top level. Use the top-level methods (which respect `set_default`) or access individual components:
@@ -582,8 +586,8 @@ part of the operation, so `pullback` is a required keyword rather than being
 inferred from mutable model state:
 
 ```python
-c.transform(mu=5.0, sigma=2.0, pullback=False)   # pushforward: Y = 5 + 2 * X
-c.transform(mu=5.0, sigma=2.0, pullback=True)    # pullback:    Y = (X - 5) / 2
+c.transform(mu=5.0, sigma=2.0, pullback=False)  # pushforward: Y = 5 + 2 * X
+c.transform(mu=5.0, sigma=2.0, pullback=True)  # pullback:    Y = (X - 5) / 2
 ```
 
 | Parameter | Type | Default | Description |
@@ -622,7 +626,7 @@ The fitted state is stored as a NumPy structured scalar (mixtures wrap their com
 
 ```python
 # Save
-state = c.data              # numpy structured scalar (deep copy)
+state = c.data  # numpy structured scalar (deep copy)
 np.save("model.npy", state)
 
 # Load — from state object
@@ -653,7 +657,7 @@ The structured NumPy state returned by `Distribution.data` is the portable persi
 ### Copying
 
 ```python
-c2 = c.copy()         # independent deep copy
+c2 = c.copy()  # independent deep copy
 ```
 
 `Distribution` also supports `copy.copy()` and `copy.deepcopy()`, both of which produce independent deep copies.
@@ -850,20 +854,21 @@ new_data = rng.normal(loc=0.1, size=500)
 c2 = Distribution().fit(new_data, init_from=c1)
 
 # Multi-component warm start
-bimodal = np.concatenate([rng.normal(-2, 0.5, 300),
-                          rng.normal(2, 0.5, 300)])
+bimodal = np.concatenate([rng.normal(-2, 0.5, 300), rng.normal(2, 0.5, 300)])
 c3 = Distribution().fit(bimodal, n_components=2, support=(-np.inf, np.inf))
 
-new_bimodal = np.concatenate([rng.normal(-2, 0.5, 300),
-                              rng.normal(2, 0.5, 300)])
+new_bimodal = np.concatenate([rng.normal(-2, 0.5, 300), rng.normal(2, 0.5, 300)])
 c4 = Distribution().fit(new_bimodal, init_from=c3)  # inherits K=2, support, etc.
 
 # Override poly_degree while keeping everything else from seed
 c5 = Distribution().fit(new_bimodal, init_from=c3, poly_degree=8)
 
 # Per-component poly_degree overrides
-c6 = Distribution().fit(new_bimodal, init_from=c3,
-                 component_options=[{'poly_degree': 6}, {'poly_degree': 4}])
+c6 = Distribution().fit(
+    new_bimodal,
+    init_from=c3,
+    component_options=[{"poly_degree": 6}, {"poly_degree": 4}],
+)
 ```
 
 ### Exp-Space for Positive Data
@@ -882,12 +887,12 @@ print(f"Exp-space mean: {c.mean:.3f}")
 print(f"Exp-space mode: {c.mode:.3f}")
 
 # Evaluate the density of the positive variable
-c.pdf(2.0)   # density at y=2
+c.pdf(2.0)  # density at y=2
 
 # Or access exp-space directly without changing the default
 c.set_default("base")
-c.exp.pdf(2.0)   # same result
-c.exp.mean        # E[exp(X)]
+c.exp.pdf(2.0)  # same result
+c.exp.mean  # E[exp(X)]
 ```
 
 ### Affine Transforms
@@ -911,11 +916,13 @@ By default, `fit()` automatically selects the number of components:
 
 ```python
 # Generate trimodal data
-data = np.concatenate([
-    rng.normal(-5, 0.8, 200),
-    rng.normal( 0, 1.0, 300),
-    rng.normal( 5, 0.6, 200),
-])
+data = np.concatenate(
+    [
+        rng.normal(-5, 0.8, 200),
+        rng.normal(0, 1.0, 300),
+        rng.normal(5, 0.6, 200),
+    ]
+)
 
 # Auto-select K (the default)
 c = Distribution().fit(data, support=(-np.inf, np.inf), rng=42)
@@ -954,8 +961,8 @@ c = Distribution().fit(
     n_components=2,
     support=(-np.inf, np.inf),
     component_options=[
-        {"poly_degree": 8},   # component 0 uses degree 8
-        {"poly_degree": 4},   # component 1 uses degree 4
+        {"poly_degree": 8},  # component 0 uses degree 8
+        {"poly_degree": 4},  # component 1 uses degree 4
     ],
 )
 ```
@@ -966,8 +973,7 @@ c = Distribution().fit(
 c = Distribution().fit(data, n_components=2, support=(-np.inf, np.inf))
 
 for i, comp in enumerate(c.components):
-    print(f"Component {i}: mode={comp.base.mode:.3f}, "
-          f"std={comp.base.std:.3f}")
+    print(f"Component {i}: mode={comp.base.mode:.3f}, std={comp.base.std:.3f}")
     print(f"  weight = {c.weights[i]:.3f}")
 ```
 
@@ -996,12 +1002,12 @@ c_mix_loaded = Distribution(np.load("mixture_model.npy", allow_pickle=False))
 c = Distribution().fit(rng.normal(size=500), support=(-np.inf, np.inf))
 
 # Raw moments
-m1 = c.moment(1)              # E[X]
-m2 = c.moment(2)              # E[X²]
+m1 = c.moment(1)  # E[X]
+m2 = c.moment(2)  # E[X²]
 
 # Central moments
-mu2 = c.moment(2, central=True)   # E[(X − mean)²] = variance
-mu3 = c.moment(3, central=True)   # E[(X − mean)³]
+mu2 = c.moment(2, central=True)  # E[(X − mean)²] = variance
+mu3 = c.moment(3, central=True)  # E[(X − mean)³]
 
 # Standardized moments
 s3 = c.moment(3, standardized=True)  # skewness
@@ -1017,9 +1023,9 @@ c = Distribution().fit(rng.normal(size=500), support=(-np.inf, np.inf))
 
 x = np.linspace(-3, 3, 100)
 
-q0 = c.neg_log(x, n=0)   # -log pdf(x) — the potential itself
-q1 = c.neg_log(x, n=1)   # first derivative (score-like)
-q2 = c.neg_log(x, n=2)   # second derivative (curvature / precision)
+q0 = c.neg_log(x, n=0)  # -log pdf(x) — the potential itself
+q1 = c.neg_log(x, n=1)  # first derivative (score-like)
+q2 = c.neg_log(x, n=2)  # second derivative (curvature / precision)
 ```
 
 At the mode, the first derivative is zero and the second derivative gives the local curvature.

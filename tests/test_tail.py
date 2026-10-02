@@ -63,12 +63,14 @@ def _gamma_potential(shape, scale=1.0, *, reflected=False):
 
 
 def test_tail_handover_is_inclusive_at_configured_probability():
-    p = np.array([
-        TAIL_ASYMPTOTIC_P,
-        np.nextafter(TAIL_ASYMPTOTIC_P, 1.0),
-        1.0 - TAIL_ASYMPTOTIC_P,
-        np.nextafter(1.0 - TAIL_ASYMPTOTIC_P, 0.0),
-    ])
+    p = np.array(
+        [
+            TAIL_ASYMPTOTIC_P,
+            np.nextafter(TAIL_ASYMPTOTIC_P, 1.0),
+            1.0 - TAIL_ASYMPTOTIC_P,
+            np.nextafter(1.0 - TAIL_ASYMPTOTIC_P, 0.0),
+        ]
+    )
     lower, upper = needs_asymptotic_tail(p)
     assert np.array_equal(lower, [True, False, False, False])
     assert np.array_equal(upper, [False, False, True, False])

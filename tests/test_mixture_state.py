@@ -7,10 +7,14 @@ from gibbus import Distribution
 
 def test_point_mixture_components_finalize_to_natural_state():
     rng = np.random.default_rng(2)
-    x = np.ascontiguousarray(np.concatenate([
-        rng.normal(-2.5, 0.6, 300),
-        rng.normal(2.5, 0.6, 300),
-    ]))
+    x = np.ascontiguousarray(
+        np.concatenate(
+            [
+                rng.normal(-2.5, 0.6, 300),
+                rng.normal(2.5, 0.6, 300),
+            ]
+        )
+    )
     fitted = Distribution().fit(
         x,
         n_components=2,
@@ -26,10 +30,14 @@ def test_point_mixture_components_finalize_to_natural_state():
 
 def test_point_mixture_auto_degree_uses_natural_component_selector():
     rng = np.random.default_rng(3)
-    x = np.ascontiguousarray(np.concatenate([
-        rng.normal(-2.0, 0.7, 250),
-        rng.normal(2.0, 0.7, 250),
-    ]))
+    x = np.ascontiguousarray(
+        np.concatenate(
+            [
+                rng.normal(-2.0, 0.7, 250),
+                rng.normal(2.0, 0.7, 250),
+            ]
+        )
+    )
     fitted = Distribution().fit(
         x,
         n_components=2,
@@ -45,10 +53,12 @@ def test_point_mixture_auto_degree_uses_natural_component_selector():
 
 def test_finite_interval_mixture_components_finalize_to_natural_state():
     rng = np.random.default_rng(4)
-    x = np.concatenate([
-        rng.normal(-2.0, 0.65, 220),
-        rng.normal(2.0, 0.7, 220),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(-2.0, 0.65, 220),
+            rng.normal(2.0, 0.7, 220),
+        ]
+    )
     intervals = np.column_stack([x - 0.08, x + 0.08])
     fitted = Distribution().fit(
         intervals,
@@ -65,10 +75,12 @@ def test_finite_interval_mixture_components_finalize_to_natural_state():
 
 def test_infinite_censored_mixture_components_finalize_to_natural_state():
     rng = np.random.default_rng(5)
-    x = np.concatenate([
-        rng.normal(-2.0, 0.65, 220),
-        rng.normal(2.0, 0.7, 220),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(-2.0, 0.65, 220),
+            rng.normal(2.0, 0.7, 220),
+        ]
+    )
     rows = []
     for value in x:
         if value < -2.8:

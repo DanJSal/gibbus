@@ -117,14 +117,14 @@ def _stats_from_raw_moments(m1, m2, m3, m4, /):
     if np.isfinite(m3) and np.isfinite(m4):
         m3 = float(m3)
         m4 = float(m4)
-        mu3 = m3 - 3.0 * float(m2) * mean + 2.0 * (mean ** 3)
-        mu4 = m4 - 4.0 * m3 * mean + 6.0 * float(m2) * (mean ** 2) - 3.0 * (mean ** 4)
+        mu3 = m3 - 3.0 * float(m2) * mean + 2.0 * (mean**3)
+        mu4 = m4 - 4.0 * m3 * mean + 6.0 * float(m2) * (mean**2) - 3.0 * (mean**4)
         # Standardized third and fourth moments.  ``kurt`` is the Pearson
         # (raw) kurtosis, so a Gaussian reads 3.0, not 0.0 -- it is the
         # counterpart of ``skew``, not the Fisher excess.  Subtract 3 if
         # you want excess.
-        skew = float(mu3 / (std ** 3))
-        kurt = float(mu4 / (std ** 4))
+        skew = float(mu3 / (std**3))
+        kurt = float(mu4 / (std**4))
 
     return {"mean": mean, "var": var, "std": std, "skew": skew, "kurt": kurt}
 
@@ -148,8 +148,8 @@ def _stats_from_centered_moments(mean, mu2, mu3, mu4, /):
     if not np.isfinite(var) or var <= 0.0:
         raise RuntimeError(f"Degenerate variance encountered (var={var}).")
     std = float(np.sqrt(var))
-    skew = float(mu3) / (std ** 3) if np.isfinite(mu3) else np.nan
-    kurt = float(mu4) / (std ** 4) if np.isfinite(mu4) else np.nan
+    skew = float(mu3) / (std**3) if np.isfinite(mu3) else np.nan
+    kurt = float(mu4) / (std**4) if np.isfinite(mu4) else np.nan
     return {"mean": mean, "var": var, "std": std, "skew": skew, "kurt": kurt}
 
 
@@ -284,7 +284,7 @@ def _powaff_moment_from_z_moments(z_mom, alpha, beta, k, /):
     kk = int(k)
     s = 0.0
     for i in range(kk + 1):
-        s += comb(kk, i) * (alpha ** i) * (beta ** (kk - i)) * float(z_mom[i])
+        s += comb(kk, i) * (alpha**i) * (beta ** (kk - i)) * float(z_mom[i])
     return float(s)
 
 
@@ -355,10 +355,12 @@ def _moment_from_raw(get_raw, k, mean, std, central, standardized, /):
     s = float(std)
     if not (s > 0.0):
         raise RuntimeError("Standardized moment is undefined because std <= 0.")
-    return float(cm / (s ** kk))
+    return float(cm / (s**kk))
 
 
-def _raw_moment_identity(base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, k, /):
+def _raw_moment_identity(
+    base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, k, /
+):
     """Compute the *k*-th raw moment in user coordinates by quadrature.
 
     Evaluates ``E[X^k]`` where ``X = (Z - mu_eff) / sigma_eff`` and *Z*
@@ -415,6 +417,7 @@ def _raw_moment_identity(base_support, q_poly, boundary_amplitudes, window, mu_e
 
     return _powaff_moment_from_z_moments(z_mom, alpha, beta, kk)
 
+
 def _polyval_scalar(c, x, /):
     """Evaluate a polynomial at a single scalar point using Horner's method.
 
@@ -438,6 +441,7 @@ def _polyval_scalar(c, x, /):
     for i in range(n - 2, -1, -1):
         out = out * z + float(cc[i])
     return out
+
 
 def _q0_scalar(x, support, q_poly, boundary_amplitudes, /):
     """Evaluate the full zero-offset potential at one scalar point.
@@ -476,7 +480,6 @@ def _q0_scalar(x, support, q_poly, boundary_amplitudes, /):
             return np.inf
         out -= aU * np.log(dU)
     return out
-
 
 
 def _q1_scalar(x, support, q_poly, boundary_amplitudes, /):
@@ -576,7 +579,6 @@ def _poly_degree_exact(q_poly, /):
     return int(nz[-1]) if nz.size else 0
 
 
-
 def _tail_rate_from_geometry(base_support, q_poly, mu_eff, sigma_eff, side, /):
     """Return the exact asymptotic base-space potential slope for one component.
 
@@ -624,6 +626,7 @@ def _tail_rate_from_geometry(base_support, q_poly, mu_eff, sigma_eff, side, /):
     if degree == 1:
         return float(abs(sigma_eff * q[1]))
     return 0.0
+
 
 def _expanded_tilted_log_moment(
     base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, k, /
@@ -711,7 +714,9 @@ def _expanded_tilted_log_moment(
         # cases are handled by the ordinary full finite-support window.
         return np.nan
 
-    z_star = float(brentq(g, left, right, xtol=1e-10, rtol=4 * np.finfo(float).eps, maxiter=200))
+    z_star = float(
+        brentq(g, left, right, xtol=1e-10, rtol=4 * np.finfo(float).eps, maxiter=200)
+    )
     curvature = float(_q2_scalar(z_star, support, q, amps))
     if not np.isfinite(curvature) or curvature <= 0.0:
         return np.nan
@@ -719,10 +724,14 @@ def _expanded_tilted_log_moment(
 
     # Taylor coefficients of the polynomial part about the tilted mode.
     from math import factorial
+
     deriv_coeff = [
-        float(np.polynomial.polynomial.polyval(
-            z_star, np.polynomial.polynomial.polyder(q, order)
-        )) / float(factorial(order))
+        float(
+            np.polynomial.polynomial.polyval(
+                z_star, np.polynomial.polynomial.polyder(q, order)
+            )
+        )
+        / float(factorial(order))
         for order in range(1, q.size)
     ]
 
@@ -760,13 +769,17 @@ def _expanded_tilted_log_moment(
         if delta < 0.0 and abs(delta) <= 1e-10 * max(1.0, abs(dx)):
             delta = 0.0
         if delta < 0.0:
-            raise RuntimeError("tilted moment lost convexity around its stationary point")
+            raise RuntimeError(
+                "tilted moment lost convexity around its stationary point"
+            )
         if delta > 745.0:
             return 0.0
         return float(local_scale * np.exp(-delta))
 
     left_extent = np.inf if not np.isfinite(L) else max(0.0, (z_star - L) / local_scale)
-    right_extent = np.inf if not np.isfinite(U) else max(0.0, (U - z_star) / local_scale)
+    right_extent = (
+        np.inf if not np.isfinite(U) else max(0.0, (U - z_star) / local_scale)
+    )
 
     # ``quad`` can miss an O(1)-wide peak at the origin when asked to
     # integrate over a finite interval tens of thousands of local scales
@@ -779,12 +792,20 @@ def _expanded_tilted_log_moment(
         right_extent = np.inf
 
     left_val, _left_err = quad(
-        lambda y: relative(y, -1.0), 0.0, left_extent,
-        epsabs=QUAD_EPSABS, epsrel=QUAD_EPSREL, limit=QUAD_LIMIT,
+        lambda y: relative(y, -1.0),
+        0.0,
+        left_extent,
+        epsabs=QUAD_EPSABS,
+        epsrel=QUAD_EPSREL,
+        limit=QUAD_LIMIT,
     )
     right_val, _right_err = quad(
-        lambda y: relative(y, 1.0), 0.0, right_extent,
-        epsabs=QUAD_EPSABS, epsrel=QUAD_EPSREL, limit=QUAD_LIMIT,
+        lambda y: relative(y, 1.0),
+        0.0,
+        right_extent,
+        epsabs=QUAD_EPSABS,
+        epsrel=QUAD_EPSREL,
+        limit=QUAD_LIMIT,
     )
     relative_mass = float(left_val + right_val)
     if not np.isfinite(relative_mass) or relative_mass <= 0.0:
@@ -794,8 +815,10 @@ def _expanded_tilted_log_moment(
     tilted_star = float(q_star - kk * z_star + kk * float(mu_eff))
     return float(-tilted_star + np.log(relative_mass))
 
-def _log_raw_moment_exp(base_support, q_poly, boundary_amplitudes, window,
-                        mu_eff, sigma_eff, k, terms, /):
+
+def _log_raw_moment_exp(
+    base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, k, terms, /
+):
     """Return ``log E[exp(k X)]`` using a saddle-point shifted integral.
 
     Parameters
@@ -834,29 +857,32 @@ def _log_raw_moment_exp(base_support, q_poly, boundary_amplitudes, window,
         return np.inf
 
     kk = float(kk_int) / float(sigma_eff)
-    z_star = _valley(
-        window, base_support, q_poly, boundary_amplitudes, float(kk))
+    z_star = _valley(window, base_support, q_poly, boundary_amplitudes, float(kk))
 
     # ``window`` is sized for the original density, not the exponentially
     # tilted integrand.  If q'(z_star) still misses the requested shift on an
     # unbounded side, the tilted saddle lies outside the stored material
     # window and the ordinary quadrature would silently omit its dominant
     # mass.  Re-solve and integrate on the full support in that case.
-    slope_miss = float(_q1_scalar(
-        z_star, base_support, q_poly, boundary_amplitudes
-    ) - kk)
+    slope_miss = float(
+        _q1_scalar(z_star, base_support, q_poly, boundary_amplitudes) - kk
+    )
     wL, wU = map(float, np.asarray(window, dtype=np.float64).reshape(2))
     support_L, support_U = map(float, base_support)
     at_left = abs(z_star - wL) <= 16.0 * abs(np.spacing(wL))
     at_right = abs(z_star - wU) <= 16.0 * abs(np.spacing(wU))
     outside_material_window = (
-        (at_right and slope_miss < -1e-10 and not np.isfinite(support_U))
-        or (at_left and slope_miss > 1e-10 and not np.isfinite(support_L))
-    )
+        at_right and slope_miss < -1e-10 and not np.isfinite(support_U)
+    ) or (at_left and slope_miss > 1e-10 and not np.isfinite(support_L))
     if outside_material_window:
         expanded = _expanded_tilted_log_moment(
-            base_support, q_poly, boundary_amplitudes, window,
-            mu_eff, sigma_eff, kk_int,
+            base_support,
+            q_poly,
+            boundary_amplitudes,
+            window,
+            mu_eff,
+            sigma_eff,
+            kk_int,
         )
         if np.isposinf(expanded):
             return np.inf
@@ -880,16 +906,24 @@ def _log_raw_moment_exp(base_support, q_poly, boundary_amplitudes, window,
     q_poly_scaled = q_poly_tilt.copy()
     q_poly_scaled[0] += m
     val_scaled = quad_integral(
-        q_poly_scaled, float(window[0]), float(window[1]), terms,
-        mode=0, k=0, epsabs=QUAD_EPSABS, epsrel=QUAD_EPSREL,
-        limit=QUAD_LIMIT)
+        q_poly_scaled,
+        float(window[0]),
+        float(window[1]),
+        terms,
+        mode=0,
+        k=0,
+        epsabs=QUAD_EPSABS,
+        epsrel=QUAD_EPSREL,
+        limit=QUAD_LIMIT,
+    )
     if not np.isfinite(val_scaled) or val_scaled <= 0.0:
         return -np.inf
     return float(m + np.log(val_scaled))
 
 
-def _relative_centered_moment_exp(base_support, q_poly, boundary_amplitudes,
-                                  window, mu_eff, sigma_eff, log_mean, k, /):
+def _relative_centered_moment_exp(
+    base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, log_mean, k, /
+):
     """Return ``E[(exp(X-log_mean)-1)^k]`` by direct centered quadrature.
 
     This is used only for narrow transformed distributions, where raw log-moment
@@ -940,13 +974,18 @@ def _relative_centered_moment_exp(base_support, q_poly, boundary_amplitudes,
         x = (float(z) - float(mu_eff)) / float(sigma_eff)
         u = np.expm1(x - float(log_mean)) / u_scale
         with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-            value = (u ** kk) * np.exp(-q)
+            value = (u**kk) * np.exp(-q)
         return float(value) if np.isfinite(value) else 0.0
 
     value, _ = quad(
-        integrand, float(window[0]), float(window[1]),
-        epsabs=QUAD_EPSABS, epsrel=QUAD_EPSREL, limit=QUAD_LIMIT)
-    return float(value * (u_scale ** kk))
+        integrand,
+        float(window[0]),
+        float(window[1]),
+        epsabs=QUAD_EPSABS,
+        epsrel=QUAD_EPSREL,
+        limit=QUAD_LIMIT,
+    )
+    return float(value * (u_scale**kk))
 
 
 def _internal_geometry(struct, /):
@@ -994,10 +1033,19 @@ def _univariate_canonical_raw_moment(struct, k, /):
     q_poly = np.asarray(struct["q_poly"], dtype=np.float64)
     support, boundary_amplitudes, _mu_eff, _sigma_eff = _internal_geometry(struct)
     terms = _terms_for_quad(support, boundary_amplitudes)
-    return float(quad_integral(
-        q_poly, float(window[0]), float(window[1]), terms,
-        mode=0, k=kk, epsabs=QUAD_EPSABS, epsrel=QUAD_EPSREL, limit=QUAD_LIMIT,
-    ))
+    return float(
+        quad_integral(
+            q_poly,
+            float(window[0]),
+            float(window[1]),
+            terms,
+            mode=0,
+            k=kk,
+            epsabs=QUAD_EPSABS,
+            epsrel=QUAD_EPSREL,
+            limit=QUAD_LIMIT,
+        )
+    )
 
 
 def _univariate_raw_moment(struct, k, /):
@@ -1031,9 +1079,11 @@ def _univariate_raw_moment(struct, k, /):
     window = np.asarray(struct["window"], dtype=np.float64)
     q_poly = np.asarray(struct["q_poly"], dtype=np.float64)
     base_support, boundary_amplitudes, mu_eff, sigma_eff = _internal_geometry(struct)
-    return float(_raw_moment_identity(
-        base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, kk
-    ))
+    return float(
+        _raw_moment_identity(
+            base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, kk
+        )
+    )
 
 
 def _univariate_affine_update_public(struct, mu_new, sigma_new, /):
@@ -1098,7 +1148,7 @@ def _univariate_affine_update_public(struct, mu_new, sigma_new, /):
 
     cached_z = np.asarray(struct["canonical_raw_moments"], dtype=np.float64)
     K = min(K, cached_z.size - 1)
-    z_mom = np.asarray(cached_z[:K + 1], dtype=np.float64).copy()
+    z_mom = np.asarray(cached_z[: K + 1], dtype=np.float64).copy()
 
     a = 1.0 / float(sigma_eff_new)
     b = -float(mu_eff_new) / float(sigma_eff_new)
@@ -1107,7 +1157,7 @@ def _univariate_affine_update_public(struct, mu_new, sigma_new, /):
     for k in range(1, K + 1):
         s = 0.0
         for i in range(k + 1):
-            s += comb(k, i) * (a ** i) * (b ** (k - i)) * z_mom[i]
+            s += comb(k, i) * (a**i) * (b ** (k - i)) * z_mom[i]
         rm_new[k] = s
 
     z_stats = _stats_from_raw_moments(*map(float, z_mom[1:5]))
@@ -1219,8 +1269,8 @@ def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, 
         rel4 = float(relative_centered_moment(l1, 4))
         cv2 = rel2
         cv = _checked_cv(cv2, subject)
-        skew = float(rel3 / (cv ** 3))
-        kurt = float(rel4 / (cv ** 4))
+        skew = float(rel3 / (cv**3))
+        kurt = float(rel4 / (cv**4))
     else:
         with np.errstate(over="ignore", invalid="ignore"):
             cv2 = float(np.expm1(d2))
@@ -1228,8 +1278,8 @@ def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, 
             e2 = cv2
             e3 = float(np.expm1(l3 - 3.0 * l1))
             e4 = float(np.expm1(l4 - 4.0 * l1))
-            skew = float((e3 - 3.0 * e2) / (cv ** 3))
-            kurt = float((e4 - 4.0 * e3 + 6.0 * e2) / (cv ** 4))
+            skew = float((e3 - 3.0 * e2) / (cv**3))
+            kurt = float((e4 - 4.0 * e3 + 6.0 * e2) / (cv**4))
 
         # When variance is finite but a higher raw moment diverges, the
         # corresponding standardized moment is +inf.  Evaluating the raw
@@ -1251,8 +1301,16 @@ def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, 
     log_std = 0.5 * log_var
     std = float(np.exp(log_std)) if log_std <= log_max else np.inf
 
-    return {"mean": mean, "var": var, "std": std, "skew": skew, "kurt": kurt,
-            "log_mean": l1, "cv": cv}
+    return {
+        "mean": mean,
+        "var": var,
+        "std": std,
+        "skew": skew,
+        "kurt": kurt,
+        "log_mean": l1,
+        "cv": cv,
+    }
+
 
 def _checked_cv(cv2, subject, /):
     """Return ``sqrt(cv2)`` after rejecting a degenerate relative variance.
@@ -1265,13 +1323,11 @@ def _checked_cv(cv2, subject, /):
         Noun phrase naming the law, used in the error message.
     """
     if np.isnan(cv2) or cv2 <= 0.0:
-        raise RuntimeError(
-            f"Degenerate {subject} variance (relative var={cv2}).")
+        raise RuntimeError(f"Degenerate {subject} variance (relative var={cv2}).")
     if np.isposinf(cv2):
         return np.inf
     if not np.isfinite(cv2):
-        raise RuntimeError(
-            f"Invalid {subject} variance (relative var={cv2}).")
+        raise RuntimeError(f"Invalid {subject} variance (relative var={cv2}).")
     return float(np.sqrt(cv2))
 
 
@@ -1304,9 +1360,7 @@ def _exp_moment_from_stats(k, stats, standardized, /):
         # only a genuinely divergent relative variance as undefined.
         if k >= 2 and not np.isfinite(float(stats["cv"])):
             return np.nan
-        return (1.0, 0.0, 1.0,
-                float(stats["skew"]),
-                float(stats["kurt"]))[k]
+        return (1.0, 0.0, 1.0, float(stats["skew"]), float(stats["kurt"]))[k]
 
     var = float(stats["var"])
     if k >= 3 and np.isfinite(float(stats["mean"])) and np.isposinf(var):
@@ -1314,7 +1368,10 @@ def _exp_moment_from_stats(k, stats, standardized, /):
         # variance, every higher central moment is also +inf; avoid the
         # indeterminate ``nan * inf`` reconstruction from standardized shape.
         return np.inf
-    return (1.0, 0.0,
-            var,
-            float(stats["skew"] * (stats["std"] ** 3)),
-            float(stats["kurt"] * (stats["std"] ** 4)))[k]
+    return (
+        1.0,
+        0.0,
+        var,
+        float(stats["skew"] * (stats["std"] ** 3)),
+        float(stats["kurt"] * (stats["std"] ** 4)),
+    )[k]

@@ -3,6 +3,7 @@
 These tests assert the defining properties of a probability density
 rather than fixed numbers, so they stay valid as the optimizer changes.
 """
+
 import numpy as np
 import pytest
 from scipy import stats
@@ -22,28 +23,27 @@ def rng():
 
 @pytest.fixture(scope="module")
 def normal_fit(rng):
-    return Distribution().fit(rng.normal(size=1500), n_components=1,
-                       support=(-np.inf, np.inf))
+    return Distribution().fit(
+        rng.normal(size=1500), n_components=1, support=(-np.inf, np.inf)
+    )
 
 
 @pytest.fixture(scope="module")
 def gamma_fit(rng):
-    return Distribution().fit(rng.gamma(2.0, 1.0, size=1500), n_components=1,
-                       support=(0, np.inf))
+    return Distribution().fit(
+        rng.gamma(2.0, 1.0, size=1500), n_components=1, support=(0, np.inf)
+    )
 
 
 @pytest.fixture(scope="module")
 def beta_fit(rng):
-    return Distribution().fit(rng.beta(2, 3, size=1500), n_components=1,
-                       support=(0, 1))
+    return Distribution().fit(rng.beta(2, 3, size=1500), n_components=1, support=(0, 1))
 
 
 @pytest.fixture(scope="module")
 def mixture_fit(rng):
-    data = np.concatenate([rng.normal(-3, 0.7, 700),
-                           rng.normal(3, 0.7, 700)])
-    return Distribution().fit(data, n_components=2, support=(-np.inf, np.inf),
-                       rng=0)
+    data = np.concatenate([rng.normal(-3, 0.7, 700), rng.normal(3, 0.7, 700)])
+    return Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
 
 
 def _integrate(c, lo, hi):
@@ -54,33 +54,42 @@ def _integrate(c, lo, hi):
 class TestDensityAxioms:
     """Properties every fitted density must satisfy."""
 
-    @pytest.mark.parametrize("fit,lo,hi", [
-        ("normal_fit", -15, 15),
-        ("gamma_fit", 0, 60),
-        ("beta_fit", 0, 1),
-        ("mixture_fit", -20, 20),
-    ])
+    @pytest.mark.parametrize(
+        "fit,lo,hi",
+        [
+            ("normal_fit", -15, 15),
+            ("gamma_fit", 0, 60),
+            ("beta_fit", 0, 1),
+            ("mixture_fit", -20, 20),
+        ],
+    )
     def test_integrates_to_one(self, fit, lo, hi, request):
         c = request.getfixturevalue(fit)
         assert _integrate(c, lo, hi) == pytest.approx(1.0, abs=1e-5)
 
-    @pytest.mark.parametrize("fit,lo,hi", [
-        ("normal_fit", -15, 15),
-        ("gamma_fit", 0, 60),
-        ("beta_fit", 0, 1),
-        ("mixture_fit", -20, 20),
-    ])
+    @pytest.mark.parametrize(
+        "fit,lo,hi",
+        [
+            ("normal_fit", -15, 15),
+            ("gamma_fit", 0, 60),
+            ("beta_fit", 0, 1),
+            ("mixture_fit", -20, 20),
+        ],
+    )
     def test_pdf_non_negative(self, fit, lo, hi, request):
         c = request.getfixturevalue(fit)
         xs = np.linspace(lo, hi, 500)
         assert np.all(c.pdf(xs) >= 0.0)
 
-    @pytest.mark.parametrize("fit,lo,hi", [
-        ("normal_fit", -15, 15),
-        ("gamma_fit", 0, 60),
-        ("beta_fit", 0, 1),
-        ("mixture_fit", -20, 20),
-    ])
+    @pytest.mark.parametrize(
+        "fit,lo,hi",
+        [
+            ("normal_fit", -15, 15),
+            ("gamma_fit", 0, 60),
+            ("beta_fit", 0, 1),
+            ("mixture_fit", -20, 20),
+        ],
+    )
     def test_cdf_monotone_and_bounded(self, fit, lo, hi, request):
         c = request.getfixturevalue(fit)
         xs = np.linspace(lo, hi, 500)
@@ -90,18 +99,22 @@ class TestDensityAxioms:
 
 
 class TestCdfPpfConsistency:
-    @pytest.mark.parametrize("fit", ["normal_fit", "gamma_fit", "beta_fit",
-                                     "mixture_fit"])
+    @pytest.mark.parametrize(
+        "fit", ["normal_fit", "gamma_fit", "beta_fit", "mixture_fit"]
+    )
     def test_cdf_ppf_roundtrip(self, fit, request):
         c = request.getfixturevalue(fit)
         p = np.array([0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999])
         assert c.cdf(c.ppf(p)) == pytest.approx(p, abs=1e-8)
 
-    @pytest.mark.parametrize("fit,lo,hi", [
-        ("normal_fit", -15, 15),
-        ("beta_fit", 0, 1),
-        ("mixture_fit", -20, 20),
-    ])
+    @pytest.mark.parametrize(
+        "fit,lo,hi",
+        [
+            ("normal_fit", -15, 15),
+            ("beta_fit", 0, 1),
+            ("mixture_fit", -20, 20),
+        ],
+    )
     def test_cdf_matches_integrated_pdf(self, fit, lo, hi, request):
         c = request.getfixturevalue(fit)
         for x in np.linspace(lo + 1e-6, hi - 1e-6, 7):
@@ -113,8 +126,9 @@ class TestCdfPpfConsistency:
         with pytest.raises(ValueError):
             normal_fit.ppf(-0.1)
 
-    @pytest.mark.parametrize("fit", ["normal_fit", "gamma_fit", "beta_fit",
-                                     "mixture_fit"])
+    @pytest.mark.parametrize(
+        "fit", ["normal_fit", "gamma_fit", "beta_fit", "mixture_fit"]
+    )
     def test_extreme_ppf_uses_spectral_cdf_inverse(self, fit, request):
         c = request.getfixturevalue(fit)
         # These probabilities lie outside the stored logit inverse-panel range
@@ -126,11 +140,14 @@ class TestCdfPpfConsistency:
 
 
 class TestMoments:
-    @pytest.mark.parametrize("fit,lo,hi", [
-        ("normal_fit", -15, 15),
-        ("gamma_fit", 0, 60),
-        ("mixture_fit", -20, 20),
-    ])
+    @pytest.mark.parametrize(
+        "fit,lo,hi",
+        [
+            ("normal_fit", -15, 15),
+            ("gamma_fit", 0, 60),
+            ("mixture_fit", -20, 20),
+        ],
+    )
     def test_mean_and_var_match_quadrature(self, fit, lo, hi, request):
         c = request.getfixturevalue(fit)
         m, _ = quad(lambda t: t * c.pdf(t), lo, hi, limit=400)
@@ -143,11 +160,13 @@ class TestMoments:
 
     def test_central_moment_two_is_var(self, normal_fit):
         assert normal_fit.moment(2, central=True) == pytest.approx(
-            normal_fit.var, rel=1e-9)
+            normal_fit.var, rel=1e-9
+        )
 
     def test_standardized_moment_three_is_skew(self, gamma_fit):
         assert gamma_fit.moment(3, standardized=True) == pytest.approx(
-            gamma_fit.skew, rel=1e-6)
+            gamma_fit.skew, rel=1e-6
+        )
 
     def test_median_is_half_quantile(self, gamma_fit):
         assert gamma_fit.median == pytest.approx(gamma_fit.ppf(0.5), abs=1e-6)
@@ -160,8 +179,7 @@ class TestLogConcavity:
         assert np.all(normal_fit.neg_log(xs, n=2) > -1e-9)
 
     def test_mode_is_stationary(self, normal_fit):
-        assert normal_fit.neg_log(normal_fit.mode, n=1) == pytest.approx(
-            0.0, abs=1e-6)
+        assert normal_fit.neg_log(normal_fit.mode, n=1) == pytest.approx(0.0, abs=1e-6)
 
     def test_mode_maximizes_pdf(self, mixture_fit):
         xs = np.linspace(-10, 10, 2000)
@@ -172,8 +190,11 @@ class TestRecovery:
     """The fit should recover the shape of a known log-concave law."""
 
     def test_normal_moments_recovered(self, rng):
-        c = Distribution().fit(rng.normal(loc=3.0, scale=2.0, size=4000),
-                        n_components=1, support=(-np.inf, np.inf))
+        c = Distribution().fit(
+            rng.normal(loc=3.0, scale=2.0, size=4000),
+            n_components=1,
+            support=(-np.inf, np.inf),
+        )
         assert c.mean == pytest.approx(3.0, abs=0.15)
         assert c.std == pytest.approx(2.0, abs=0.15)
         assert abs(c.skew) < 0.2
@@ -212,8 +233,9 @@ class TestSpectralDegradationIsGraceful:
         return np.ascontiguousarray(rng.gamma(2.0, 1.0, 4000))
 
     def test_fit_completes_and_quantiles_are_correct(self):
-        c = Distribution().fit(self._gamma_pair(), n_components=2,
-                        support=(0.0, np.inf), rng=1)
+        c = Distribution().fit(
+            self._gamma_pair(), n_components=2, support=(0.0, np.inf), rng=1
+        )
         assert c.n_components == 2
         p = np.linspace(0.002, 0.998, 60)
         q = c.ppf(p)
@@ -248,8 +270,7 @@ class TestSpectralDegradationIsGraceful:
 
         rng = np.random.default_rng(314159)
         data = np.ascontiguousarray(rng.normal(size=500))
-        c = Distribution().fit(data, n_components=1,
-                        support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(data, n_components=1, support=(-np.inf, np.inf), rng=0)
         state = c.components[0].data
 
         assert int(state["ppf_fallback"]) == 1
@@ -262,11 +283,14 @@ class TestSpectralDegradationIsGraceful:
 
     def test_ordinary_fits_do_not_fall_back(self):
         rng = np.random.default_rng(0)
-        for data, support in [(rng.normal(size=2000), (-np.inf, np.inf)),
-                              (rng.gamma(2.0, 1.0, 2000), (0.0, np.inf)),
-                              (rng.beta(2.0, 5.0, 2000), (0.0, 1.0))]:
-            c = Distribution().fit(np.ascontiguousarray(data), n_components=1,
-                            support=support, rng=0)
+        for data, support in [
+            (rng.normal(size=2000), (-np.inf, np.inf)),
+            (rng.gamma(2.0, 1.0, 2000), (0.0, np.inf)),
+            (rng.beta(2.0, 5.0, 2000), (0.0, 1.0)),
+        ]:
+            c = Distribution().fit(
+                np.ascontiguousarray(data), n_components=1, support=support, rng=0
+            )
             assert int(c.components[0].data["ppf_fallback"]) == 0
 
 
@@ -289,23 +313,29 @@ class TestMixtureCdfAgreesWithItsComponents:
     """
 
     CASES = (
-        ("bimodal", lambda r: np.concatenate([r.normal(-3, 1, 2000),
-                                              r.normal(3, 1, 2000)]),
-         (-np.inf, np.inf), 2),
-        ("overlapping", lambda r: np.concatenate([r.normal(-1, 1, 2000),
-                                                  r.normal(1, 1, 2000)]),
-         (-np.inf, np.inf), 2),
-        ("skewed half-line", lambda r: r.gamma(2.0, 1.0, 4000),
-         (0.0, np.inf), 2),
-        ("bounded", lambda r: np.concatenate([r.beta(2.0, 5.0, 2000),
-                                              r.beta(5.0, 2.0, 2000)]),
-         (0.0, 1.0), 2),
+        (
+            "bimodal",
+            lambda r: np.concatenate([r.normal(-3, 1, 2000), r.normal(3, 1, 2000)]),
+            (-np.inf, np.inf),
+            2,
+        ),
+        (
+            "overlapping",
+            lambda r: np.concatenate([r.normal(-1, 1, 2000), r.normal(1, 1, 2000)]),
+            (-np.inf, np.inf),
+            2,
+        ),
+        ("skewed half-line", lambda r: r.gamma(2.0, 1.0, 4000), (0.0, np.inf), 2),
+        (
+            "bounded",
+            lambda r: np.concatenate([r.beta(2.0, 5.0, 2000), r.beta(5.0, 2.0, 2000)]),
+            (0.0, 1.0),
+            2,
+        ),
     )
 
-    @pytest.mark.parametrize("name,builder,support,k",
-                             CASES, ids=[c[0] for c in CASES])
-    def test_mixture_cdf_matches_weighted_components(self, name, builder,
-                                                     support, k):
+    @pytest.mark.parametrize("name,builder,support,k", CASES, ids=[c[0] for c in CASES])
+    def test_mixture_cdf_matches_weighted_components(self, name, builder, support, k):
         data = np.ascontiguousarray(builder(np.random.default_rng(1)))
         c = Distribution().fit(data, n_components=k, support=support, rng=1)
         # K is explicit here, so no selection runs; a collapse would be a
@@ -328,9 +358,15 @@ class TestMixtureCdfAgreesWithItsComponents:
         # TestMixtureMassStaysInsideSupport) rather than on the
         # normalizer defect it exists to catch.
         inside = float(weighted[-1]) + float(
-            sum(w * (1.0 - float(np.asarray(comp.cdf(np.array([xs[-1]])),
-                                            dtype=float)[0]))
-                for w, comp in zip(c.weights, c.components, strict=True)))
+            sum(
+                w
+                * (
+                    1.0
+                    - float(np.asarray(comp.cdf(np.array([xs[-1]])), dtype=float)[0])
+                )
+                for w, comp in zip(c.weights, c.components, strict=True)
+            )
+        )
         assert inside > 0.0
         assert mixture == pytest.approx(weighted / inside, abs=2e-3)
 
@@ -350,16 +386,14 @@ class TestUncertifiedMassStaysNegligible:
 
     CASES = (
         ("normal", lambda r: r.normal(size=3000), (-np.inf, np.inf)),
-        ("gamma near-exponential", lambda r: r.gamma(1.05, 1.0, 3000),
-         (0.0, np.inf)),
+        ("gamma near-exponential", lambda r: r.gamma(1.05, 1.0, 3000), (0.0, np.inf)),
         ("gamma", lambda r: r.gamma(2.0, 1.0, 3000), (0.0, np.inf)),
         ("weibull", lambda r: r.weibull(1.1, 3000), (0.0, np.inf)),
         ("beta interior mode", lambda r: r.beta(2.0, 5.0, 3000), (0.0, 1.0)),
         ("beta boundary mode", lambda r: r.beta(1.1, 8.0, 3000), (0.0, 1.0)),
     )
 
-    @pytest.mark.parametrize("name,builder,support",
-                             CASES, ids=[c[0] for c in CASES])
+    @pytest.mark.parametrize("name,builder,support", CASES, ids=[c[0] for c in CASES])
     def test_uncertified_mass_is_negligible(self, name, builder, support):
         data = np.ascontiguousarray(builder(np.random.default_rng(0)))
         c = Distribution().fit(data, n_components=1, support=support, rng=0)
@@ -368,7 +402,8 @@ class TestUncertifiedMassStaysNegligible:
         assert diag["scope"] == "component"
         assert diag["uncertified_mass"] < 1e-7, (
             f"{name}: {diag['uncertified_mass']:.3e} of the probability sits "
-            "under panels that never met tolerance")
+            "under panels that never met tolerance"
+        )
         assert diag["mass_defect"] < 1e-4
 
     def test_diagnostics_available_for_mixtures_too(self):
@@ -380,7 +415,8 @@ class TestUncertifiedMassStaysNegligible:
         """
         rng = np.random.default_rng(0)
         data = np.ascontiguousarray(
-            np.concatenate([rng.normal(-3, 1, 2000), rng.normal(3, 1, 2000)]))
+            np.concatenate([rng.normal(-3, 1, 2000), rng.normal(3, 1, 2000)])
+        )
         c = Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
 
         diag = c.spectral_diagnostics
@@ -413,8 +449,7 @@ class TestNearExponentialFitsAreNotDoubled:
     @pytest.mark.parametrize("shape", [1.0, 1.02, 1.05, 1.1, 1.2])
     @pytest.mark.parametrize("seed", [0, 1, 2])
     def test_fit_tracks_the_empirical_distribution(self, shape, seed):
-        data = np.ascontiguousarray(
-            np.random.default_rng(seed).gamma(shape, 1.0, 3000))
+        data = np.ascontiguousarray(np.random.default_rng(seed).gamma(shape, 1.0, 3000))
         c = Distribution().fit(data, n_components=1, support=(0.0, np.inf), rng=0)
 
         xs = np.quantile(data, [0.1, 0.3, 0.5, 0.7, 0.9])
@@ -429,17 +464,16 @@ class TestNearExponentialFitsAreNotDoubled:
         an unseeded one would have been.  A near-exponential half-line
         fit is the case that exercised it.
         """
-        data = np.ascontiguousarray(
-            np.random.default_rng(0).gamma(1.0, 1.0, 3000))
+        data = np.ascontiguousarray(np.random.default_rng(0).gamma(1.0, 1.0, 3000))
         seeded = Distribution().fit(data, n_components=1, support=(0.0, np.inf), rng=0)
         nll = float(seeded.components[0].data["nll"])
 
-        reference = float(np.mean(
-            -np.log(np.clip(seeded.pdf(data), 1e-300, None))))
+        reference = float(np.mean(-np.log(np.clip(seeded.pdf(data), 1e-300, None))))
         assert np.isfinite(nll)
         assert reference < 1.2, (
             "fitted density assigns implausibly low likelihood to its own "
-            f"training data (mean NLL {reference:.4f})")
+            f"training data (mean NLL {reference:.4f})"
+        )
 
 
 class TestMixtureMassStaysInsideSupport:
@@ -469,16 +503,17 @@ class TestMixtureMassStaysInsideSupport:
     @staticmethod
     def _fit():
         rng = np.random.default_rng(1)
-        data = np.ascontiguousarray(np.concatenate(
-            [rng.beta(2.0, 5.0, 2000), rng.beta(5.0, 2.0, 2000)]))
-        return data, Distribution().fit(data, n_components=2,
-                                 support=(0.0, 1.0), rng=1)
+        data = np.ascontiguousarray(
+            np.concatenate([rng.beta(2.0, 5.0, 2000), rng.beta(5.0, 2.0, 2000)])
+        )
+        return data, Distribution().fit(data, n_components=2, support=(0.0, 1.0), rng=1)
 
     def test_single_component_honors_the_support(self):
         """The contract, where it currently holds."""
         rng = np.random.default_rng(1)
-        data = np.ascontiguousarray(np.concatenate(
-            [rng.beta(2.0, 5.0, 2000), rng.beta(5.0, 2.0, 2000)]))
+        data = np.ascontiguousarray(
+            np.concatenate([rng.beta(2.0, 5.0, 2000), rng.beta(5.0, 2.0, 2000)])
+        )
         c = Distribution().fit(data, n_components=1, support=(0.0, 1.0), rng=1)
         outside = np.array([-0.5, 1.5, 5.0, 30.7])
         assert np.all(np.asarray(c.pdf(outside), dtype=float) == 0.0)
@@ -494,13 +529,20 @@ class TestMixtureMassStaysInsideSupport:
         """
         _, c = self._fit()
         outside = np.array([-0.5, 1.5, 5.0, 30.7])
-        leaked = float(np.sum(
-            [w for w, comp in zip(c.weights, c.components, strict=True)
-             if float(np.asarray(comp.pdf(np.array([30.7])), dtype=float)[0]) > 0.0]
-        ))
+        leaked = float(
+            np.sum(
+                [
+                    w
+                    for w, comp in zip(c.weights, c.components, strict=True)
+                    if float(np.asarray(comp.pdf(np.array([30.7])), dtype=float)[0])
+                    > 0.0
+                ]
+            )
+        )
         assert leaked < 0.1, (
             f"a degenerate component now carries {leaked:.3f} of the weight "
-            "outside the declared support")
+            "outside the declared support"
+        )
         del outside
 
     def test_all_mass_lies_inside_the_support(self):
@@ -515,9 +557,12 @@ class TestMixtureMassStaysInsideSupport:
         unbounded.
         """
         _, c = self._fit()
-        inside = _quad(lambda t: float(np.asarray(c.pdf(np.array([t])),
-                                                  dtype=float)[0]),
-                       0.0, 1.0, limit=400)[0]
+        inside = _quad(
+            lambda t: float(np.asarray(c.pdf(np.array([t])), dtype=float)[0]),
+            0.0,
+            1.0,
+            limit=400,
+        )[0]
         assert inside == pytest.approx(1.0, abs=1e-6)
 
 
@@ -544,15 +589,17 @@ class TestNormalizationSurvivesSubnormalZ:
     """
 
     CASES = (
-        ("beta two-sided mixture",
-         lambda r: np.concatenate([r.beta(2.0, 5.0, 1200),
-                                   r.beta(5.0, 2.0, 1200)]), (0.0, 1.0), 2),
+        (
+            "beta two-sided mixture",
+            lambda r: np.concatenate([r.beta(2.0, 5.0, 1200), r.beta(5.0, 2.0, 1200)]),
+            (0.0, 1.0),
+            2,
+        ),
         ("beta boundary mode", lambda r: r.beta(1.1, 8.0, 2000), (0.0, 1.0), 1),
         ("gamma", lambda r: r.gamma(2.0, 1.0, 2000), (0.0, np.inf), 1),
     )
 
-    @pytest.mark.parametrize("name,builder,support,k",
-                             CASES, ids=[c[0] for c in CASES])
+    @pytest.mark.parametrize("name,builder,support,k", CASES, ids=[c[0] for c in CASES])
     def test_density_integrates_to_one(self, name, builder, support, k):
         data = np.ascontiguousarray(builder(np.random.default_rng(1)))
         c = Distribution().fit(data, n_components=k, support=support, rng=1)
@@ -560,18 +607,29 @@ class TestNormalizationSurvivesSubnormalZ:
         hi = support[1] if np.isfinite(support[1]) else float(data.max()) * 6.0
         total = quad(
             lambda t: float(np.asarray(c.pdf(np.array([t])), dtype=float)[0]),
-            lo, hi, limit=300)[0]
+            lo,
+            hi,
+            limit=300,
+        )[0]
         assert total == pytest.approx(1.0, abs=1e-4)
 
     def test_log_normalizer_is_finite_where_the_linear_one_underflows(self):
         """``log_Z`` must stay exact where ``Z`` would have lost its bits."""
-        data = np.ascontiguousarray(np.concatenate([
-            np.random.default_rng(1).beta(2.0, 5.0, 1200),
-            np.random.default_rng(2).beta(5.0, 2.0, 1200)]))
+        data = np.ascontiguousarray(
+            np.concatenate(
+                [
+                    np.random.default_rng(1).beta(2.0, 5.0, 1200),
+                    np.random.default_rng(2).beta(5.0, 2.0, 1200),
+                ]
+            )
+        )
         c = Distribution().fit(data, n_components=2, support=(0.0, 1.0), rng=1)
         total = quad(
             lambda t: float(np.asarray(c.pdf(np.array([t])), dtype=float)[0]),
-            0.0, 1.0, limit=300)[0]
+            0.0,
+            1.0,
+            limit=300,
+        )[0]
         assert total == pytest.approx(1.0, abs=1e-4)
 
 
@@ -593,14 +651,14 @@ class TestShapeBugsAreNotSwallowed:
 
         monkeypatch.setattr(_fitting, "_fit_natural_mixture", broken)
         rng = np.random.default_rng(0)
-        data = np.ascontiguousarray(np.concatenate(
-            [rng.normal(-3, 1, 600), rng.normal(3, 1, 600)]))
+        data = np.ascontiguousarray(
+            np.concatenate([rng.normal(-3, 1, 600), rng.normal(3, 1, 600)])
+        )
 
         with pytest.raises(ValueError, match="could not be broadcast"):
             Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
 
-    def test_a_shape_bug_in_the_auto_degree_sweep_reaches_the_caller(
-            self, monkeypatch):
+    def test_a_shape_bug_in_the_auto_degree_sweep_reaches_the_caller(self, monkeypatch):
         """The sibling path, which the EM test above cannot see.
 
         The auto-degree sweep guards its screening fits separately from
@@ -616,8 +674,9 @@ class TestShapeBugsAreNotSwallowed:
         data = np.ascontiguousarray(rng.normal(size=300))
 
         with pytest.raises(ValueError, match="operands could not be broadcast"):
-            Distribution().fit(data, n_components=1, poly_degree="auto",
-                        support=(-np.inf, np.inf))
+            Distribution().fit(
+                data, n_components=1, poly_degree="auto", support=(-np.inf, np.inf)
+            )
 
 
 class TestMinorityComponentSpectralAccuracy:
@@ -633,14 +692,14 @@ class TestMinorityComponentSpectralAccuracy:
     @staticmethod
     def _minority_mixture():
         rng = np.random.default_rng(7)
-        data = np.concatenate([rng.normal(0.0, 1.0, 2900),
-                               rng.normal(9.0, 0.4, 100)])
+        data = np.concatenate([rng.normal(0.0, 1.0, 2900), rng.normal(9.0, 0.4, 100)])
         return np.ascontiguousarray(data)
 
     def test_components_are_centered_on_themselves(self):
         """Each component normalizes around its own responsibility-weighted data."""
-        c = Distribution().fit(self._minority_mixture(), n_components=2,
-                        support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(
+            self._minority_mixture(), n_components=2, support=(-np.inf, np.inf), rng=0
+        )
         for comp in c.components:
             center = float(comp.data["fit_center"])
             scale = float(comp.data["fit_scale"])
@@ -648,16 +707,20 @@ class TestMinorityComponentSpectralAccuracy:
             z_at_peak = direction * (float(comp.mean) - center) / scale
             assert abs(z_at_peak) < 1.0, (
                 f"component at {float(comp.mean):.3f} normalized to "
-                f"center={center:.3f}, giving z={z_at_peak:.2f}")
+                f"center={center:.3f}, giving z={z_at_peak:.2f}"
+            )
 
     def test_potential_evaluates_without_catastrophic_cancellation(self):
-        c = Distribution().fit(self._minority_mixture(), n_components=2,
-                        support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(
+            self._minority_mixture(), n_components=2, support=(-np.inf, np.inf), rng=0
+        )
         for comp in c.components:
             d = comp.data
-            z = (float(d["fit_direction"])
-                 * (float(comp.mean) - float(d["fit_center"]))
-                 / float(d["fit_scale"]))
+            z = (
+                float(d["fit_direction"])
+                * (float(comp.mean) - float(d["fit_center"]))
+                / float(d["fit_scale"])
+            )
             q = np.asarray(d["q_poly"], dtype=float)
             terms = q * z ** np.arange(q.size)
             total = abs(float(terms.sum()))
@@ -665,28 +728,35 @@ class TestMinorityComponentSpectralAccuracy:
             assert ratio < 1e3, f"cancellation ratio {ratio:.2e} at z={z:.2f}"
 
     def test_mixture_cdf_equals_weighted_component_cdfs(self):
-        c = Distribution().fit(self._minority_mixture(), n_components=2,
-                        support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(
+            self._minority_mixture(), n_components=2, support=(-np.inf, np.inf), rng=0
+        )
         xs = np.concatenate([np.linspace(-4.0, 4.0, 5), np.linspace(7.0, 11.0, 5)])
         w = np.asarray(c.weights, dtype=float)
         mixture = np.asarray(c.cdf(xs), dtype=float)
-        weighted = sum(w[j] * np.asarray(c.components[j].cdf(xs), dtype=float)
-                       for j in range(c.n_components))
+        weighted = sum(
+            w[j] * np.asarray(c.components[j].cdf(xs), dtype=float)
+            for j in range(c.n_components)
+        )
         assert np.max(np.abs(mixture - weighted)) < 1e-12
 
     def test_the_pdf_identity_still_holds_exactly(self):
-        c = Distribution().fit(self._minority_mixture(), n_components=2,
-                        support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(
+            self._minority_mixture(), n_components=2, support=(-np.inf, np.inf), rng=0
+        )
         xs = np.concatenate([np.linspace(-4.0, 4.0, 5), np.linspace(7.0, 11.0, 5)])
         w = np.asarray(c.weights, dtype=float)
         mixture = np.asarray(c.pdf(xs), dtype=float)
-        weighted = sum(w[j] * np.asarray(c.components[j].pdf(xs), dtype=float)
-                       for j in range(c.n_components))
+        weighted = sum(
+            w[j] * np.asarray(c.components[j].pdf(xs), dtype=float)
+            for j in range(c.n_components)
+        )
         assert np.max(np.abs(mixture - weighted)) == 0.0
 
     def test_the_cdf_is_now_certified(self):
-        c = Distribution().fit(self._minority_mixture(), n_components=2,
-                        support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(
+            self._minority_mixture(), n_components=2, support=(-np.inf, np.inf), rng=0
+        )
         d = c.spectral_diagnostics
         assert d["uncertified_mass"] < 1e-9, d
         assert d["refinement_capped"] is False, d
@@ -713,12 +783,14 @@ class TestDegenerateComponentsAreNotSelected:
         """The guard must not suppress real structure: 3% of the mass,
         well separated, is ~90 effective samples and must survive."""
         rng = np.random.default_rng(7)
-        data = np.ascontiguousarray(np.concatenate([rng.normal(0.0, 1.0, 2900),
-                                                    rng.normal(9.0, 0.4, 100)]))
-        c = Distribution().fit(data, n_components="auto", support=(-np.inf, np.inf), rng=0)
+        data = np.ascontiguousarray(
+            np.concatenate([rng.normal(0.0, 1.0, 2900), rng.normal(9.0, 0.4, 100)])
+        )
+        c = Distribution().fit(
+            data, n_components="auto", support=(-np.inf, np.inf), rng=0
+        )
         assert c.n_components >= 2
         assert float(np.min(c.weights)) * data.size >= 20.0
-
 
 
 class TestExtremeTailQuantiles:
@@ -767,23 +839,28 @@ class TestExtremeTailQuantiles:
         c = self._normal_fit()
         assert isinstance(c.ppf(1e-30), float)
         assert c.ppf(np.array([[1e-20, 0.5], [0.9, 1e-40]])).shape == (2, 2)
-        assert np.array_equal(c.ppf(np.array([0.0, 1.0])),
-                              np.array([-np.inf, np.inf]))
+        assert np.array_equal(c.ppf(np.array([0.0, 1.0])), np.array([-np.inf, np.inf]))
 
     def test_mixtures_reach_the_same_depth(self):
         rng = np.random.default_rng(1)
-        data = np.ascontiguousarray(np.concatenate([rng.normal(-3.0, 1.0, 2000),
-                                                    rng.normal(3.0, 1.0, 2000)]))
+        data = np.ascontiguousarray(
+            np.concatenate([rng.normal(-3.0, 1.0, 2000), rng.normal(3.0, 1.0, 2000)])
+        )
         c = Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
         got = np.asarray(c.ppf(np.array([1e-13, 1e-20, 1e-60, 1e-200])), dtype=float)
         assert np.all(np.isfinite(got))
         assert np.all(np.diff(got) < 0.0)
 
-    @pytest.mark.parametrize("support,builder", [
-        ((0.0, np.inf), lambda r: r.exponential(1.0, 20000)),
-        ((0.0, 1.0), lambda r: r.beta(2.0, 5.0, 20000)),
-    ])
-    def test_finite_lower_endpoint_reaches_extreme_float64_tails(self, support, builder):
+    @pytest.mark.parametrize(
+        "support,builder",
+        [
+            ((0.0, np.inf), lambda r: r.exponential(1.0, 20000)),
+            ((0.0, 1.0), lambda r: r.beta(2.0, 5.0, 20000)),
+        ],
+    )
+    def test_finite_lower_endpoint_reaches_extreme_float64_tails(
+        self, support, builder
+    ):
         """A zero endpoint must not impose the internal-coordinate ulp floor.
 
         Boundary distances are evaluated directly in public coordinates, so
@@ -792,8 +869,11 @@ class TestExtremeTailQuantiles:
         float.  Extreme quantiles should therefore keep moving towards the edge
         instead of saturating around ``1e-16`` of the fitted scale.
         """
-        c = Distribution().fit(np.ascontiguousarray(builder(np.random.default_rng(0))),
-                        n_components=1, support=support)
+        c = Distribution().fit(
+            np.ascontiguousarray(builder(np.random.default_rng(0))),
+            n_components=1,
+            support=support,
+        )
         ps = np.array([1e-13, 1e-20, 1e-60, 1e-150, 1e-300])
         got = np.asarray(c.ppf(ps), dtype=float)
         assert np.all(np.isfinite(got))

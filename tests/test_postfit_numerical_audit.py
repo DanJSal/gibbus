@@ -19,15 +19,17 @@ def test_state_normalizer_resolves_density_window_inside_huge_data_padding():
     # O(1e6).  Without the density-defined tail breakpoints, the outer
     # Gauss--Kronrod panel samples only essentially-zero density and misses
     # about 8e-4 of the normalizer.
-    q_poly = np.array([
-        0.0,
-        7.17006415e-02,
-        2.48820199e-01,
-        -8.34627248e-02,
-        1.45135296e-02,
-        -1.21207371e-03,
-        3.88709195e-05,
-    ])
+    q_poly = np.array(
+        [
+            0.0,
+            7.17006415e-02,
+            2.48820199e-01,
+            -8.34627248e-02,
+            1.45135296e-02,
+            -1.21207371e-03,
+            3.88709195e-05,
+        ]
+    )
     status, geometry, _points, shifted_z, *_ = state_numerics(
         np.array([-np.inf, np.inf]),
         q_poly,

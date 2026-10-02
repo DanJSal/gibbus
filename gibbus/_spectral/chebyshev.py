@@ -38,7 +38,6 @@ def lobatto_nodes(degree):
     return nodes
 
 
-
 @lru_cache(maxsize=_CACHE_MAXSIZE)
 def midpoint_nodes(count):
     """Return Chebyshev midpoint nodes used for interlaced validation.
@@ -56,11 +55,10 @@ def midpoint_nodes(count):
     count = int(count)
     if count < 1:
         raise ValueError("count must be >= 1")
-    nodes = np.cos(
-        np.pi * (np.arange(count, dtype=np.float64) + 0.5) / count
-    )
+    nodes = np.cos(np.pi * (np.arange(count, dtype=np.float64) + 0.5) / count)
     nodes.setflags(write=False)
     return nodes
+
 
 @lru_cache(maxsize=_CACHE_MAXSIZE)
 def _lobatto_transform(degree):

@@ -32,8 +32,7 @@ def test_suppressed_failure_ledger_is_thread_local(monkeypatch):
 
     def worker():
         defaults.clear_suppressed_failures()
-        defaults._reraise_if_debug(
-            RuntimeError("worker"), "worker", routine=True)
+        defaults._reraise_if_debug(RuntimeError("worker"), "worker", routine=True)
         worker_records.extend(defaults.suppressed_failures())
 
     thread = threading.Thread(target=worker)

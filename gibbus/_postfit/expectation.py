@@ -25,6 +25,7 @@ def expect(potential, support, func, /, *, points=None):
         Interior quadrature breakpoints for finite integration ranges.
     """
     lo, hi = map(float, support)
+
     def integrand(x):
         # Evaluate the fitted density before the user function.  Infinite-range
         # quadrature deliberately probes very remote coordinates; for light
@@ -47,7 +48,9 @@ def expect(potential, support, func, /, *, points=None):
             raise RuntimeError("expect function must return a scalar for scalar input")
         gx = float(arr)
         if not np.isfinite(gx):
-            raise RuntimeError(f"expect function returned a non-finite value at x={x!r}")
+            raise RuntimeError(
+                f"expect function returned a non-finite value at x={x!r}"
+            )
         return float(gx * density)
 
     kwargs = {"epsabs": 1e-10, "epsrel": 1e-10, "limit": 300}
@@ -58,7 +61,11 @@ def expect(potential, support, func, /, *, points=None):
             kwargs["points"] = np.unique(pts)
     value, error = quad(integrand, lo, hi, **kwargs)
     scale = max(abs(value), 1.0)
-    if not np.isfinite(value) or not np.isfinite(error) or error > EXPECT_MAX_RELATIVE_ERROR * scale:
+    if (
+        not np.isfinite(value)
+        or not np.isfinite(error)
+        or error > EXPECT_MAX_RELATIVE_ERROR * scale
+    ):
         raise RuntimeError(
             f"expect quadrature did not converge: value={value!r}, error={error!r}"
         )
@@ -66,27 +73,45 @@ def expect(potential, support, func, /, *, points=None):
 
 
 # Gauss--Kronrod 21/10 rule (QUADPACK qk21) on [-1, 1].
-_XK21 = np.array([
-    0.995657163025808080735527280689003, 0.973906528517171720077964012084452,
-    0.930157491355708226001207180059508, 0.865063366688984510732096688423493,
-    0.780817726586416897063717578345042, 0.679409568299024406234327365114874,
-    0.562757134668604683339000099272694, 0.433395394129247190799265943165784,
-    0.294392862701460198131126603103866, 0.148874338981631210884826001129720,
-    0.0,
-])
-_WK21 = np.array([
-    0.011694638867371874278064396062192, 0.032558162307964727478818972459390,
-    0.054755896574351996031381300244580, 0.075039674810919952767043140916190,
-    0.093125454583697605535065465083366, 0.109387158802297641899210590325805,
-    0.123491976262065851077958109831074, 0.134709217311473325928054001771707,
-    0.142775938577060080797094273138717, 0.147739104901338491374841515972068,
-    0.149445554002916905664936468389821,
-])
-_WG10 = np.array([
-    0.066671344308688137593568809893332, 0.149451349150580593145776339657697,
-    0.219086362515982043995534934228163, 0.269266719309996355091226921569469,
-    0.295524224714752870173892994651338,
-])
+_XK21 = np.array(
+    [
+        0.995657163025808080735527280689003,
+        0.973906528517171720077964012084452,
+        0.930157491355708226001207180059508,
+        0.865063366688984510732096688423493,
+        0.780817726586416897063717578345042,
+        0.679409568299024406234327365114874,
+        0.562757134668604683339000099272694,
+        0.433395394129247190799265943165784,
+        0.294392862701460198131126603103866,
+        0.148874338981631210884826001129720,
+        0.0,
+    ]
+)
+_WK21 = np.array(
+    [
+        0.011694638867371874278064396062192,
+        0.032558162307964727478818972459390,
+        0.054755896574351996031381300244580,
+        0.075039674810919952767043140916190,
+        0.093125454583697605535065465083366,
+        0.109387158802297641899210590325805,
+        0.123491976262065851077958109831074,
+        0.134709217311473325928054001771707,
+        0.142775938577060080797094273138717,
+        0.147739104901338491374841515972068,
+        0.149445554002916905664936468389821,
+    ]
+)
+_WG10 = np.array(
+    [
+        0.066671344308688137593568809893332,
+        0.149451349150580593145776339657697,
+        0.219086362515982043995534934228163,
+        0.269266719309996355091226921569469,
+        0.295524224714752870173892994651338,
+    ]
+)
 _NODES = np.concatenate([-_XK21[:-1], [0.0], _XK21[-2::-1]])
 _KRONROD = np.concatenate([_WK21[:-1], [_WK21[-1]], _WK21[-2::-1]])
 _GAUSS = np.zeros(21)
@@ -94,8 +119,9 @@ _GAUSS[[1, 3, 5, 7, 9]] = _WG10
 _GAUSS[[19, 17, 15, 13, 11]] = _WG10
 
 
-def expect_vectorized(potential, support, func, /, *, points=None, epsabs=1e-10,
-                      epsrel=1e-10, limit=4000):
+def expect_vectorized(
+    potential, support, func, /, *, points=None, epsabs=1e-10, epsrel=1e-10, limit=4000
+):
     """Compute ``E[g(X)]`` with a vectorized adaptive Gauss--Kronrod rule.
 
     Same contract as :func:`expect` for integrands that accept arrays:
@@ -126,8 +152,13 @@ def expect_vectorized(potential, support, func, /, *, points=None, epsabs=1e-10,
     pts = np.asarray(points if points is not None else (), dtype=np.float64).reshape(-1)
     pts = np.unique(pts[np.isfinite(pts) & (pts > lo) & (pts < hi)])
     if pts.size == 0 and not (np.isfinite(lo) and np.isfinite(hi)):
-        pts = np.array([0.0 if not (np.isfinite(lo) or np.isfinite(hi))
-                        else (lo + 1.0 if np.isfinite(lo) else hi - 1.0)])
+        pts = np.array(
+            [
+                0.0
+                if not (np.isfinite(lo) or np.isfinite(hi))
+                else (lo + 1.0 if np.isfinite(lo) else hi - 1.0)
+            ]
+        )
     width = 1.0
     if pts.size:
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
@@ -180,10 +211,14 @@ def expect_vectorized(potential, support, func, /, *, points=None, epsabs=1e-10,
         positive = density > 0.0
         g = np.zeros_like(density)
         if np.any(positive):
-            gx = np.asarray(func(flat[positive.reshape(-1)]), dtype=np.float64).reshape(-1)
+            gx = np.asarray(func(flat[positive.reshape(-1)]), dtype=np.float64).reshape(
+                -1
+            )
             if not np.all(np.isfinite(gx)):
                 bad = flat[positive.reshape(-1)][~np.isfinite(gx)][0]
-                raise RuntimeError(f"expect function returned a non-finite value at x={bad!r}")
+                raise RuntimeError(
+                    f"expect function returned a non-finite value at x={bad!r}"
+                )
             g[positive] = gx
         values = g * density * jac
         values[~positive] = 0.0
@@ -199,7 +234,9 @@ def expect_vectorized(potential, support, func, /, *, points=None, epsabs=1e-10,
         if total_error <= tolerance or value.size >= limit:
             break
         order = np.argsort(-error)
-        needed = np.searchsorted(np.cumsum(error[order]), total_error - 0.5 * tolerance) + 1
+        needed = (
+            np.searchsorted(np.cumsum(error[order]), total_error - 0.5 * tolerance) + 1
+        )
         split = order[: min(int(needed), limit - value.size)]
         if split.size == 0:
             break
@@ -220,8 +257,10 @@ def expect_vectorized(potential, support, func, /, *, points=None, epsabs=1e-10,
     total = float(np.sum(value))
     total_error = float(np.sum(error))
     scale = max(abs(total), 1.0)
-    if not np.isfinite(total) or not np.isfinite(total_error) or (
-        total_error > EXPECT_MAX_RELATIVE_ERROR * scale
+    if (
+        not np.isfinite(total)
+        or not np.isfinite(total_error)
+        or (total_error > EXPECT_MAX_RELATIVE_ERROR * scale)
     ):
         raise RuntimeError(
             f"expect quadrature did not converge: value={total!r}, error={total_error!r}"

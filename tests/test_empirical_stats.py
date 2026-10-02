@@ -13,18 +13,23 @@ from gibbus._observations.empirical import (
 from gibbus._observations.intervals import _build_interval_observations
 
 
-def _build_empirical_stats(z, weights, max_order, support, /, *,
-                           has_lower_log=False, has_upper_log=False):
+def _build_empirical_stats(
+    z, weights, max_order, support, /, *, has_lower_log=False, has_upper_log=False
+):
     return _natural_point_stats(
-        np.asarray(z, dtype=float), weights, max_order, support,
-        has_lower_log, has_upper_log,
+        np.asarray(z, dtype=float),
+        weights,
+        max_order,
+        support,
+        has_lower_log,
+        has_upper_log,
     )
 
 
 def test_unweighted_power_moments_match_raw_means():
     z = np.array([-1.5, -0.2, 0.4, 1.7, 2.1])
     stats = _build_empirical_stats(z, None, 10, (-np.inf, np.inf))
-    expected = np.array([np.mean(z ** k) for k in range(11)])
+    expected = np.array([np.mean(z**k) for k in range(11)])
     np.testing.assert_allclose(stats.moments, expected, rtol=1e-14, atol=1e-14)
     assert stats.total_weight == pytest.approx(z.size)
     assert stats.effective_n == pytest.approx(z.size)
@@ -35,7 +40,7 @@ def test_weighted_power_moments_accept_unnormalized_weights():
     w = np.array([0.1, 2.0, 0.4, 3.0, 0.2])
     wn = w / w.sum()
     stats = _build_empirical_stats(z, w, 8, (-np.inf, np.inf))
-    expected = np.array([np.dot(wn, z ** k) for k in range(9)])
+    expected = np.array([np.dot(wn, z**k) for k in range(9)])
     np.testing.assert_allclose(stats.moments, expected, rtol=2e-14, atol=2e-14)
     assert stats.total_weight == pytest.approx(w.sum())
     assert stats.effective_n == pytest.approx(w.sum() ** 2 / np.dot(w, w))
@@ -105,13 +110,9 @@ def test_inactive_boundary_statistic_rejects_nonzero_amplitude():
 
 def test_endpoint_point_is_invalid_when_corresponding_log_basis_is_active():
     with pytest.raises(ValueError, match="positive-weight point above L"):
-        _build_empirical_stats(
-            [-1.0, 0.0], None, 2, (-1.0, 1.0), has_lower_log=True
-        )
+        _build_empirical_stats([-1.0, 0.0], None, 2, (-1.0, 1.0), has_lower_log=True)
     with pytest.raises(ValueError, match="positive-weight point below U"):
-        _build_empirical_stats(
-            [0.0, 1.0], None, 2, (-1.0, 1.0), has_upper_log=True
-        )
+        _build_empirical_stats([0.0, 1.0], None, 2, (-1.0, 1.0), has_upper_log=True)
 
 
 def test_active_log_basis_requires_finite_endpoint():
@@ -129,7 +130,7 @@ def test_approximate_mean_variance_matches_plugin_formula():
     z = np.array([-1.0, 0.0, 2.0, 3.0])
     stats = _build_empirical_stats(z, None, 8, (-np.inf, np.inf))
     k = 3
-    expected = (np.mean(z ** (2 * k)) - np.mean(z ** k) ** 2) / z.size
+    expected = (np.mean(z ** (2 * k)) - np.mean(z**k) ** 2) / z.size
     assert stats.approximate_mean_variance(k) == pytest.approx(expected)
 
 
@@ -167,7 +168,7 @@ def test_skewed_scaled_data_high_order_summary_matches_direct_computation():
     w = np.linspace(0.1, 2.0, z.size)
     stats = _build_empirical_stats(z, w, 16, (-np.inf, np.inf))
     wn = w / w.sum()
-    expected = np.array([np.sum(wn * (z ** k)) for k in range(17)])
+    expected = np.array([np.sum(wn * (z**k)) for k in range(17)])
     np.testing.assert_allclose(stats.moments, expected, rtol=2e-13, atol=2e-13)
 
 
@@ -186,9 +187,9 @@ def test_uniform_power_moments_match_direct_quadrature():
         expected = 0.0
         for (lo, hi), w in zip(intervals, weights, strict=True):
             if hi == lo:
-                row = lo ** k
+                row = lo**k
             else:
-                row = quad(lambda z, k=k: z ** k, lo, hi)[0] / (hi - lo)
+                row = quad(lambda z, k=k: z**k, lo, hi)[0] / (hi - lo)
             expected += w * row
         assert got[k] == pytest.approx(expected, rel=2e-12, abs=2e-12)
 
@@ -199,7 +200,7 @@ def test_uniform_power_moments_have_stable_point_limit():
     intervals = np.column_stack([points - eps, points + eps])
     weights = np.array([0.2, 0.3, 0.5])
     got = _uniform_power_moments(intervals, weights, 6)
-    expected = np.array([np.dot(weights, points ** k) for k in range(7)])
+    expected = np.array([np.dot(weights, points**k) for k in range(7)])
     assert np.allclose(got, expected, rtol=2e-9, atol=2e-9)
 
 
@@ -217,7 +218,9 @@ def test_uniform_boundary_log_average_allows_positive_width_touching_endpoint():
 def test_zero_width_endpoint_log_statistic_is_explicitly_rejected():
     intervals = np.array([[0.0, 0.0], [0.2, 0.4]], dtype=float)
     weights = np.array([0.5, 0.5], dtype=float)
-    with pytest.raises(ValueError, match="zero-width observation on an active boundary"):
+    with pytest.raises(
+        ValueError, match="zero-width observation on an active boundary"
+    ):
         _uniform_boundary_log_expectation(intervals, weights, 0.0, "lower")
 
 

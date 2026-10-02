@@ -285,9 +285,7 @@ def _check_optional_fit_controls(request, /):
     if request.em_max_iter is not None:
         em_max_iter = _as_integer(request.em_max_iter, "em_max_iter")
         if em_max_iter < 0:
-            raise ValueError(
-                f"em_max_iter must be >= 0 or None, got {em_max_iter}."
-            )
+            raise ValueError(f"em_max_iter must be >= 0 or None, got {em_max_iter}.")
     if request.em_tol is not None:
         try:
             em_tol = float(request.em_tol)
@@ -296,9 +294,7 @@ def _check_optional_fit_controls(request, /):
                 f"em_tol must be a positive float or None, got {request.em_tol!r}."
             ) from None
         if not em_tol > 0.0 or em_tol in (float("inf"),) or np.isnan(em_tol):
-            raise ValueError(
-                f"em_tol must be finite and > 0 or None, got {em_tol}."
-            )
+            raise ValueError(f"em_tol must be finite and > 0 or None, got {em_tol}.")
 
 
 def _prepare_fit_request(model_type, request, /):
@@ -348,9 +344,7 @@ def _prepare_fit_request(model_type, request, /):
         support = tuple(_seed_user_support(seed_components[0].data).tolist())
 
         seed_data = seed_components[0].data
-        allowed = np.asarray(
-            seed_data["boundary_allowed"], dtype=bool
-        ).reshape(-1)
+        allowed = np.asarray(seed_data["boundary_allowed"], dtype=bool).reshape(-1)
         if allowed.size != 2:
             raise ValueError("seed has invalid boundary_allowed field")
         if log_boundary_lower is None:
@@ -358,17 +352,16 @@ def _prepare_fit_request(model_type, request, /):
         if log_boundary_upper is None:
             log_boundary_upper = bool(allowed[1])
 
-        if (request.component_options is not None
-                and len(request.component_options) != n_components):
+        if (
+            request.component_options is not None
+            and len(request.component_options) != n_components
+        ):
             raise ValueError(
                 f"component_options length ({len(request.component_options)}) "
                 f"must match init_from.n_components ({n_components})."
             )
     else:
-        is_auto = (
-            isinstance(n_components, str)
-            and n_components.lower() == "auto"
-        )
+        is_auto = isinstance(n_components, str) and n_components.lower() == "auto"
         if not is_auto:
             try:
                 n_components = _as_integer(n_components, "n_components")
@@ -512,11 +505,18 @@ def _prepare_mixture_context(request, /):
     log_boundary_lower = _boundary_policy(request.log_boundary_lower, support[0])
     log_boundary_upper = _boundary_policy(request.log_boundary_upper, support[1])
     if log_boundary_lower is True and not np.isfinite(support[0]):
-        raise ValueError("log_boundary_lower=True requires a finite lower support endpoint")
+        raise ValueError(
+            "log_boundary_lower=True requires a finite lower support endpoint"
+        )
     if log_boundary_upper is True and not np.isfinite(support[1]):
-        raise ValueError("log_boundary_upper=True requires a finite upper support endpoint")
+        raise ValueError(
+            "log_boundary_upper=True requires a finite upper support endpoint"
+        )
     log_boundary_lower, log_boundary_upper = _resolve_endpoint_observations(
-        samples_rk, support, log_boundary_lower, log_boundary_upper,
+        samples_rk,
+        support,
+        log_boundary_lower,
+        log_boundary_upper,
         norm["weights"],
     )
 
@@ -537,8 +537,7 @@ def _prepare_mixture_context(request, /):
         log_boundary_lower=log_boundary_lower,
         log_boundary_upper=log_boundary_upper,
         em_max_iter=(
-            EM_MAX_ITER if request.em_max_iter is None
-            else request.em_max_iter
+            EM_MAX_ITER if request.em_max_iter is None else request.em_max_iter
         ),
         em_tol=EM_TOL if request.em_tol is None else request.em_tol,
     )
@@ -700,8 +699,9 @@ def _natural_degree_policy(global_degree, component_options, /):
     return policies
 
 
-def _fit_mixture_with_boundary_policy(context, n_components, degree_policy,
-                                      responsibilities, paths, /):
+def _fit_mixture_with_boundary_policy(
+    context, n_components, degree_policy, responsibilities, paths, /
+):
     """Fit the final mixture, deciding ``"auto"`` boundary terms from the data.
 
     The mixture is fitted with every allowed or automatic term; each
@@ -735,9 +735,17 @@ def _fit_mixture_with_boundary_policy(context, n_components, degree_policy,
 
     def fit(lo, up):
         return _fit_natural_mixture(
-            context.support, rows, n_components, degree_policy, lo, up,
-            context.observation_weights, rng=context.fit_generator,
-            responsibilities=responsibilities, paths=paths, **options,
+            context.support,
+            rows,
+            n_components,
+            degree_policy,
+            lo,
+            up,
+            context.observation_weights,
+            rng=context.fit_generator,
+            responsibilities=responsibilities,
+            paths=paths,
+            **options,
         )
 
     lower, upper = context.log_boundary_lower, context.log_boundary_upper
@@ -747,9 +755,16 @@ def _fit_mixture_with_boundary_policy(context, n_components, degree_policy,
     def fit_reduced(model, lo, up):
         locked = tuple(int(c.spec.requested_poly_degree) for c in model.components)
         return _fit_natural_mixture(
-            context.support, rows, n_components, locked, lo, up,
-            context.observation_weights, rng=context.fit_generator,
-            responsibilities=model.responsibilities, paths=(("direct", "raw"),),
+            context.support,
+            rows,
+            n_components,
+            locked,
+            lo,
+            up,
+            context.observation_weights,
+            rng=context.fit_generator,
+            responsibilities=model.responsibilities,
+            paths=(("direct", "raw"),),
             **options,
         )
 
@@ -757,7 +772,8 @@ def _fit_mixture_with_boundary_policy(context, n_components, degree_policy,
         values = [0.0]
         for component in model.components:
             index = (
-                component.spec.physical_lower_a_index if side == "lower"
+                component.spec.physical_lower_a_index
+                if side == "lower"
                 else component.spec.physical_upper_a_index
             )
             if index is not None:
@@ -799,15 +815,18 @@ def _components_from_natural_mixture(fitted, observation_weights, boundary_p_val
     """
     r = np.asarray(fitted.responsibilities, dtype=np.float64)
     w = (
-        np.ones(r.shape[0], dtype=np.float64) if observation_weights is None
+        np.ones(r.shape[0], dtype=np.float64)
+        if observation_weights is None
         else np.asarray(observation_weights, dtype=np.float64)
     )
     components = [
-        _Component(_pack_natural_component(
-            component,
-            effective_n=_effective_n(r.shape[0], w * r[:, k]),
-            boundary_p_values=boundary_p_values,
-        ))
+        _Component(
+            _pack_natural_component(
+                component,
+                effective_n=_effective_n(r.shape[0], w * r[:, k]),
+                boundary_p_values=boundary_p_values,
+            )
+        )
         for k, component in enumerate(fitted.components)
     ]
     em_diag = {
@@ -864,9 +883,7 @@ def _run_mixture_fit(request, /):
 
     component_options = initialization.component_options
     if request.seed_components is not None:
-        component_options = _resolve_seeded_component_options(
-            request, initialization
-        )
+        component_options = _resolve_seeded_component_options(request, initialization)
 
     poly_degree = request.poly_degree
     if poly_degree is None:
@@ -879,15 +896,22 @@ def _run_mixture_fit(request, /):
         # than restricting it to the first candidate.
         responsibilities = None
     paths = (
-        (("ladder", "raw"), ("ladder", "sharpened"),
-         ("direct", "raw"), ("direct", "sharpened"))
-        if request.progressive else
-        (("direct", "raw"), ("direct", "sharpened"))
+        (
+            ("ladder", "raw"),
+            ("ladder", "sharpened"),
+            ("direct", "raw"),
+            ("direct", "sharpened"),
+        )
+        if request.progressive
+        else (("direct", "raw"), ("direct", "sharpened"))
     )
     try:
         fitted, boundary_p_values = _fit_mixture_with_boundary_policy(
-            context, initialization.n_components, degree_policy,
-            responsibilities, paths,
+            context,
+            initialization.n_components,
+            degree_policy,
+            responsibilities,
+            paths,
         )
     except ValueError as exc:
         if "point-mixture component is not estimable" in str(exc):
@@ -900,11 +924,16 @@ def _run_mixture_fit(request, /):
             ) from exc
         raise
     components, weights, em_diagnostics = _components_from_natural_mixture(
-        fitted, context.observation_weights, boundary_p_values,
+        fitted,
+        context.observation_weights,
+        boundary_p_values,
     )
     if context.samples_rk.shape[1] == 2:
         ident = _interval_identifiability_diagnostic(
-            context.samples_rk, components, fitted.log_likelihood, context.support,
+            context.samples_rk,
+            components,
+            fitted.log_likelihood,
+            context.support,
             obs_weights=context.observation_weights,
         )
         if ident is not None:

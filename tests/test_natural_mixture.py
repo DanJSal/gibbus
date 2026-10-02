@@ -39,7 +39,15 @@ def test_joint_mixture_objective_has_exact_derivatives(censored):
     w = np.full(rows.shape[0], 1.0 / rows.shape[0])
     responsibilities = np.column_stack([x < 0.0, x >= 0.0]).astype(float)
     fit = _run_natural_em(
-        _REAL_LINE, rows, 4, False, False, w, responsibilities, max_rounds=1, max_em_steps=2
+        _REAL_LINE,
+        rows,
+        4,
+        False,
+        False,
+        w,
+        responsibilities,
+        max_rounds=1,
+        max_em_steps=2,
     )
     problems = [
         _ComponentProblem(_REAL_LINE, rows, 4, False, False, w * responsibilities[:, k])
@@ -53,7 +61,13 @@ def test_joint_mixture_objective_has_exact_derivatives(censored):
     x0 = joint.join([c.params for c in fit.components], np.log(fit.weights))
     evaluation = joint(x0)
     assert -evaluation.nll == pytest.approx(
-        _e_step(problems, layouts, [c.params for c in fit.components], np.log(fit.weights), w)[0],
+        _e_step(
+            problems,
+            layouts,
+            [c.params for c in fit.components],
+            np.log(fit.weights),
+            w,
+        )[0],
         abs=1e-12,
     )
     step = 1e-6
@@ -91,6 +105,7 @@ def test_mixture_fit_is_certified_and_beats_production(censored):
     # The accepted history never decreases (EM steps and polishes are monotone).
     assert np.all(np.diff(fit.history) >= -1e-12)
 
+
 def test_mixture_auto_degree_selects_per_component_then_locks():
     """A Gaussian and quartic component may retain different selected degrees."""
     from scipy.stats import gennorm
@@ -100,8 +115,8 @@ def test_mixture_auto_degree_selects_per_component_then_locks():
     right = gennorm.rvs(beta=4.0, size=600, random_state=rng) + 3.0
     x = np.ascontiguousarray(np.concatenate([left, right]))
     responsibilities = np.zeros((x.size, 2), dtype=np.float64)
-    responsibilities[:left.size, 0] = 1.0
-    responsibilities[left.size:, 1] = 1.0
+    responsibilities[: left.size, 0] = 1.0
+    responsibilities[left.size :, 1] = 1.0
 
     fit = _fit_natural_mixture(
         _REAL_LINE,
@@ -187,34 +202,36 @@ def test_default_finalist_continuation_matches_restart():
 
 
 def test_compact_duplicate_interval_mstep_preserves_reliability_weights():
-    rows = np.array([
-        [-2.0, -1.5],
-        [-2.0, -1.5],
-        [-0.5, 0.0],
-        [-0.5, 0.0],
-        [-0.5, 0.0],
-        [1.0, 1.5],
-    ])
+    rows = np.array(
+        [
+            [-2.0, -1.5],
+            [-2.0, -1.5],
+            [-0.5, 0.0],
+            [-0.5, 0.0],
+            [-0.5, 0.0],
+            [1.0, 1.5],
+        ]
+    )
     observation_weights = np.array([1.0, 3.0, 2.0, 5.0, 4.0, 6.0])
     observation_weights /= observation_weights.sum()
-    problem = _ComponentProblem(
-        _REAL_LINE, rows, 4, False, False, observation_weights
-    )
+    problem = _ComponentProblem(_REAL_LINE, rows, 4, False, False, observation_weights)
     distinct, inverse = problem.distinct_rows
     responsibility = np.linspace(0.2, 0.8, distinct.shape[0])
 
-    expanded = problem.objective(
-        observation_weights * responsibility[inverse]
-    )
+    expanded = problem.objective(observation_weights * responsibility[inverse])
     compact = problem.compact_objective(responsibility, observation_weights)
 
     np.testing.assert_allclose(
-        compact.observations.intervals, expanded.observations.intervals,
-        rtol=0.0, atol=0.0,
+        compact.observations.intervals,
+        expanded.observations.intervals,
+        rtol=0.0,
+        atol=0.0,
     )
     np.testing.assert_allclose(
-        compact.observations.weights, expanded.observations.weights,
-        rtol=1e-15, atol=1e-15,
+        compact.observations.weights,
+        expanded.observations.weights,
+        rtol=1e-15,
+        atol=1e-15,
     )
     assert compact.observations.effective_n == pytest.approx(
         expanded.observations.effective_n, rel=5e-15
@@ -224,16 +241,18 @@ def test_compact_duplicate_interval_mstep_preserves_reliability_weights():
 
 def test_duplicate_interval_coordinate_matches_expanded_weighted_geometry():
     """Compressing exact interval duplicates does not change the fit coordinate."""
-    rows = np.array([
-        [-3.0, -2.5],
-        [-3.0, -2.5],
-        [-0.5, 0.25],
-        [-0.5, 0.25],
-        [-0.5, 0.25],
-        [1.0, 2.0],
-        [3.0, 3.5],
-        [3.0, 3.5],
-    ])
+    rows = np.array(
+        [
+            [-3.0, -2.5],
+            [-3.0, -2.5],
+            [-0.5, 0.25],
+            [-0.5, 0.25],
+            [-0.5, 0.25],
+            [1.0, 2.0],
+            [3.0, 3.5],
+            [3.0, 3.5],
+        ]
+    )
     weights = np.array([1.0, 4.0, 2.0, 7.0, 3.0, 5.0, 6.0, 2.0])
     weights /= weights.sum()
 
@@ -250,15 +269,17 @@ def test_duplicate_interval_coordinate_matches_expanded_weighted_geometry():
 
 def test_real_line_mass_only_estep_matches_general_interval_reducer():
     """The finite real-line E-step specialization returns the generic masses."""
-    rows = np.array([
-        [-2.0, -1.5],
-        [-2.0, -1.5],
-        [-0.75, -0.25],
-        [0.0, 0.5],
-        [0.0, 0.5],
-        [1.0, 1.75],
-        [2.25, 3.0],
-    ])
+    rows = np.array(
+        [
+            [-2.0, -1.5],
+            [-2.0, -1.5],
+            [-0.75, -0.25],
+            [0.0, 0.5],
+            [0.0, 0.5],
+            [1.0, 1.75],
+            [2.25, 3.0],
+        ]
+    )
     weights = np.full(rows.shape[0], 1.0 / rows.shape[0])
     problem = _ComponentProblem(_REAL_LINE, rows, 4, False, False, weights)
     distinct, inverse = problem.distinct_rows

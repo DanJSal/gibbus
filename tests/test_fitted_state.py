@@ -9,8 +9,10 @@ from gibbus import Distribution
 def test_point_state_has_canonical_natural_layout():
     rng = np.random.default_rng(104)
     fitted = Distribution().fit(
-        rng.normal(0.5, 1.2, 350), n_components=1,
-        poly_degree=4, support=(-np.inf, np.inf),
+        rng.normal(0.5, 1.2, 350),
+        n_components=1,
+        poly_degree=4,
+        support=(-np.inf, np.inf),
     )
     state = fitted.components[0].data
     names = set(state.dtype.names)
@@ -25,8 +27,10 @@ def test_point_state_has_canonical_natural_layout():
 def test_state_missing_required_fields_is_not_loadable():
     rng = np.random.default_rng(105)
     fitted = Distribution().fit(
-        rng.normal(size=200), n_components=1,
-        support=(-np.inf, np.inf), poly_degree=4,
+        rng.normal(size=200),
+        n_components=1,
+        support=(-np.inf, np.inf),
+        poly_degree=4,
     )
     state = fitted.data
     kept = [name for name in state.dtype.names if name != "q_poly"]
@@ -41,7 +45,9 @@ def test_reflected_upper_half_line_round_trips_pdf_cdf_ppf_and_potential():
     rng = np.random.default_rng(105)
     data = 8.0 - rng.gamma(2.0, 1.0, 450)
     fitted = Distribution().fit(
-        data, n_components=1, poly_degree=4,
+        data,
+        n_components=1,
+        poly_degree=4,
         support=(-np.inf, 8.0),
     )
     state = fitted.components[0].data
@@ -60,8 +66,10 @@ def test_reflected_upper_half_line_round_trips_pdf_cdf_ppf_and_potential():
 def test_native_state_affine_transform_preserves_distribution_identity():
     rng = np.random.default_rng(106)
     base = Distribution().fit(
-        5.0 - rng.gamma(2.0, 1.0, 400), n_components=1,
-        poly_degree=4, support=(-np.inf, 5.0),
+        5.0 - rng.gamma(2.0, 1.0, 400),
+        n_components=1,
+        poly_degree=4,
+        support=(-np.inf, 5.0),
     )
     moved = base.transform(mu=2.0, sigma=3.0, pullback=False, inplace=False)
     assert moved.support[1] == pytest.approx(17.0)
@@ -77,8 +85,10 @@ def _saved_state():
     """Return the packed state of a plain single-component fit."""
     rng = np.random.default_rng(311)
     fitted = Distribution().fit(
-        rng.normal(size=400), n_components=1,
-        support=(-np.inf, np.inf), rng=0,
+        rng.normal(size=400),
+        n_components=1,
+        support=(-np.inf, np.inf),
+        rng=0,
     )
     return np.array(fitted.data, copy=True)
 
@@ -99,7 +109,8 @@ def test_reported_support_is_exactly_the_requested_support():
     coordinate = _build_fit_coordinate((0.0, np.inf), data, None, None)
     assert coordinate.from_canonical(np.asarray(coordinate.canonical_support))[0] < 0.0
     model = Distribution().fit(
-        data, n_components=1, poly_degree=4, support=(0.0, np.inf), rng=0)
+        data, n_components=1, poly_degree=4, support=(0.0, np.inf), rng=0
+    )
     np.testing.assert_array_equal(model.support, [0.0, np.inf])
     np.testing.assert_array_equal(model.data["support"], [0.0, np.inf])
     assert model.ppf(0.0) == 0.0
@@ -139,7 +150,9 @@ def test_load_rejects_invalid_mixture_weights():
     rng = np.random.default_rng(312)
     fitted = Distribution().fit(
         np.concatenate([rng.normal(-2.0, 0.5, 300), rng.normal(2.0, 0.5, 300)]),
-        n_components=2, support=(-np.inf, np.inf), rng=0,
+        n_components=2,
+        support=(-np.inf, np.inf),
+        rng=0,
     )
     state = np.array(fitted.data, copy=True)
     weights = np.asarray(state["weights"]).copy()

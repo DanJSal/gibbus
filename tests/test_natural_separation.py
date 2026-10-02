@@ -51,14 +51,16 @@ def _naive_float_bernstein(coefficients, lower, upper, /):
     power = np.zeros(source.size)
     basis = np.array([1.0])
     for coefficient in source:
-        power[:basis.size] += coefficient * basis
+        power[: basis.size] += coefficient * basis
         if basis.size < source.size:
             basis = np.polynomial.polynomial.polymul(basis, affine)
     n = source.size - 1
-    return np.array([
-        sum(power[k] * math.comb(i, k) / math.comb(n, k) for k in range(i + 1))
-        for i in range(n + 1)
-    ])
+    return np.array(
+        [
+            sum(power[k] * math.comb(i, k) / math.comb(n, k) for k in range(i + 1))
+            for i in range(n + 1)
+        ]
+    )
 
 
 def _random_nonnegative_curvature(support, degree, rng, /):
@@ -228,7 +230,9 @@ def test_denominator_clearing_matches_direct_full_curvature_and_derivative(
 
     sign_scale = max(1.0, float(np.max(np.abs(expected_sign))))
     stationary_scale = max(1.0, float(np.max(np.abs(expected_stationary))))
-    np.testing.assert_allclose(actual_sign, expected_sign, rtol=2e-12, atol=2e-12 * sign_scale)
+    np.testing.assert_allclose(
+        actual_sign, expected_sign, rtol=2e-12, atol=2e-12 * sign_scale
+    )
     np.testing.assert_allclose(
         actual_stationary,
         expected_stationary,
@@ -336,9 +340,13 @@ def test_real_stationary_polynomial_roots_are_full_curvature_stationary_points(
 
 def test_separation_algebra_rejects_invalid_boundary_amplitudes():
     with pytest.raises(ValueError, match="boundary amplitudes"):
-        _curvature_polynomials(np.array([1.0]), (0.0, np.inf), np.array([-1e-12, np.nan]))
+        _curvature_polynomials(
+            np.array([1.0]), (0.0, np.inf), np.array([-1e-12, np.nan])
+        )
     with pytest.raises(ValueError, match="finite endpoint"):
-        _curvature_polynomials(np.array([1.0]), (-np.inf, np.inf), np.array([0.0, np.nan]))
+        _curvature_polynomials(
+            np.array([1.0]), (-np.inf, np.inf), np.array([0.0, np.nan])
+        )
 
 
 @pytest.mark.parametrize(
@@ -347,15 +355,29 @@ def test_separation_algebra_rejects_invalid_boundary_amplitudes():
         (np.array([2.0]), (-np.inf, np.inf), (np.nan, np.nan), 2.0, 2.0),
         (np.array([0.0, 1.0]), (-np.inf, np.inf), (np.nan, np.nan), -np.inf, np.inf),
         (np.array([0.0, -1.0]), (-np.inf, np.inf), (np.nan, np.nan), np.inf, -np.inf),
-        (np.array([0.0, 0.0, 1.0]), (-np.inf, np.inf), (np.nan, np.nan), np.inf, np.inf),
-        (np.array([0.0, 0.0, -1.0]), (-np.inf, np.inf), (np.nan, np.nan), -np.inf, -np.inf),
+        (
+            np.array([0.0, 0.0, 1.0]),
+            (-np.inf, np.inf),
+            (np.nan, np.nan),
+            np.inf,
+            np.inf,
+        ),
+        (
+            np.array([0.0, 0.0, -1.0]),
+            (-np.inf, np.inf),
+            (np.nan, np.nan),
+            -np.inf,
+            -np.inf,
+        ),
         (np.array([0.0, 0.0, 0.0]), (-np.inf, np.inf), (np.nan, np.nan), 0.0, 0.0),
     ],
 )
 def test_infinite_tail_limits_follow_exact_effective_degree(
     q_d2, support, amplitudes, expected_lower, expected_upper
 ):
-    values = _curvature_boundary_values(q_d2, support, np.asarray(amplitudes, dtype=float))
+    values = _curvature_boundary_values(
+        q_d2, support, np.asarray(amplitudes, dtype=float)
+    )
     assert values.lower_tail == expected_lower
     assert values.upper_tail == expected_upper
     assert values.lower_endpoint is None
@@ -365,7 +387,9 @@ def test_infinite_tail_limits_follow_exact_effective_degree(
 def test_half_line_tail_and_regular_or_singular_endpoint_are_distinct():
     q_d2 = np.array([-0.3, 0.2, 0.04])
     regular = _curvature_boundary_values(q_d2, (1.0, np.inf), np.array([0.0, np.nan]))
-    singular = _curvature_boundary_values(q_d2, (1.0, np.inf), np.array([1e-300, np.nan]))
+    singular = _curvature_boundary_values(
+        q_d2, (1.0, np.inf), np.array([1e-300, np.nan])
+    )
 
     assert regular.lower_endpoint == pytest.approx(float(polyval(1.0, q_d2)))
     assert singular.lower_endpoint == np.inf
@@ -388,7 +412,9 @@ def test_bounded_mixed_amplitude_endpoint_values_include_opposite_boundary_term(
     support = (-1.0, 3.0)
     q_d2 = np.array([0.4, -0.2, 0.1])
     values = _curvature_boundary_values(q_d2, support, np.array([0.0, 0.8]))
-    expected_lower = float(polyval(support[0], q_d2)) + 0.8 / (support[1] - support[0]) ** 2
+    expected_lower = (
+        float(polyval(support[0], q_d2)) + 0.8 / (support[1] - support[0]) ** 2
+    )
     assert values.lower_endpoint == pytest.approx(expected_lower)
     assert values.upper_endpoint == np.inf
     assert values.lower_tail is None
@@ -405,13 +431,13 @@ def test_bounded_mixed_amplitude_endpoint_values_include_opposite_boundary_term(
         (np.array([-0.1, 0.3, 0.5, -0.2, 0.04, 0.01]), (0.1, 4.0)),
     ],
 )
-def test_bernstein_interval_bounds_enclose_dense_polynomial_values(coefficients, interval):
+def test_bernstein_interval_bounds_enclose_dense_polynomial_values(
+    coefficients, interval
+):
     lower, upper = interval
     grid = np.linspace(lower, upper, 4001)
     values = polyval(grid, coefficients)
-    bound_lower, bound_upper = _bernstein_interval_bounds(
-        coefficients, lower, upper, 3
-    )
+    bound_lower, bound_upper = _bernstein_interval_bounds(coefficients, lower, upper, 3)
     scale = max(1.0, float(np.max(np.abs(values))))
     assert bound_lower <= float(np.min(values)) + 2e-13 * scale
     assert bound_upper >= float(np.max(values)) - 2e-13 * scale
@@ -420,8 +446,7 @@ def test_bernstein_interval_bounds_enclose_dense_polynomial_values(coefficients,
 def test_bernstein_subdivision_monotonically_tightens_enclosure():
     coefficients = np.array([0.2, -1.7, 0.4, 1.2, -0.3, 0.04])
     bounds = [
-        _bernstein_interval_bounds(coefficients, -1.3, 2.1, depth)
-        for depth in range(6)
+        _bernstein_interval_bounds(coefficients, -1.3, 2.1, depth) for depth in range(6)
     ]
     for earlier, later in itertools.pairwise(bounds):
         assert later[0] >= earlier[0] - 2e-14
@@ -486,13 +511,15 @@ def test_bernstein_bounds_prune_strictly_positive_and_negative_intervals():
 def test_bernstein_root_isolation_finds_multiple_simple_roots():
     roots = np.array([-2.5, -0.7, 0.4, 1.8])
     coefficients = np.polynomial.polynomial.polyfromroots(roots)
-    isolated = _stationary_root_brackets(
-        coefficients, (-np.inf, np.inf), 1e-8, 80
-    )
+    isolated = _stationary_root_brackets(coefficients, (-np.inf, np.inf), 1e-8, 80)
     assert not isolated.identically_zero
     for root in roots:
-        assert any(bracket.lower <= root <= bracket.upper for bracket in isolated.brackets)
-    assert sum(bracket.sign_variations == 1 for bracket in isolated.brackets) >= roots.size
+        assert any(
+            bracket.lower <= root <= bracket.upper for bracket in isolated.brackets
+        )
+    assert (
+        sum(bracket.sign_variations == 1 for bracket in isolated.brackets) >= roots.size
+    )
 
 
 def test_bernstein_root_isolation_retains_repeated_root_conservatively():
@@ -501,14 +528,17 @@ def test_bernstein_root_isolation_retains_repeated_root_conservatively():
     isolated = _stationary_root_brackets(coefficients, (-2.0, 2.0), 2e-7, 80)
     assert any(bracket.lower <= 0.137 <= bracket.upper for bracket in isolated.brackets)
     repeated = [
-        bracket for bracket in isolated.brackets
+        bracket
+        for bracket in isolated.brackets
         if bracket.lower <= 0.137 <= bracket.upper
     ]
     assert min(bracket.upper - bracket.lower for bracket in repeated) <= 2.1e-7
 
 
 def test_bernstein_root_isolation_prunes_polynomial_with_no_real_roots():
-    isolated = _stationary_root_brackets(np.array([1.0, 0.0, 1.0]), (-np.inf, np.inf), 1e-8, 80)
+    isolated = _stationary_root_brackets(
+        np.array([1.0, 0.0, 1.0]), (-np.inf, np.inf), 1e-8, 80
+    )
     assert isolated.brackets == ()
     assert not isolated.identically_zero
 
@@ -523,9 +553,13 @@ def test_bernstein_root_isolation_respects_support_restriction():
     coefficients = np.polynomial.polynomial.polyfromroots([-4.0, -0.5, 1.0, 5.0])
     isolated = _stationary_root_brackets(coefficients, (0.0, 3.0), 1e-8, 80)
     assert isolated.brackets
-    assert all(0.0 <= bracket.lower <= bracket.upper <= 3.0 for bracket in isolated.brackets)
+    assert all(
+        0.0 <= bracket.lower <= bracket.upper <= 3.0 for bracket in isolated.brackets
+    )
     assert any(bracket.lower <= 1.0 <= bracket.upper for bracket in isolated.brackets)
-    assert not any(bracket.lower <= -0.5 <= bracket.upper for bracket in isolated.brackets)
+    assert not any(
+        bracket.lower <= -0.5 <= bracket.upper for bracket in isolated.brackets
+    )
 
 
 @pytest.mark.parametrize("degree", [3, 5, 7, 9, 11, 13])
@@ -533,9 +567,7 @@ def test_bernstein_root_isolation_contains_random_companion_real_roots(degree):
     rng = np.random.default_rng(41000 + degree)
     for _ in range(30):
         coefficients = rng.normal(size=degree + 1)
-        isolated = _stationary_root_brackets(
-            coefficients, (-3.0, 2.0), 2e-8, 90
-        )
+        isolated = _stationary_root_brackets(coefficients, (-3.0, 2.0), 2e-8, 90)
         roots = np.polynomial.Polynomial(coefficients).roots()
         real_roots = [
             float(root.real)
@@ -554,7 +586,9 @@ def test_bernstein_root_isolation_recovers_repeated_root_on_split_boundary():
     isolated = _stationary_root_brackets(
         np.array([0.0, 0.0, 1.0]), (-1.0, 1.0), 1e-10, 40
     )
-    assert any(bracket.lower == 0.0 and bracket.upper == 0.0 for bracket in isolated.brackets)
+    assert any(
+        bracket.lower == 0.0 and bracket.upper == 0.0 for bracket in isolated.brackets
+    )
 
 
 @pytest.mark.parametrize("degree", [3, 5, 7, 9, 11, 13])
@@ -563,9 +597,7 @@ def test_bernstein_root_isolation_matches_exact_fraction_sturm_counts(degree):
     for _ in range(12):
         coefficients = rng.normal(size=degree + 1)
         coefficients *= 2.0 ** int(rng.integers(-12, 13))
-        isolated = _stationary_root_brackets(
-            coefficients, (-3.0, 2.0), 5e-9, 100
-        )
+        isolated = _stationary_root_brackets(coefficients, (-3.0, 2.0), 5e-9, 100)
         sturm = _fraction_sturm_sequence(coefficients)
         exact_total = _fraction_root_count(sturm, -3.0, 2.0)
         bracket_total = sum(
@@ -596,7 +628,9 @@ def test_separator_certifies_real_line_double_root_minima_with_tolerance():
     curvature = np.polynomial.polynomial.polymul(
         np.array([1.0, 0.0, -2.0, 0.0, 1.0]), np.array([1.0])
     )
-    candidate = layout.build_candidate(layout.pack(0.0, curvature, np.array([np.nan, np.nan])))
+    candidate = layout.build_candidate(
+        layout.pack(0.0, curvature, np.array([np.nan, np.nan]))
+    )
     result = _run_separator(candidate, 1e-9)
     assert result.status == "feasible"
     assert result.isolated_roots >= 3
@@ -606,7 +640,9 @@ def test_separator_certifies_real_line_double_root_minima_with_tolerance():
 def test_separator_finds_negative_stationary_minimum():
     layout = _natural_layout((-np.inf, np.inf), 6, False, False)
     curvature = np.array([0.999, 0.0, -2.0, 0.0, 1.0])
-    candidate = layout.build_candidate(layout.pack(0.0, curvature, np.array([np.nan, np.nan])))
+    candidate = layout.build_candidate(
+        layout.pack(0.0, curvature, np.array([np.nan, np.nan]))
+    )
     result = _run_separator(candidate, 1e-10)
     assert result.status == "violated"
     assert result.violation_kind == "stationary"
@@ -617,7 +653,9 @@ def test_separator_finds_negative_stationary_minimum():
 def test_separator_finds_regular_endpoint_violation():
     layout = _natural_layout((0.0, 3.0), 4, True, False)
     curvature = np.array([-0.2, 0.5, 0.2])
-    candidate = layout.build_candidate(layout.pack(0.0, curvature, np.array([0.0, np.nan])))
+    candidate = layout.build_candidate(
+        layout.pack(0.0, curvature, np.array([0.0, np.nan]))
+    )
     result = _run_separator(candidate)
     assert result.status == "violated"
     assert result.violation_kind == "lower_endpoint"
@@ -627,7 +665,9 @@ def test_separator_finds_regular_endpoint_violation():
 def test_separator_tiny_positive_amplitude_removes_endpoint_candidate():
     layout = _natural_layout((0.0, 3.0), 4, True, False)
     curvature = np.array([-0.2, 0.5, 0.2])
-    candidate = layout.build_candidate(layout.pack(0.0, curvature, np.array([1e-8, np.nan])))
+    candidate = layout.build_candidate(
+        layout.pack(0.0, curvature, np.array([1e-8, np.nan]))
+    )
     result = _run_separator(candidate)
     assert result.violation_kind != "lower_endpoint"
 
@@ -718,11 +758,13 @@ def test_separator_bounded_presence_cases_find_known_interior_violation(amplitud
     a_lower, a_upper = amplitudes
     # Make z=1 an exact stationary point of the full curvature.  The ordinary
     # polynomial derivative cancels the reciprocal-square derivatives there.
-    curvature = np.array([
-        1.0 - 2.0 * (a_lower - a_upper) - (a_lower + a_upper) - 0.05,
-        -2.0 + 2.0 * (a_lower - a_upper),
-        1.0,
-    ])
+    curvature = np.array(
+        [
+            1.0 - 2.0 * (a_lower - a_upper) - (a_lower + a_upper) - 0.05,
+            -2.0 + 2.0 * (a_lower - a_upper),
+            1.0,
+        ]
+    )
     layout = _natural_layout(support, 4, True, True)
     candidate = layout.build_candidate(
         layout.pack(0.0, curvature, np.asarray(amplitudes, dtype=float))
@@ -750,12 +792,12 @@ def test_separator_half_line_positive_amplitude_known_stationary_violation(
     amplitude = a_lower if np.isfinite(a_lower) else a_upper
     if np.isfinite(lower):
         # At z=1, p'(1)=2a cancels -2a/(z-L)^3.
-        curvature = np.array([0.95 - 3.0 * amplitude,
-                              -2.0 + 2.0 * amplitude, 1.0])
+        curvature = np.array([0.95 - 3.0 * amplitude, -2.0 + 2.0 * amplitude, 1.0])
     else:
         # Mirror around U=2; at z=1, p'(1)=-2a cancels +2a/(U-z)^3.
-        curvature = np.array([-0.05 - amplitude + 1.0 + 2.0 * amplitude,
-                              -2.0 - 2.0 * amplitude, 1.0])
+        curvature = np.array(
+            [-0.05 - amplitude + 1.0 + 2.0 * amplitude, -2.0 - 2.0 * amplitude, 1.0]
+        )
     layout = _natural_layout(
         support,
         4,
@@ -775,8 +817,9 @@ def test_separator_half_line_positive_amplitude_known_stationary_violation(
 def test_separator_repeated_stationary_root_is_handled_conservatively():
     layout = _natural_layout((-np.inf, np.inf), 6, False, False)
     candidate = layout.build_candidate(
-        layout.pack(0.0, np.array([0.0, 0.0, 0.0, 0.0, 1.0]),
-                    np.array([np.nan, np.nan]))
+        layout.pack(
+            0.0, np.array([0.0, 0.0, 0.0, 0.0, 1.0]), np.array([np.nan, np.nan])
+        )
     )
     result = _run_separator(candidate, 1e-12)
     assert result.status == "feasible"
@@ -788,8 +831,7 @@ def test_separator_repeated_stationary_root_is_handled_conservatively():
 def test_separator_effective_degree_uses_exact_nonzero_leading_term(leading):
     layout = _natural_layout((-np.inf, np.inf), 4, False, False)
     candidate = layout.build_candidate(
-        layout.pack(0.0, np.array([1.0, 0.0, leading]),
-                    np.array([np.nan, np.nan]))
+        layout.pack(0.0, np.array([1.0, 0.0, leading]), np.array([np.nan, np.nan]))
     )
     result = _run_separator(candidate, 1e-12)
     if leading > 0.0:
@@ -803,8 +845,7 @@ def test_separator_bounded_extreme_support_scale_constant_curvature():
     support = (-1e6, 1e6)
     layout = _natural_layout(support, 4, True, True)
     candidate = layout.build_candidate(
-        layout.pack(0.0, np.array([0.75, 0.0, 0.0]),
-                    np.array([1e8, 1e8]))
+        layout.pack(0.0, np.array([0.75, 0.0, 0.0]), np.array([1e8, 1e8]))
     )
     result = _run_separator(candidate, 1e-10)
     assert result.status == "feasible"
@@ -824,9 +865,7 @@ def test_separator_random_bounded_states_agree_with_dense_reference():
         layout = _natural_layout(support, 8, True, True)
         for _ in range(20):
             curvature = rng.normal(scale=0.4, size=7)
-            candidate = layout.build_candidate(
-                layout.pack(0.0, curvature, amplitudes)
-            )
+            candidate = layout.build_candidate(layout.pack(0.0, curvature, amplitudes))
             values = np.asarray(candidate.q_d2_full(grid), dtype=float)
             reference_minimum = float(np.nanmin(values))
             result = _run_separator(candidate, 1e-10)
@@ -866,13 +905,15 @@ def test_separator_refines_unique_root_bracket_that_shares_exact_endpoint_root()
     # upper endpoint is the separate exact zero root.  The separator must
     # refine the unique interior root instead of treating the zero endpoint as
     # an ambiguous sign-bisection boundary.
-    q_d2 = np.array([
-        0.876612938,
-        0.0,
-        -1.93056952,
-        -4.13726538e-18,
-        1.06292137,
-    ])
+    q_d2 = np.array(
+        [
+            0.876612938,
+            0.0,
+            -1.93056952,
+            -4.13726538e-18,
+            1.06292137,
+        ]
+    )
     result = _separate_full_curvature(
         q_d2,
         (-np.inf, np.inf),

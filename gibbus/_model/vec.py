@@ -52,8 +52,7 @@ def _polyval(xx, poly, /):
         # An empty coefficient vector is the zero polynomial, which is
         # what a derivative past the polynomial's degree produces.
         # ``numpy.polynomial.polyval`` raises IndexError on this input.
-        return (np.float64(0.0) if xx.ndim == 0
-                else np.zeros(xx.shape, dtype=np.float64))
+        return np.float64(0.0) if xx.ndim == 0 else np.zeros(xx.shape, dtype=np.float64)
     if xx.ndim == 0:
         return polyval(xx, coef)
     return _polyval_vec(xx, coef).reshape(xx.shape)
@@ -102,7 +101,7 @@ def _q_eval(x, support, poly, boundary_amplitudes, order, /):
     aL, aU = map(float, amps)
 
     xx = np.asarray(x, dtype=np.float64)
-    scalar = (xx.ndim == 0)
+    scalar = xx.ndim == 0
 
     hasL = np.isfinite(Lx) and np.isfinite(aL) and (aL > 0.0)
     hasU = np.isfinite(Ux) and np.isfinite(aU) and (aU > 0.0)

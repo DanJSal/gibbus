@@ -228,7 +228,10 @@ class _NaturalCoreState:
         if not isinstance(layout, _NaturalLayout):
             raise TypeError("layout must be a _NaturalLayout")
         canonical = coordinate.canonical_support
-        if float(canonical[0]) != layout.support_lower or float(canonical[1]) != layout.support_upper:
+        if (
+            float(canonical[0]) != layout.support_lower
+            or float(canonical[1]) != layout.support_upper
+        ):
             raise ValueError("coordinate and natural layout supports do not match")
         lo, hi = (float(v) for v in z_data_bounds)
         if not lo <= hi:
@@ -237,7 +240,9 @@ class _NaturalCoreState:
         numerics = _layout_numerics(layout)
         p = np.array(params, dtype=np.float64).reshape(-1)
         if p.size != layout.n_params:
-            raise ValueError(f"expected {layout.n_params} natural parameters, got {p.size}")
+            raise ValueError(
+                f"expected {layout.n_params} natural parameters, got {p.size}"
+            )
         if not np.isfinite(p).all():
             raise ValueError("natural parameters must be finite")
         amplitudes = np.full(2, np.nan, dtype=np.float64)
@@ -347,10 +352,10 @@ class _NaturalCoreState:
         cache._power = moments[:n_power]
         offset = n_power
         if lower_basis:
-            cache._log_power[_LOWER] = moments[offset:offset + width]
+            cache._log_power[_LOWER] = moments[offset : offset + width]
             offset += width
         if upper_basis:
-            cache._log_power[_UPPER] = moments[offset:offset + width]
+            cache._log_power[_UPPER] = moments[offset : offset + width]
             offset += width
         if lower_basis:
             cache._log_square[_LOWER] = float(moments[offset])

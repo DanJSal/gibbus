@@ -117,23 +117,31 @@ def test_batched_tail_pieces_are_not_held_below_the_rounding_noise_of_q():
     a lognormal mixture) a fixed ``1e-13`` piece tolerance sat below that noise
     and every piece exhausted its subdivision limit.
     """
-    q_poly = np.array([
-        4.0280767819891716, 2.2434561878046151, -0.18568696007269678,
-        -0.033247451223551647, 0.033784237598089836, -0.0068636016207788021,
-        0.00044544952662950470,
-    ])
+    q_poly = np.array(
+        [
+            4.0280767819891716,
+            2.2434561878046151,
+            -0.18568696007269678,
+            -0.033247451223551647,
+            0.033784237598089836,
+            -0.0068636016207788021,
+            0.00044544952662950470,
+        ]
+    )
     support = np.array([0.0, np.inf])
     amplitudes = np.array([3.9845637464359442, 0.0])
     mu_eff, sigma_eff = -2.1047013926129257, 2.4638996655463976
     integrator = TailIntegrator(q_poly)
     grid = np.linspace(7.0, 11.8, 105)
     values, failed = integrator.log_masses(
-        grid, np.inf, True, support, amplitudes, mu_eff, sigma_eff)
+        grid, np.inf, True, support, amplitudes, mu_eff, sigma_eff
+    )
     assert failed == 0
     reference = []
     for x in grid:
         value, message = integrator.log_mass(
-            x, np.inf, True, support, amplitudes, mu_eff, sigma_eff)
+            x, np.inf, True, support, amplitudes, mu_eff, sigma_eff
+        )
         assert message is None
         reference.append(value)
     np.testing.assert_allclose(values, reference, rtol=1e-13, atol=0.0)
@@ -227,15 +235,19 @@ def test_compiled_tail_handles_reflected_upper_boundary_geometry():
 
 def test_public_mixture_tail_is_weighted_component_tail_identity():
     rng = np.random.default_rng(1203)
-    data = np.concatenate([
-        rng.normal(-2.0, 0.55, 180),
-        rng.normal(2.0, 0.65, 180),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-2.0, 0.55, 180),
+            rng.normal(2.0, 0.65, 180),
+        ]
+    )
     model = Distribution().fit(
         data, n_components=2, poly_degree=2, support=(-np.inf, np.inf), rng=0
     )
     x = float(max(component.base.ppf(1.0 - 1e-7) for component in model.components))
-    component_logs = np.array([component.base.logsf(x) for component in model.components])
+    component_logs = np.array(
+        [component.base.logsf(x) for component in model.components]
+    )
     expected = float(logsumexp(np.log(model.weights) + component_logs))
     assert model.logsf(x) == pytest.approx(expected, rel=0.0, abs=2e-10)
 
@@ -249,7 +261,9 @@ def _natural_state(support, x, degree, lower, upper, params, /):
     z = coord.to_canonical(x)
     spec = _build_model_spec(coord, degree, lower, upper)
     state = _NaturalCoreState(
-        coord, spec.layout, np.asarray(params, dtype=np.float64),
+        coord,
+        spec.layout,
+        np.asarray(params, dtype=np.float64),
         (float(z.min()), float(z.max())),
     )
     return coord, spec, state, z
@@ -261,7 +275,11 @@ def test_compiled_adaptive_interval_reduction_matches_scipy_quad():
     from gibbus._observations.intervals import _prepare_partial_interval_reducer
 
     _, spec, state, z = _natural_state(
-        (0.0, np.inf), np.array([0.25, 0.7, 1.3, 2.4, 4.8]), 3, True, False,
+        (0.0, np.inf),
+        np.array([0.25, 0.7, 1.3, 2.4, 4.8]),
+        3,
+        True,
+        False,
         [0.3, 0.9, 0.25, 0.35],
     )
     prepared = _prepare_partial_interval_reducer(state)
@@ -270,20 +288,34 @@ def test_compiled_adaptive_interval_reduction_matches_scipy_quad():
         return float(state.partials[i].evaluate(value, spec.support))
 
     def integral(f, lo, hi):
-        return quad(lambda v: f(v) * state.pdf(v), lo, hi,
-                    epsabs=0.0, epsrel=1e-12, limit=400)[0]
+        return quad(
+            lambda v: f(v) * state.pdf(v), lo, hi, epsabs=0.0, epsrel=1e-12, limit=400
+        )[0]
 
     n = len(state.partials)
     cut = float(np.median(z))
     for lo, hi in ((float(spec.support[0]), cut), (cut, np.inf)):
         mass = integral(lambda v: 1.0, lo, hi)
-        mean = np.array([integral(lambda v, i=i: statistic(v, i), lo, hi) for i in range(n)])
+        mean = np.array(
+            [integral(lambda v, i=i: statistic(v, i), lo, hi) for i in range(n)]
+        )
         mean /= mass
-        second = np.array([
-            [integral(lambda v, i=i, j=j: statistic(v, i) * statistic(v, j), lo, hi)
-             for j in range(n)]
-            for i in range(n)
-        ]) / mass
+        second = (
+            np.array(
+                [
+                    [
+                        integral(
+                            lambda v, i=i, j=j: statistic(v, i) * statistic(v, j),
+                            lo,
+                            hi,
+                        )
+                        for j in range(n)
+                    ]
+                    for i in range(n)
+                ]
+            )
+            / mass
+        )
         got = prepared.reduce((lo, hi))
         assert got.log_probability == pytest.approx(np.log(mass), rel=2e-10, abs=2e-11)
         np.testing.assert_allclose(got.mean, mean, rtol=2e-9, atol=2e-10)
@@ -294,8 +326,15 @@ def test_compiled_adaptive_interval_reduction_matches_scipy_quad():
 
 @pytest.mark.parametrize(
     "interval",
-    [(3.0, 4.0), (30.0, 40.0), (1000.0, 2000.0), (-2000.0, -1000.0), (1000.0, np.inf),
-     (-np.inf, -1000.0), (10.0, 1e4)],
+    [
+        (3.0, 4.0),
+        (30.0, 40.0),
+        (1000.0, 2000.0),
+        (-2000.0, -1000.0),
+        (1000.0, np.inf),
+        (-np.inf, -1000.0),
+        (10.0, 1e4),
+    ],
 )
 def test_adaptive_interval_reduction_resolves_steep_far_tails(interval):
     """A standard normal far in its tail: the peak sits at an endpoint and the
@@ -309,9 +348,13 @@ def test_adaptive_interval_reduction_resolves_steep_far_tails(interval):
 
     lo, hi = interval
     if lo > 0.0:
-        log_mass = float(norm.logsf(lo) + np.log(-np.expm1(norm.logsf(hi) - norm.logsf(lo))))
+        log_mass = float(
+            norm.logsf(lo) + np.log(-np.expm1(norm.logsf(hi) - norm.logsf(lo)))
+        )
     else:
-        log_mass = float(norm.logcdf(hi) + np.log(-np.expm1(norm.logcdf(lo) - norm.logcdf(hi))))
+        log_mass = float(
+            norm.logcdf(hi) + np.log(-np.expm1(norm.logcdf(lo) - norm.logcdf(hi)))
+        )
     mean = np.exp(norm.logpdf(lo) - log_mass) - np.exp(norm.logpdf(hi) - log_mass)
     assert got.log_probability == pytest.approx(log_mass, rel=1e-13, abs=1e-9)
     assert got.mean[0] == pytest.approx(mean, rel=1e-9)
@@ -321,7 +364,11 @@ def test_batched_adaptive_interval_reduction_matches_scalar_and_weighted_sums():
     from gibbus._observations.intervals import _prepare_partial_interval_reducer
 
     _, spec, state, z = _natural_state(
-        (0.0, np.inf), np.array([0.2, 0.55, 1.1, 2.0, 3.7, 5.2]), 3, True, False,
+        (0.0, np.inf),
+        np.array([0.2, 0.55, 1.1, 2.0, 3.7, 5.2]),
+        3,
+        True,
+        False,
         [0.2, 0.82, 0.18, 0.31],
     )
     prepared = _prepare_partial_interval_reducer(state)
@@ -373,19 +420,31 @@ def test_fused_finite_interval_objective_matches_the_quadrature_plan():
     )
 
     coord, spec, state, _ = _natural_state(
-        (0.0, 1.0), np.array([0.08, 0.2, 0.42, 0.63, 0.82, 0.95]), 4, True, True,
+        (0.0, 1.0),
+        np.array([0.08, 0.2, 0.42, 0.63, 0.82, 0.95]),
+        4,
+        True,
+        True,
         [0.08, 0.85, 0.18, -0.12, 0.35, 0.28],
     )
-    user_rows = np.array([
-        [0.11, 0.27],
-        [0.31, 0.74],  # contains the mode for this fixture in canonical space
-        [0.79, 0.91],
-        [0.57, 0.57],  # exact-point convention
-    ], dtype=np.float64)
-    intervals = np.ascontiguousarray(np.column_stack([
-        coord.to_canonical(user_rows[:, 0]),
-        coord.to_canonical(user_rows[:, 1]),
-    ]), dtype=np.float64)
+    user_rows = np.array(
+        [
+            [0.11, 0.27],
+            [0.31, 0.74],  # contains the mode for this fixture in canonical space
+            [0.79, 0.91],
+            [0.57, 0.57],  # exact-point convention
+        ],
+        dtype=np.float64,
+    )
+    intervals = np.ascontiguousarray(
+        np.column_stack(
+            [
+                coord.to_canonical(user_rows[:, 0]),
+                coord.to_canonical(user_rows[:, 1]),
+            ]
+        ),
+        dtype=np.float64,
+    )
     row_weights = np.array([0.15, 0.35, 0.3, 0.2], dtype=np.float64)
     point_lower = np.full(intervals.shape[0], np.nan, dtype=np.float64)
     point_upper = np.full(intervals.shape[0], np.nan, dtype=np.float64)
@@ -402,7 +461,9 @@ def test_fused_finite_interval_objective_matches_the_quadrature_plan():
     )
 
     def statistics(values):
-        return np.stack([p.evaluate(values, spec.support) for p in state.partials], axis=-1)
+        return np.stack(
+            [p.evaluate(values, spec.support) for p in state.partials], axis=-1
+        )
 
     n = len(state.partials)
     expected_h = np.zeros(n)
@@ -410,14 +471,18 @@ def test_fused_finite_interval_objective_matches_the_quadrature_plan():
     point_index = 0
     for r in range(intervals.shape[0]):
         if plan.point_limit[r]:
-            expected_h += row_weights[r] * statistics(np.array([point_mid[point_index]]))[0]
+            expected_h += (
+                row_weights[r] * statistics(np.array([point_mid[point_index]]))[0]
+            )
             point_index += 1
             continue
         alpha = np.exp(log_kernel[r] + plan.log_weights[r] - log_integrals[r])
         t = statistics(nodes[r])
         mean = alpha @ t
         expected_h += row_weights[r] * mean
-        expected_cov += row_weights[r] * ((t * alpha[:, None]).T @ t - np.outer(mean, mean))
+        expected_cov += row_weights[r] * (
+            (t * alpha[:, None]).T @ t - np.outer(mean, mean)
+        )
     expected_logp = np.asarray(log_integrals - np.log(state.Z), dtype=np.float64)
     expected_logp[plan.widths == 0.0] -= np.log(spec.coordinate.scale)
 

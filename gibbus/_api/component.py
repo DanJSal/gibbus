@@ -83,7 +83,7 @@ def _natural_seed_params(seed, layout, direction, /):
         return None
     q_d2 = np.asarray(Polynomial(q_poly).deriv(2).coef, dtype=np.float64)
     curvature = np.zeros(layout.curvature_degree + 1, dtype=np.float64)
-    curvature[: min(curvature.size, q_d2.size)] = q_d2[:curvature.size]
+    curvature[: min(curvature.size, q_d2.size)] = q_d2[: curvature.size]
     physical = np.asarray(seed["boundary_amplitudes"], dtype=np.float64).reshape(-1)
     if physical.size != 2:
         return None
@@ -92,7 +92,6 @@ def _natural_seed_params(seed, layout, direction, /):
         return layout.pack(float(q_poly[1]), curvature, canonical)
     except ValueError:
         return None
-
 
 
 def _lift_natural_params(source_layout, source_params, target_layout, /):
@@ -114,8 +113,9 @@ def _lift_natural_params(source_layout, source_params, target_layout, /):
     """
     gamma, curvature, amplitudes = source_layout.unpack(source_params)
     target_curvature = np.zeros(target_layout.curvature_degree + 1, dtype=np.float64)
-    target_curvature[:curvature.size] = curvature
+    target_curvature[: curvature.size] = curvature
     return target_layout.pack(gamma, target_curvature, amplitudes)
+
 
 def _run_natural_fit(norm, /):
     """Dispatch normalized public inputs to the natural conic fitter.
@@ -161,7 +161,8 @@ def _run_natural_fit(norm, /):
 
     if lower != AUTO and upper != AUTO:
         objective, result = (
-            fit_auto(bool(lower), bool(upper)) if is_auto
+            fit_auto(bool(lower), bool(upper))
+            if is_auto
             else fit_fixed(degree, bool(lower), bool(upper))
         )
         return objective, result, effective_n, (np.nan, np.nan)
@@ -169,13 +170,15 @@ def _run_natural_fit(norm, /):
     def amplitude(model, side):
         objective, result = model
         index = (
-            objective.spec.physical_lower_a_index if side == "lower"
+            objective.spec.physical_lower_a_index
+            if side == "lower"
             else objective.spec.physical_upper_a_index
         )
         return 0.0 if index is None else float(result.params[index])
 
     (objective, result), _, p_values = _select_boundary_terms(
-        (lambda lo, up: fit_auto(lo, up)) if is_auto
+        (lambda lo, up: fit_auto(lo, up))
+        if is_auto
         else (lambda lo, up: fit_fixed(degree, lo, up)),
         lambda model: float(model[1].objective_value),
         amplitude,
@@ -238,15 +241,15 @@ def _fit_natural_fixed_degree(norm, degree, lower, upper, /):
                 options["initial"] = initial
         if rows.shape[1] == 2 and "initial" not in options:
             from .._fit.natural_objective import _natural_interval_start
+
             initial, blocks = _natural_interval_start(objective)
             options["initial"] = initial
             options["initial_blocks"] = blocks
         try:
             result = _solve_natural_conic(objective, **options)
         except RuntimeError as exc:
-            if (
-                previous is None
-                or "cone description failed its rank checks" not in str(exc)
+            if previous is None or "cone description failed its rank checks" not in str(
+                exc
             ):
                 raise
             # The requested model contains every lower-degree face.  At
@@ -404,17 +407,17 @@ class _Component:
         return self
 
     def fit(
-            self,
-            samples: ArrayLike,
-            *,
-            poly_degree: int | str | None = None,
-            support: tuple[float, float] | None = None,
-            log_boundary_lower: bool | None = None,
-            log_boundary_upper: bool | None = None,
-            verbose: int = 0,
-            suppress_warnings: bool = False,
-            init_from: Union["_Component", Mapping[str, Any]] | None = None,
-            sample_weights: ArrayLike | None = None,
+        self,
+        samples: ArrayLike,
+        *,
+        poly_degree: int | str | None = None,
+        support: tuple[float, float] | None = None,
+        log_boundary_lower: bool | None = None,
+        log_boundary_upper: bool | None = None,
+        verbose: int = 0,
+        suppress_warnings: bool = False,
+        init_from: Union["_Component", Mapping[str, Any]] | None = None,
+        sample_weights: ArrayLike | None = None,
     ) -> "_Component":
         """Fit a log-concave density to the supplied samples.
 
@@ -462,10 +465,16 @@ class _Component:
             If the fit encounters a degenerate numerical state.
         """
         norm = _normalize_univariate_fit_inputs(
-            _Component, samples, poly_degree, support,
-            log_boundary_lower, log_boundary_upper,
-            verbose, suppress_warnings,
-            init_from, sample_weights,
+            _Component,
+            samples,
+            poly_degree,
+            support,
+            log_boundary_lower,
+            log_boundary_upper,
+            verbose,
+            suppress_warnings,
+            init_from,
+            sample_weights,
         )
         with _maybe_suppress(norm["suppress_warnings"], SUPPRESSED_WARNINGS):
             objective, result, effective_n, p_values = _run_natural_fit(norm)
@@ -686,7 +695,9 @@ class _Component:
             Other fitted component in the same active space.
         """
         if not isinstance(other, _Component) or other.default != self.default:
-            raise ValueError("cross_entropy requires a component in the same active space")
+            raise ValueError(
+                "cross_entropy requires a component in the same active space"
+            )
         return self._active.cross_entropy(other._active)
 
     def kl_divergence(self, other):
@@ -698,7 +709,9 @@ class _Component:
             Other fitted component in the same active space.
         """
         if not isinstance(other, _Component) or other.default != self.default:
-            raise ValueError("kl_divergence requires a component in the same active space")
+            raise ValueError(
+                "kl_divergence requires a component in the same active space"
+            )
         return self._active.kl_divergence(other._active)
 
     def loglik(self, x, sample_weight=None):
@@ -763,10 +776,15 @@ class _Component:
         mu_eff, sigma_eff = self._mu_sigma_eff()
         lo, hi = map(float, self.base.support)
         with np.errstate(invalid="ignore"):
-            z_bounds = np.sort(np.asarray([
-                sigma_eff * lo + mu_eff,
-                sigma_eff * hi + mu_eff,
-            ], dtype=np.float64))
+            z_bounds = np.sort(
+                np.asarray(
+                    [
+                        sigma_eff * lo + mu_eff,
+                        sigma_eff * hi + mu_eff,
+                    ],
+                    dtype=np.float64,
+                )
+            )
 
         if q2.size == 1:
             lower = max(floor, float(q2[0]))
@@ -775,11 +793,16 @@ class _Component:
                 kind=Chebyshev, domain=[float(z_bounds[0]), float(z_bounds[1])]
             )
             coeff = np.asarray(cheb.coef, dtype=np.float64)
-            lower = max(floor, float(chebyshev_lower_bound(
-                coeff,
-                chebyshev_bernstein_matrix(coeff.size - 1),
-                12,
-            )))
+            lower = max(
+                floor,
+                float(
+                    chebyshev_lower_bound(
+                        coeff,
+                        chebyshev_bernstein_matrix(coeff.size - 1),
+                        12,
+                    )
+                ),
+            )
         else:
             lower = floor
         return float((sigma_eff * sigma_eff) * lower)
@@ -819,7 +842,9 @@ class _Component:
         """
         return self._active.sample(size=size, rng=rng)
 
-    def moment(self, k: int, central: bool = False, standardized: bool = False) -> float:
+    def moment(
+        self, k: int, central: bool = False, standardized: bool = False
+    ) -> float:
         """Compute the *k*-th moment in the active space.
 
         Parameters
@@ -891,8 +916,14 @@ class _Component:
     def kurt(self):
         return self._active.kurt
 
-    def transform(self, *, mu: float | None = None, sigma: float | None = None,
-                  pullback: bool, inplace: bool = True) -> "_Component":
+    def transform(
+        self,
+        *,
+        mu: float | None = None,
+        sigma: float | None = None,
+        pullback: bool,
+        inplace: bool = True,
+    ) -> "_Component":
         """Apply an affine location-scale transformation.
 
         Parameters
@@ -956,7 +987,17 @@ class _Component:
         target.sigma = float(upd["sigma"])
         target_data["mu"] = target.mu
         target_data["sigma"] = target.sigma
-        for k in ("support", "mode", "median", "mean", "var", "std", "skew", "kurt", "raw_moments"):
+        for k in (
+            "support",
+            "mode",
+            "median",
+            "mean",
+            "var",
+            "std",
+            "skew",
+            "kurt",
+            "raw_moments",
+        ):
             target_data[k] = upd[k]
         target._bump_version()
         return target
@@ -980,10 +1021,15 @@ class _Component:
             )
 
         from .._postfit.logspace import log_mass_between
-        log_mass = float(log_mass_between(
-            self.base.logcdf(lo), self.base.logcdf(hi),
-            self.base.logsf(lo), self.base.logsf(hi),
-        ))
+
+        log_mass = float(
+            log_mass_between(
+                self.base.logcdf(lo),
+                self.base.logcdf(hi),
+                self.base.logsf(lo),
+                self.base.logsf(hi),
+            )
+        )
         if not np.isfinite(log_mass) or log_mass < np.log(np.finfo(np.float64).tiny):
             raise RuntimeError(
                 f"truncation retained negligible probability mass (log mass={log_mass!r})"
@@ -1011,15 +1057,33 @@ class _Component:
         else:
             z_std = 1.0
         if np.all(np.isfinite(trunc_z_support)):
-            z_std = min(max(z_std, np.finfo(float).tiny),
-                        max((trunc_z_support[1] - trunc_z_support[0]) / 2.0,
-                            np.finfo(float).tiny))
+            z_std = min(
+                max(z_std, np.finfo(float).tiny),
+                max(
+                    (trunc_z_support[1] - trunc_z_support[0]) / 2.0,
+                    np.finfo(float).tiny,
+                ),
+            )
         z_std = max(z_std, np.sqrt(np.finfo(float).tiny))
 
         zl, zu = (float(v) for v in original_z_support)
         density = density_spec(
-            [(q_poly, zl, zu, float(canonical_amps[0]), float(canonical_amps[1]),
-              0.0, 0.0, 1.0, 1.0, 1.0, -np.inf, np.inf)],
+            [
+                (
+                    q_poly,
+                    zl,
+                    zu,
+                    float(canonical_amps[0]),
+                    float(canonical_amps[1]),
+                    0.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    -np.inf,
+                    np.inf,
+                )
+            ],
             view=False,
         )
         cdf_rep = SpectralCDF(trunc_z_support, density=density, mode=z_mode, std=z_std)
@@ -1027,9 +1091,7 @@ class _Component:
         try:
             ppf_rep = SpectralPPF(cdf_rep)
         except NUMERIC_FAILURES as exc:
-            _reraise_if_debug(
-                exc, "truncated spectral PPF construction", routine=True
-            )
+            _reraise_if_debug(exc, "truncated spectral PPF construction", routine=True)
             ppf_rep = None
             spectral.update(fallback_ppf_state())
             spectral["ppf_fallback"] = np.int32(1)
@@ -1055,11 +1117,14 @@ class _Component:
         upto = min(4, raw.size - 1, craw.size - 1)
         for k in range(1, upto + 1):
             raw[k] = _expect_vectorized(
-                base_view.neg_log, base_view.support, lambda x, kk=k: x ** kk,
+                base_view.neg_log,
+                base_view.support,
+                lambda x, kk=k: x**kk,
                 points=(base_view.mode,),
             )
             craw[k] = _expect_vectorized(
-                base_view.neg_log, base_view.support,
+                base_view.neg_log,
+                base_view.support,
                 lambda x, kk=k: (sigma_eff * x + mu_eff) ** kk,
                 points=(base_view.mode,),
             )
@@ -1077,15 +1142,18 @@ class _Component:
             qlo = lo if np.isfinite(lo) else float(base_view.ppf(1e-12))
             qhi = hi if np.isfinite(hi) else float(base_view.isf(1e-12))
         except NUMERIC_FAILURES as exc:
-            _reraise_if_debug(
-                exc, "truncated moment-window quantiles", routine=True
-            )
+            _reraise_if_debug(exc, "truncated moment-window quantiles", routine=True)
         else:
             with np.errstate(invalid="ignore"):
-                zwin = np.sort(np.array([
-                    sigma_eff * qlo + mu_eff,
-                    sigma_eff * qhi + mu_eff,
-                ], dtype=np.float64))
+                zwin = np.sort(
+                    np.array(
+                        [
+                            sigma_eff * qlo + mu_eff,
+                            sigma_eff * qhi + mu_eff,
+                        ],
+                        dtype=np.float64,
+                    )
+                )
             if np.all(np.isfinite(zwin)) and zwin[0] < zwin[1]:
                 data["window"] = zwin
 

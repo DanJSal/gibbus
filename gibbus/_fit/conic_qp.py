@@ -89,7 +89,8 @@ class _ConicRepresentation:
     def gram_gram(self):
         """``G_ij = sum_b <A_{b,i}, A_{b,j}>``, the Gram matrix of the rows."""
         return sum(
-            np.einsum("iab,jab->ij", matrices, matrices) for matrices in self.row_matrices
+            np.einsum("iab,jab->ij", matrices, matrices)
+            for matrices in self.row_matrices
         )
 
     @cached_property
@@ -107,7 +108,10 @@ class _ConicRepresentation:
             a_offsets[b] = a_offsets[b - 1] + self.n_rows * int(sizes[b - 1]) ** 2
             q_offsets[b] = q_offsets[b - 1] + int(sizes[b - 1]) ** 2
         a_packed = np.concatenate(
-            [np.ascontiguousarray(m, dtype=np.float64).reshape(-1) for m in self.row_matrices]
+            [
+                np.ascontiguousarray(m, dtype=np.float64).reshape(-1)
+                for m in self.row_matrices
+            ]
         )
         return a_packed, sizes, a_offsets, q_offsets
 
@@ -119,7 +123,9 @@ class _ConicRepresentation:
         blocks : sequence of numpy.ndarray
             One ``k_b x k_b`` matrix per block.
         """
-        return np.concatenate([np.asarray(q, dtype=np.float64).reshape(-1) for q in blocks])
+        return np.concatenate(
+            [np.asarray(q, dtype=np.float64).reshape(-1) for q in blocks]
+        )
 
     def unpack_blocks(self, packed, /):
         """Return a packed vector as a tuple of Gram blocks.
@@ -131,7 +137,7 @@ class _ConicRepresentation:
         """
         _, sizes, _, offsets = self.packed
         return tuple(
-            np.array(packed[o: o + int(k) * int(k)]).reshape(int(k), int(k))
+            np.array(packed[o : o + int(k) * int(k)]).reshape(int(k), int(k))
             for k, o in zip(sizes, offsets, strict=True)
         )
 
@@ -338,8 +344,12 @@ def _support_representation(
         cached = _build_support_representation(
             layout, effective_curvature_degree, lower_active, upper_active
         )
-        for array in (cached.b_matrix, cached.reference_dual, cached.row_degrees,
-                      *cached.row_matrices):
+        for array in (
+            cached.b_matrix,
+            cached.reference_dual,
+            cached.row_degrees,
+            *cached.row_matrices,
+        ):
             array.flags.writeable = False
         _REPRESENTATIONS[key] = cached
     return cached
@@ -400,8 +410,10 @@ def _build_support_representation(
     kind = layout.support_kind
     lower, upper = layout.support
     degree = int(layout.curvature_degree)
-    effective = degree if effective_curvature_degree is None else int(
-        effective_curvature_degree
+    effective = (
+        degree
+        if effective_curvature_degree is None
+        else int(effective_curvature_degree)
     )
     if effective < 0 or effective > degree:
         raise ValueError("effective curvature degree out of range")
@@ -440,7 +452,11 @@ def _build_support_representation(
         origin, scale, shifted_kind = 0.0, 1.0, _REAL_LINE_KIND
         forms = [(np.array([1.0]), top // 2 + 1)]
     elif kind == _BOUNDED_KIND:
-        origin, scale, shifted_kind = 0.5 * (lower + upper), 0.5 * (upper - lower), _BOUNDED_KIND
+        origin, scale, shifted_kind = (
+            0.5 * (lower + upper),
+            0.5 * (upper - lower),
+            _BOUNDED_KIND,
+        )
         if top % 2 == 0:
             forms = [(np.array([1.0]), top // 2 + 1)]
             if top >= 2:
@@ -538,6 +554,7 @@ def _representation_ranks(layout, representation, /):
     representation : _ConicRepresentation
         Description to check.
     """
+
     def equilibrated_rank(matrix):
         """Numerical rank after invertible row/column equilibration.
 
@@ -589,7 +606,9 @@ def _range_complement(matrix, /):
         Linear map whose range is removed.
     """
     left, values, _ = np.linalg.svd(matrix, full_matrices=True)
-    rank = int(np.sum(values > 1e-12 * max(1.0, float(values[0]) if values.size else 1.0)))
+    rank = int(
+        np.sum(values > 1e-12 * max(1.0, float(values[0]) if values.size else 1.0))
+    )
     rest = left[:, rank:]
     return rest @ rest.T
 

@@ -1,4 +1,5 @@
 """Tests for the batch ordinary/generalized model-moment service."""
+
 import warnings
 
 import numpy as np
@@ -52,16 +53,20 @@ def _direct_expectation(state, func):
 
     numerator = quad(kernel, lo, hi, epsabs=2e-11, epsrel=2e-11, limit=300)[0]
     denominator = quad(
-        lambda z: np.exp(-_q_eval(z, state.spec.support, state.q_poly,
-                                  state.boundary_amplitudes, 0)),
-        lo, hi, epsabs=2e-11, epsrel=2e-11, limit=300,
+        lambda z: np.exp(
+            -_q_eval(z, state.spec.support, state.q_poly, state.boundary_amplitudes, 0)
+        ),
+        lo,
+        hi,
+        epsabs=2e-11,
+        epsrel=2e-11,
+        limit=300,
     )[0]
     return numerator / denominator
 
 
 def test_power_block_matches_scalar_state_moments_and_covariance_definition():
-    state = _state((-np.inf, np.inf), [-2.0, 0.0, 1.0, 3.0], 4,
-                   [0.15, 0.9, 0.25, 0.4])
+    state = _state((-np.inf, np.inf), [-2.0, 0.0, 1.0, 3.0], 4, [0.15, 0.9, 0.25, 0.4])
     moments = state.moments.power(6)
     assert moments[0] == 1.0
     for k in range(1, 7):
@@ -76,8 +81,7 @@ def test_power_block_matches_scalar_state_moments_and_covariance_definition():
 
 
 def test_log_power_remains_available_at_exact_zero_boundary_amplitude():
-    state = _state((0.0, np.inf), [0.4, 1.0, 2.0, 4.0], 2,
-                   [0.6, 1.0, 0.0], lower=True)
+    state = _state((0.0, np.inf), [0.4, 1.0, 2.0, 4.0], 2, [0.6, 1.0, 0.0], lower=True)
     got = state.moments.log_power("lower", 2)
     for k in range(3):
         lo = float(state.spec.support[0])
@@ -88,23 +92,32 @@ def test_log_power_remains_available_at_exact_zero_boundary_amplitude():
 
 
 def test_log_square_and_cross_match_direct_bounded_integrals():
-    state = _state((-2.0, 3.0), [-1.5, -0.2, 1.1, 2.5], 4,
-                   [0.1, 0.7, 0.2, -0.15, 0.4, 0.8], lower=True, upper=True)
+    state = _state(
+        (-2.0, 3.0),
+        [-1.5, -0.2, 1.1, 2.5],
+        4,
+        [0.1, 0.7, 0.2, -0.15, 0.4, 0.8],
+        lower=True,
+        upper=True,
+    )
     lower_sq = state.moments.log_square("lower")
     upper_sq = state.moments.log_square("upper")
     cross = state.moments.log_cross()
     lo, hi = state.spec.support
     assert lower_sq == pytest.approx(
         _direct_expectation(state, lambda z: np.log(z - lo) ** 2),
-        rel=2e-8, abs=2e-9,
+        rel=2e-8,
+        abs=2e-9,
     )
     assert upper_sq == pytest.approx(
         _direct_expectation(state, lambda z: np.log(hi - z) ** 2),
-        rel=2e-8, abs=2e-9,
+        rel=2e-8,
+        abs=2e-9,
     )
     assert cross == pytest.approx(
         _direct_expectation(state, lambda z: np.log(z - lo) * np.log(hi - z)),
-        rel=2e-8, abs=2e-9,
+        rel=2e-8,
+        abs=2e-9,
     )
 
 
@@ -120,17 +133,31 @@ def test_half_line_mode_solver_returns_exact_constrained_endpoint():
     """Monotone convex potentials have their mode at the finite endpoint."""
 
     common = (
-        LOG_THRESH, GRAD_TOL, HESS_TOL, NEWT_TOL, NEWT_MAX,
-        BOUNDARY_EPS_MULT, BRACKET_INIT_STEP, BRACKET_MAX_EXPAND,
-        BRACKET_STEP_GROWTH, BACKTRACK_MAX_ITERS, BACKTRACK_REDUCE,
+        LOG_THRESH,
+        GRAD_TOL,
+        HESS_TOL,
+        NEWT_TOL,
+        NEWT_MAX,
+        BOUNDARY_EPS_MULT,
+        BRACKET_INIT_STEP,
+        BRACKET_MAX_EXPAND,
+        BRACKET_STEP_GROWTH,
+        BACKTRACK_MAX_ITERS,
+        BACKTRACK_REDUCE,
     )
     _, lower_mode, _, _ = _q_window_and_mode(
-        np.array([0.0, np.inf]), np.array([0.0, 1.0]),
-        np.array([np.nan, np.nan]), np.array([0.2, 2.0]), *common,
+        np.array([0.0, np.inf]),
+        np.array([0.0, 1.0]),
+        np.array([np.nan, np.nan]),
+        np.array([0.2, 2.0]),
+        *common,
     )
     _, upper_mode, _, _ = _q_window_and_mode(
-        np.array([-np.inf, 0.0]), np.array([0.0, -1.0]),
-        np.array([np.nan, np.nan]), np.array([-2.0, -0.2]), *common,
+        np.array([-np.inf, 0.0]),
+        np.array([0.0, -1.0]),
+        np.array([np.nan, np.nan]),
+        np.array([-2.0, -0.2]),
+        *common,
     )
     assert lower_mode == 0.0
     assert upper_mode == 0.0
@@ -139,8 +166,7 @@ def test_half_line_mode_solver_returns_exact_constrained_endpoint():
 def test_half_line_log_moments_are_warning_free_at_boundary_mode():
     """Endpoint log moments should be resolved without QUADPACK warnings."""
 
-    state = _state((0.0, np.inf), [0.2, 0.5, 1.0, 2.0], 2,
-                   [3.0, 1.0, 0.0], lower=True)
+    state = _state((0.0, np.inf), [0.2, 0.5, 1.0, 2.0], 2, [3.0, 1.0, 0.0], lower=True)
     assert state.mode == state.spec.support[0]
     with warnings.catch_warnings():
         warnings.simplefilter("error", IntegrationWarning)
@@ -149,8 +175,7 @@ def test_half_line_log_moments_are_warning_free_at_boundary_mode():
 
 
 def test_log_square_with_enabled_zero_amplitude_matches_python_oracle():
-    state = _state((0.0, np.inf), [0.25, 0.7, 1.5, 3.0], 2,
-                   [0.4, 0.8, 0.0], lower=True)
+    state = _state((0.0, np.inf), [0.25, 0.7, 1.5, 3.0], 2, [0.4, 0.8, 0.0], lower=True)
     lo = float(state.spec.support[0])
     got = state.moments.log_square("lower")
     expected = _direct_expectation(state, lambda z: np.log(z - lo) ** 2)
@@ -174,17 +199,20 @@ def test_fused_power_moments_match_scalar_quadrature_across_supports():
             support, data, degree, lower_log, upper_log
         )
         state = objective.build_state(result.params)
-        raw = power_moments(
-            np.asarray(state.quad_poly, dtype=np.float64),
-            np.asarray(state.spec.support, dtype=np.float64),
-            np.asarray(state.boundary_amplitudes, dtype=np.float64),
-            np.asarray(state.window, dtype=np.float64),
-            np.asarray(state.quad_points, dtype=np.float64),
-            12,
-            epsabs=1.49e-8,
-            epsrel=1.49e-8,
-            limit=100,
-        ) / state.Z
+        raw = (
+            power_moments(
+                np.asarray(state.quad_poly, dtype=np.float64),
+                np.asarray(state.spec.support, dtype=np.float64),
+                np.asarray(state.boundary_amplitudes, dtype=np.float64),
+                np.asarray(state.window, dtype=np.float64),
+                np.asarray(state.quad_points, dtype=np.float64),
+                12,
+                epsabs=1.49e-8,
+                epsrel=1.49e-8,
+                limit=100,
+            )
+            / state.Z
+        )
         scalar = np.array(
             [state.moments._integral(0, k, 0) / state.Z for k in range(13)],
             dtype=np.float64,

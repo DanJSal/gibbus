@@ -24,10 +24,14 @@ def entropy(potential, support, /, *, points=None):
     points : sequence of float or None, optional
         Quadrature breakpoints.
     """
-    return expect_vectorized(potential, support, lambda x: potential(x, 0), points=points)
+    return expect_vectorized(
+        potential, support, lambda x: potential(x, 0), points=points
+    )
 
 
-def cross_entropy(potential, support, other_potential, other_support, /, *, points=None):
+def cross_entropy(
+    potential, support, other_potential, other_support, /, *, points=None
+):
     """Return ``E_self[-log f_other(X)]``.
 
     Parameters
@@ -52,7 +56,9 @@ def cross_entropy(potential, support, other_potential, other_support, /, *, poin
     )
 
 
-def kl_divergence(potential, support, other_potential, other_support, /, *, points=None):
+def kl_divergence(
+    potential, support, other_potential, other_support, /, *, points=None
+):
     """Return KL divergence ``D_KL(self || other)``.
 
     Parameters
@@ -73,7 +79,8 @@ def kl_divergence(potential, support, other_potential, other_support, /, *, poin
     if lo < olo or hi > ohi:
         return np.inf
     value = expect_vectorized(
-        potential, support,
+        potential,
+        support,
         lambda x: other_potential(x, 0) - potential(x, 0),
         points=points,
     )

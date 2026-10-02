@@ -39,10 +39,12 @@ def test_extreme_lower_tail_cdf_roundtrips_single_component():
 
 def test_extreme_lower_tail_cdf_roundtrips_mixture():
     rng = np.random.default_rng(812)
-    x = np.concatenate([
-        rng.normal(-2.0, 0.5, 700),
-        rng.normal(2.0, 0.7, 700),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(-2.0, 0.5, 700),
+            rng.normal(2.0, 0.7, 700),
+        ]
+    )
     model = Distribution().fit(
         x,
         n_components=2,
@@ -59,17 +61,19 @@ def test_extreme_lower_tail_cdf_roundtrips_mixture():
 
 
 def test_point_boundary_statistics_preserve_subulp_physical_distance():
-    points = np.array([
-        np.nextafter(0.0, 1.0),
-        1e-300,
-        1e-100,
-        1e-20,
-        1e-5,
-        0.01,
-        0.1,
-        0.4,
-        0.8,
-    ])
+    points = np.array(
+        [
+            np.nextafter(0.0, 1.0),
+            1e-300,
+            1e-100,
+            1e-20,
+            1e-5,
+            0.01,
+            0.1,
+            0.4,
+            0.8,
+        ]
+    )
     point = _prepare_natural_point_objective(
         (0.0, np.inf), points, 2, True, False, None
     )
@@ -172,10 +176,12 @@ def test_endpoint_concentrated_bounded_fit_keeps_explicit_lower_boundary_basis()
 
 def test_nearly_coincident_forced_mixture_remains_certified():
     rng = np.random.default_rng(814)
-    x = np.concatenate([
-        rng.normal(-0.02, 1.0, 600),
-        rng.normal(0.02, 1.0, 600),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(-0.02, 1.0, 600),
+            rng.normal(0.02, 1.0, 600),
+        ]
+    )
     fitted = Distribution().fit(
         x,
         n_components=3,
@@ -193,16 +199,12 @@ def test_nearly_coincident_forced_mixture_remains_certified():
     assert np.all(np.diff(cdf) >= -2e-13)
 
 
-
 def _log_halfline_quadratic_integral(a, c):
     """Return log integral_0^inf exp(-a z^2 - c z) dz stably."""
     x = float(c) / (2.0 * np.sqrt(float(a)))
     if x >= 0.0:
         return float(
-            0.5 * np.log(np.pi)
-            - np.log(2.0)
-            - 0.5 * np.log(a)
-            + np.log(erfcx(x))
+            0.5 * np.log(np.pi) - np.log(2.0) - 0.5 * np.log(a) + np.log(erfcx(x))
         )
     return float(
         0.5 * np.log(np.pi)
@@ -222,10 +224,7 @@ def test_exp_moment_expands_beyond_original_material_window():
     q_poly = np.array([log_normalizer, b, a])
     window = np.array([0.0, 50.0])
 
-    expected = (
-        _log_halfline_quadratic_integral(a, b - 1.0)
-        - log_normalizer
-    )
+    expected = _log_halfline_quadratic_integral(a, b - 1.0) - log_normalizer
     got = _log_raw_moment_exp(
         support,
         q_poly,
@@ -280,16 +279,13 @@ def test_tail_rate_uses_exact_asymptotic_polynomial_geometry():
     almost_linear = np.array([0.0, 1.0, 1e-30])
     exactly_linear = np.array([0.0, 1.75])
 
-    assert np.isinf(
-        _tail_rate_from_geometry(support, almost_linear, 0.0, 1.0, "upper")
-    )
+    assert np.isinf(_tail_rate_from_geometry(support, almost_linear, 0.0, 1.0, "upper"))
     assert _tail_rate_from_geometry(
         support, exactly_linear, 0.0, 1.0, "upper"
     ) == pytest.approx(1.75)
     assert np.isinf(
         _tail_rate_from_geometry(support, exactly_linear, 0.0, 1.0, "lower")
     )
-
 
 
 def test_exp_statistics_propagate_overflow_instead_of_reporting_degeneracy():

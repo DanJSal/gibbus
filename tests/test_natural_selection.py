@@ -27,10 +27,12 @@ def _select(x, k_modes, /, *, k_max=6):
 def test_natural_bic_selects_two_separated_components():
     """The natural screening family resolves a clear two-component sample."""
     rng = np.random.default_rng(13)
-    x = np.concatenate([
-        rng.normal(-3.0, 0.7, 250),
-        rng.normal(3.0, 0.7, 250),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(-3.0, 0.7, 250),
+            rng.normal(3.0, 0.7, 250),
+        ]
+    )
     k, resp, weights, diagnostics = _select(x, 2, k_max=4)
 
     assert k == 2
@@ -57,10 +59,12 @@ def test_spurious_fixed_k_cluster_does_not_change_bic_selection():
     rng = np.random.default_rng(270901)
     n = 200
     split = round(0.6 * n)
-    x = np.concatenate([
-        rng.normal(0.0, 1.0, split),
-        rng.normal(1.2, 0.6, n - split),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(0.0, 1.0, split),
+            rng.normal(1.2, 0.6, n - split),
+        ]
+    )
     k_modes = _count_modes_kde(np.ascontiguousarray(x))
     assert k_modes == 1
 
@@ -76,10 +80,12 @@ def test_spurious_fixed_k_cluster_does_not_change_bic_selection():
 def test_natural_bic_scores_interval_rows_directly():
     """Separated binned observations are selected using interval likelihoods."""
     rng = np.random.default_rng(15)
-    x = np.concatenate([
-        rng.normal(-2.5, 0.55, 180),
-        rng.normal(2.5, 0.55, 180),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(-2.5, 0.55, 180),
+            rng.normal(2.5, 0.55, 180),
+        ]
+    )
     lower = np.floor(x / 0.4) * 0.4
     rows = np.ascontiguousarray(np.column_stack([lower, lower + 0.4]))
     representatives = rows.mean(axis=1)
@@ -100,13 +106,16 @@ def test_natural_bic_scores_interval_rows_directly():
     assert weights.shape == (2,)
     assert diagnostics["selected_n_components"] == 2
 
+
 def test_natural_bic_subsample_returns_full_data_initializer():
     """Subsample scoring keeps the winning initializer on the full dataset."""
     rng = np.random.default_rng(16)
-    x = np.concatenate([
-        rng.normal(-3.0, 0.65, 1000),
-        rng.normal(3.0, 0.65, 1000),
-    ])
+    x = np.concatenate(
+        [
+            rng.normal(-3.0, 0.65, 1000),
+            rng.normal(3.0, 0.65, 1000),
+        ]
+    )
     data = np.ascontiguousarray(x, dtype=np.float64)
     k, resp, weights, diagnostics = select_n_components(
         S=data[:, None],
@@ -126,4 +135,3 @@ def test_natural_bic_subsample_returns_full_data_initializer():
     assert diagnostics["subsampled"] is True
     assert diagnostics["subsample_size"] == 400
     assert diagnostics["full_sample_size"] == data.size
-

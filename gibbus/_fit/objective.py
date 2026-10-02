@@ -107,10 +107,9 @@ def _finite_interval_log_kernel(state, support, plan, point_q, /):
     point_log_kernel = None
     if point_mid.size:
         point_log_kernel = float(state.q_shift) - np.asarray(
-            point_q(point_mid), dtype=np.float64)
-    log_integrals = plan.log_integrals(
-        log_kernel, point_log_kernel=point_log_kernel
-    )
+            point_q(point_mid), dtype=np.float64
+        )
+    log_integrals = plan.log_integrals(log_kernel, point_log_kernel=point_log_kernel)
     return nodes, log_kernel, point_mid, log_integrals
 
 
@@ -196,7 +195,9 @@ def _evaluate_point_objective(state, observations, /):
     """
     if not isinstance(observations, _PointObservations):
         raise TypeError("observations must be a _PointObservations")
-    if tuple(map(float, observations.stats.support)) != tuple(map(float, state.spec.support)):
+    if tuple(map(float, observations.stats.support)) != tuple(
+        map(float, state.spec.support)
+    ):
         raise ValueError("empirical statistics and model support do not match")
     if not (state.Z > 0.0 and np.isfinite(state.Z) and np.isfinite(state.log_Z)):
         raise RuntimeError("candidate state is not normalizable")
@@ -257,7 +258,7 @@ def _model_first_means_and_fisher(state, /):
     for i, partial in enumerate(partials):
         if partial.kind == _POLY:
             c = np.asarray(partial.coefficients, dtype=np.float64)
-            means[i] = float(np.dot(c, power[:c.size]))
+            means[i] = float(np.dot(c, power[: c.size]))
         else:
             means[i] = -float(log_power[partial.boundary_side][0])
 
@@ -302,10 +303,10 @@ def _model_partial_product_expectation(
 
     if partial_a.kind == _POLY and partial_b.kind == _LOGDIST:
         c = np.asarray(partial_a.coefficients, dtype=np.float64)
-        return -float(np.dot(c, log_power[partial_b.boundary_side][:c.size]))
+        return -float(np.dot(c, log_power[partial_b.boundary_side][: c.size]))
     if partial_a.kind == _LOGDIST and partial_b.kind == _POLY:
         c = np.asarray(partial_b.coefficients, dtype=np.float64)
-        return -float(np.dot(c, log_power[partial_a.boundary_side][:c.size]))
+        return -float(np.dot(c, log_power[partial_a.boundary_side][: c.size]))
 
     if partial_a.boundary_side == partial_b.boundary_side:
         return float(state.moments.log_square(partial_a.boundary_side))
@@ -412,44 +413,47 @@ def _evaluate_interval_objective(state, observations, /):
         finite_idx = np.flatnonzero(regular_finite_mask)
         if finite_idx.size:
             numerics = _layout_numerics(state.layout)
-            finite_logp, finite_h, finite_cov = (
-                _evaluate_finite_objective_kernel(
-                    np.ascontiguousarray(observations.intervals[finite_idx], dtype=np.float64),
-                    np.ascontiguousarray(observations.weights[finite_idx], dtype=np.float64),
-                    np.ascontiguousarray(
-                        observations.point_lower_distance[finite_idx], dtype=np.float64
-                    ),
-                    np.ascontiguousarray(
-                        observations.point_upper_distance[finite_idx], dtype=np.float64
-                    ),
-                    state.q_poly,
-                    state.boundary_amplitudes,
-                    float(state.q_shift),
-                    float(np.log(state.Z)),
-                    float(state.mode),
-                    float(state.spec.coordinate.scale),
-                    numerics.kinds,
-                    numerics.lengths,
-                    numerics.coefficients,
-                    float(support[0]),
-                    float(support[1]),
-                    _GL_X,
-                    _GL_LOG_W,
-                    float(INTERVAL_W_EPS_MULT),
-                )
+            finite_logp, finite_h, finite_cov = _evaluate_finite_objective_kernel(
+                np.ascontiguousarray(
+                    observations.intervals[finite_idx], dtype=np.float64
+                ),
+                np.ascontiguousarray(
+                    observations.weights[finite_idx], dtype=np.float64
+                ),
+                np.ascontiguousarray(
+                    observations.point_lower_distance[finite_idx], dtype=np.float64
+                ),
+                np.ascontiguousarray(
+                    observations.point_upper_distance[finite_idx], dtype=np.float64
+                ),
+                state.q_poly,
+                state.boundary_amplitudes,
+                float(state.q_shift),
+                float(np.log(state.Z)),
+                float(state.mode),
+                float(state.spec.coordinate.scale),
+                numerics.kinds,
+                numerics.lengths,
+                numerics.coefficients,
+                float(support[0]),
+                float(support[1]),
+                _GL_X,
+                _GL_LOG_W,
+                float(INTERVAL_W_EPS_MULT),
             )
             log_probability[finite_idx] = finite_logp
             observed_h += finite_h
             observed_cov += finite_cov
 
-        adaptive_idx = np.flatnonzero((~observations.finite_rows) | adaptive_boundary_mask)
+        adaptive_idx = np.flatnonzero(
+            (~observations.finite_rows) | adaptive_boundary_mask
+        )
         if adaptive_idx.size:
             adaptive_rows = np.ascontiguousarray(
                 observations.intervals[adaptive_idx], dtype=np.float64
             )
-            whole_support = (
-                (adaptive_rows[:, 0] == float(support[0]))
-                & (adaptive_rows[:, 1] == float(support[1]))
+            whole_support = (adaptive_rows[:, 0] == float(support[0])) & (
+                adaptive_rows[:, 1] == float(support[1])
             )
             if np.any(whole_support):
                 whole_idx = adaptive_idx[whole_support]
@@ -464,15 +468,16 @@ def _evaluate_interval_objective(state, observations, /):
                 adaptive_reducer = _prepare_partial_interval_reducer(state)
                 batch = adaptive_reducer.reduce_weighted(
                     np.ascontiguousarray(adaptive_rows[reduce_mask], dtype=np.float64),
-                    np.ascontiguousarray(observations.weights[reduce_idx], dtype=np.float64),
+                    np.ascontiguousarray(
+                        observations.weights[reduce_idx], dtype=np.float64
+                    ),
                 )
                 log_probability[reduce_idx] = batch[0]
                 observed_h += np.asarray(batch[1], dtype=np.float64)
                 observed_cov += np.asarray(batch[2], dtype=np.float64)
 
-    if (
-        not np.all(np.isfinite(log_probability))
-        or np.any(log_probability[positive_width] > 1e-7)
+    if not np.all(np.isfinite(log_probability)) or np.any(
+        log_probability[positive_width] > 1e-7
     ):
         raise RuntimeError("candidate interval probabilities are numerically invalid")
     nll = -float(np.dot(observations.weights, log_probability))

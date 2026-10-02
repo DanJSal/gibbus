@@ -76,33 +76,40 @@ class _DiagnosticsMixin:
         component_records = []
         for index, comp in enumerate(self._components):
             state = comp.data
-            component_records.append({
-                "component": int(index),
-                "success": bool(int(state["optimizer_success"])),
-                "status": str(state["optimizer_status"]),
-                "message": str(state["optimizer_message"]),
-                "n_iterations": int(state["optimizer_n_iterations"]),
-                "n_evaluations": int(state["optimizer_n_evaluations"]),
-                "subproblem_iterations": int(
-                    state["optimizer_subproblem_iterations"]),
-                "decrease_bound": float(state["optimizer_decrease_bound"]),
-                "effective_curvature_degree": int(
-                    state["effective_curvature_degree"]),
-                "lower_amplitude_active": bool(
-                    int(state["lower_amplitude_active"])),
-                "upper_amplitude_active": bool(
-                    int(state["upper_amplitude_active"])),
-                "separator_certified": bool(int(state["separator_certified"])),
-                "boundary_standard_errors": tuple(
-                    float(v) for v in np.asarray(state["boundary_standard_errors"]).ravel()
-                ),
-                "boundary_p_values": tuple(
-                    float(v) for v in np.asarray(state["boundary_p_values"]).ravel()
-                ),
-                "weakly_identified_boundary_terms": _weakly_identified_sides(
-                    state["boundary_amplitudes"], state["boundary_standard_errors"]
-                ),
-            })
+            component_records.append(
+                {
+                    "component": int(index),
+                    "success": bool(int(state["optimizer_success"])),
+                    "status": str(state["optimizer_status"]),
+                    "message": str(state["optimizer_message"]),
+                    "n_iterations": int(state["optimizer_n_iterations"]),
+                    "n_evaluations": int(state["optimizer_n_evaluations"]),
+                    "subproblem_iterations": int(
+                        state["optimizer_subproblem_iterations"]
+                    ),
+                    "decrease_bound": float(state["optimizer_decrease_bound"]),
+                    "effective_curvature_degree": int(
+                        state["effective_curvature_degree"]
+                    ),
+                    "lower_amplitude_active": bool(
+                        int(state["lower_amplitude_active"])
+                    ),
+                    "upper_amplitude_active": bool(
+                        int(state["upper_amplitude_active"])
+                    ),
+                    "separator_certified": bool(int(state["separator_certified"])),
+                    "boundary_standard_errors": tuple(
+                        float(v)
+                        for v in np.asarray(state["boundary_standard_errors"]).ravel()
+                    ),
+                    "boundary_p_values": tuple(
+                        float(v) for v in np.asarray(state["boundary_p_values"]).ravel()
+                    ),
+                    "weakly_identified_boundary_terms": _weakly_identified_sides(
+                        state["boundary_amplitudes"], state["boundary_standard_errors"]
+                    ),
+                }
+            )
         optimizer_ok = all(r.get("success") is True for r in component_records)
         em = None if self._em_diagnostics is None else dict(self._em_diagnostics)
         em_ok = True if em is None else bool(em.get("converged", False))
@@ -115,7 +122,8 @@ class _DiagnosticsMixin:
                 finite = np.isfinite(log_h)
                 vals = log_h[finite]
                 hazard_is_monotone = (
-                    None if vals.size < 2
+                    None
+                    if vals.size < 2
                     else bool(np.all(np.diff(vals) >= -float(HAZARD_MONOTONE_TOL)))
                 )
             else:
@@ -223,8 +231,9 @@ class _DiagnosticsMixin:
         rep = self._mix_spectral_cdf_rep
         return {
             "scope": "mixture",
-            "refinement_capped": bool(rep.max_depth_used >= int(rep.max_depth)
-                                  or rep.panel_budget_exhausted),
+            "refinement_capped": bool(
+                rep.max_depth_used >= int(rep.max_depth) or rep.panel_budget_exhausted
+            ),
             "uncertified_mass": float(rep.uncertified_mass_fraction),
             "mass_defect": float(rep.mass_defect),
             "worst_panel_error": float(rep.worst_panel_error),

@@ -1,4 +1,5 @@
 """Tests for the new model-independent interval observation layer."""
+
 import numpy as np
 import pytest
 from scipy.integrate import quad
@@ -44,8 +45,6 @@ def test_weighted_duplicate_compression_is_exact():
     assert obs.effective_n == pytest.approx(36.0 / 14.0)
 
 
-
-
 def test_weight_normalization_survives_overflowing_raw_sum():
     intervals = np.array([[0.0, 1.0], [1.0, 2.0], [2.0, 3.0]])
     w = np.full(3, 1.0e308)
@@ -78,18 +77,18 @@ def test_infinite_rows_are_classified_but_finite_plan_refuses_them():
         obs.finite_quadrature(0.0)
 
 
-
-
 def test_log_integrals_match_direct_quadrature_for_gaussian_kernel():
     intervals = np.array([[-2.0, -0.2], [-0.7, 0.8], [0.3, 2.2]])
     obs = _build_interval_observations(intervals, deduplicate=False)
     plan = obs.finite_quadrature(0.0)
     log_kernel = -0.5 * plan.nodes**2
     got = np.exp(plan.log_integrals(log_kernel))
-    expected = np.array([
-        quad(lambda z: np.exp(-0.5 * z * z), lo, hi, epsabs=1e-13)[0]
-        for lo, hi in intervals
-    ])
+    expected = np.array(
+        [
+            quad(lambda z: np.exp(-0.5 * z * z), lo, hi, epsabs=1e-13)[0]
+            for lo, hi in intervals
+        ]
+    )
     assert np.allclose(got, expected, rtol=2e-13, atol=2e-14)
 
 
@@ -99,8 +98,8 @@ def test_point_limit_matches_density_and_zero_conditional_covariance():
     plan = obs.finite_quadrature(0.0)
     assert np.all(plan.point_limit)
 
-    log_kernel = -plan.nodes**2
-    point_log = -plan.midpoints**2
+    log_kernel = -(plan.nodes**2)
+    point_log = -(plan.midpoints**2)
     log_i = plan.log_integrals(log_kernel, point_log_kernel=point_log)
     assert log_i[0] == pytest.approx(point_log[0])
     assert log_i[1] == pytest.approx(point_log[1] + np.log(plan.widths[1]))
@@ -135,10 +134,12 @@ def test_conditional_mean_and_covariance_match_direct_integrals():
         m3 = quad(lambda z: z**3 * np.exp(-0.5 * (z - 0.2) ** 2), lo, hi)[0] / z0
         m4 = quad(lambda z: z**4 * np.exp(-0.5 * (z - 0.2) ** 2), lo, hi)[0] / z0
         expected_mean = np.array([m1, m2])
-        expected_cov = np.array([
-            [m2 - m1 * m1, m3 - m1 * m2],
-            [m3 - m1 * m2, m4 - m2 * m2],
-        ])
+        expected_cov = np.array(
+            [
+                [m2 - m1 * m1, m3 - m1 * m2],
+                [m3 - m1 * m2, m4 - m2 * m2],
+            ]
+        )
         assert np.allclose(mean[r], expected_mean, rtol=2e-12, atol=2e-13)
         assert np.allclose(cov[r], expected_cov, rtol=3e-11, atol=3e-12)
 
@@ -173,16 +174,19 @@ def test_exact_points_preserve_sub_ulp_boundary_distance_through_affine_map():
 def test_row_grouping_matches_numpy_unique_on_numeric_edge_cases():
     from gibbus._observations.intervals import _row_grouping
 
-    rows = np.array([
-        [0.0, 1.0],
-        [-0.0, 1.0],
-        [np.inf, np.inf],
-        [-np.inf, 0.0],
-        [2.0, 3.0],
-        [0.0, 1.0],
-        [2.0, 3.0],
-        [-np.inf, 0.0],
-    ], dtype=np.float64)
+    rows = np.array(
+        [
+            [0.0, 1.0],
+            [-0.0, 1.0],
+            [np.inf, np.inf],
+            [-np.inf, 0.0],
+            [2.0, 3.0],
+            [0.0, 1.0],
+            [2.0, 3.0],
+            [-np.inf, 0.0],
+        ],
+        dtype=np.float64,
+    )
     unique, expected_first, expected_inverse = np.unique(
         rows, axis=0, return_index=True, return_inverse=True
     )

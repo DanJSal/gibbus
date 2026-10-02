@@ -1,4 +1,5 @@
 """Tests for generic compiled kernels used by the native fitting stack."""
+
 import numpy as np
 import pytest
 from numpy.polynomial.polynomial import polyval
@@ -37,8 +38,9 @@ def test_degree_two_fit_uses_compiled_evaluation_kernels():
 
     rng = np.random.default_rng(3)
     data = np.ascontiguousarray(rng.normal(size=300))
-    fit = Distribution().fit(data, n_components=1, poly_degree=2,
-                      support=(-np.inf, np.inf))
+    fit = Distribution().fit(
+        data, n_components=1, poly_degree=2, support=(-np.inf, np.inf)
+    )
     assert fit.is_fitted
     assert np.isfinite(fit.mean)
     assert fit.var > 0.0

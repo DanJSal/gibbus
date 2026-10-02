@@ -137,8 +137,7 @@ class _FitCoordinate:
         numpy.ndarray
             Values in the canonical fitting coordinate.
         """
-        return self.direction * _safe_scaled_difference(
-            values, self.center, self.scale)
+        return self.direction * _safe_scaled_difference(values, self.center, self.scale)
 
     def from_canonical(self, values, /):
         """Map values from the fixed fitting coordinate back to user units.
@@ -290,7 +289,14 @@ def _support_kind(support, /):
 
 
 def _build_fit_coordinate(
-    support, point_samples, weights=None, widths=None, /, *, order=None, width_order=None
+    support,
+    point_samples,
+    weights=None,
+    widths=None,
+    /,
+    *,
+    order=None,
+    width_order=None,
 ):
     """Choose the fixed numerical coordinate for one fit.
 
@@ -364,7 +370,9 @@ def _build_fit_coordinate(
                 scale = fallback
 
     if not (np.isfinite(scale) and scale > 0.0):
-        raise _RobustScaleZero("Cannot construct fitting coordinate: robust scale is zero")
+        raise _RobustScaleZero(
+            "Cannot construct fitting coordinate: robust scale is zero"
+        )
 
     if kind == _BOUNDED:
         # Keep the complete finite support in a numerically moderate power
@@ -382,7 +390,8 @@ def _build_fit_coordinate(
 
     direction = -1.0 if kind == _UPPER_HALF_LINE else 1.0
     mapped_support = direction * _safe_scaled_difference(
-        np.asarray([lower, upper]), center, scale)
+        np.asarray([lower, upper]), center, scale
+    )
     canonical_support = tuple(np.sort(mapped_support))
 
     return _FitCoordinate(
@@ -485,9 +494,7 @@ def _build_interval_fit_coordinate(support, intervals, weights=None, /):
     widths = np.asarray(width_floor, dtype=np.float64)
     scale_error = None
     try:
-        return _build_fit_coordinate(
-            support, landmarks, landmark_weights, widths
-        )
+        return _build_fit_coordinate(support, landmarks, landmark_weights, widths)
     except _RobustScaleZero as exc:
         scale_error = exc
 
@@ -516,11 +523,14 @@ def _build_interval_fit_coordinate(support, intervals, weights=None, /):
 
     scale = float(np.median(np.asarray(candidates, dtype=np.float64)))
     if not (np.isfinite(scale) and scale > 0.0):
-        raise ValueError("cannot construct a positive censored-data fitting scale") from scale_error
+        raise ValueError(
+            "cannot construct a positive censored-data fitting scale"
+        ) from scale_error
 
     direction = -1.0 if kind == _UPPER_HALF_LINE else 1.0
     mapped_support = direction * _safe_scaled_difference(
-        np.asarray([lower, upper]), center, scale)
+        np.asarray([lower, upper]), center, scale
+    )
     canonical_support = tuple(np.sort(mapped_support))
     return _FitCoordinate(
         support_kind=kind,

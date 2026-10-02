@@ -192,7 +192,7 @@ class _BaseSpaceView:
         """
         self._p._ensure_fitted()
         x = np.asarray(x, dtype=np.float64)
-        scalar = (x.ndim == 0)
+        scalar = x.ndim == 0
         mu_eff, sigma_eff = self._p._mu_sigma_eff()
         z = sigma_eff * x + mu_eff
         out = abs(sigma_eff) * self._p._base_pdf(z)
@@ -220,7 +220,7 @@ class _BaseSpaceView:
         """
         self._p._ensure_fitted()
         x = np.asarray(x, dtype=np.float64)
-        scalar = (x.ndim == 0)
+        scalar = x.ndim == 0
         mu_eff, sigma_eff = self._p._mu_sigma_eff()
         z = sigma_eff * x + mu_eff
         base = np.asarray(self._p._base_cdf(z), dtype=np.float64)
@@ -246,7 +246,11 @@ class _BaseSpaceView:
         """
         lo, hi = map(float, self.support)
         return cdf_hybrid(
-            self.neg_log, self._spectral_cdf, x, lo, upper_endpoint=hi,
+            self.neg_log,
+            self._spectral_cdf,
+            x,
+            lo,
+            upper_endpoint=hi,
             log_tail_mass=self._exact_tail_log_mass,
             log_tail_masses=self._exact_tail_log_masses,
         )
@@ -276,7 +280,7 @@ class _BaseSpaceView:
         """
         self._p._ensure_fitted()
         p = np.asarray(p, dtype=np.float64)
-        scalar = (p.ndim == 0)
+        scalar = p.ndim == 0
         if np.any(~np.isfinite(p) | (p < 0.0) | (p > 1.0)):
             raise ValueError("ppf is defined for finite p in [0, 1]")
 
@@ -286,9 +290,12 @@ class _BaseSpaceView:
         # has the same extreme-tail semantics.
         supp = self.support
         out = refine_tail_quantiles(
-            self.neg_log, self._raw_ppf,
-            float(supp[0]), float(supp[1]),
-            np.atleast_1d(p).reshape(-1), out.reshape(-1),
+            self.neg_log,
+            self._raw_ppf,
+            float(supp[0]),
+            float(supp[1]),
+            np.atleast_1d(p).reshape(-1),
+            out.reshape(-1),
             log_tail_mass=self._exact_tail_log_mass,
         )
 
@@ -343,12 +350,17 @@ class _BaseSpaceView:
         if n < 0:
             raise ValueError("n must be >= 0")
         x = np.asarray(x, dtype=np.float64)
-        scalar = (x.ndim == 0)
+        scalar = x.ndim == 0
         mu_eff, sigma_eff = self._p._mu_sigma_eff()
         potential_support = self._p._potential_support_base()
         out = _potential_oriented_affine_eval(
-            x, potential_support, mu_eff, sigma_eff,
-            data["q_poly"], data["boundary_amplitudes"], n,
+            x,
+            potential_support,
+            mu_eff,
+            sigma_eff,
+            data["q_poly"],
+            data["boundary_amplitudes"],
+            n,
         )
         active_lo, active_hi = map(float, self.support)
         active = np.isfinite(x)
@@ -387,9 +399,7 @@ class _BaseSpaceView:
         )
         if message is not None:
             side = "upper" if upper else "lower"
-            _reraise_if_debug(
-                RuntimeError(message), f"{side}-tail compiled quadrature"
-            )
+            _reraise_if_debug(RuntimeError(message), f"{side}-tail compiled quadrature")
         return float(value)
 
     def _exact_tail_log_masses(self, x, endpoint, /, *, upper=False):
@@ -447,7 +457,11 @@ class _BaseSpaceView:
         """
         lo, hi = map(float, self.support)
         return log_cdf_hybrid(
-            self.neg_log, self._spectral_cdf, x, lo, upper_endpoint=hi,
+            self.neg_log,
+            self._spectral_cdf,
+            x,
+            lo,
+            upper_endpoint=hi,
             log_tail_mass=self._exact_tail_log_mass,
             log_tail_masses=self._exact_tail_log_masses,
         )
@@ -462,7 +476,11 @@ class _BaseSpaceView:
         """
         lo, hi = map(float, self.support)
         return log_sf_hybrid(
-            self.neg_log, self._spectral_cdf, x, hi, lower_endpoint=lo,
+            self.neg_log,
+            self._spectral_cdf,
+            x,
+            hi,
+            lower_endpoint=lo,
             log_tail_mass=self._exact_tail_log_mass,
             log_tail_masses=self._exact_tail_log_masses,
         )
@@ -489,7 +507,10 @@ class _BaseSpaceView:
             Survival probabilities in ``[0, 1]``.
         """
         return _isf(
-            self.neg_log, self.ppf, self.support, p,
+            self.neg_log,
+            self.ppf,
+            self.support,
+            p,
             log_tail_mass=self._exact_tail_log_mass,
         )
 
@@ -502,7 +523,10 @@ class _BaseSpaceView:
             Log probabilities no greater than zero.
         """
         return _logppf(
-            self.neg_log, self.ppf, self.support, log_p,
+            self.neg_log,
+            self.ppf,
+            self.support,
+            log_p,
             log_tail_mass=self._exact_tail_log_mass,
         )
 
@@ -515,7 +539,10 @@ class _BaseSpaceView:
             Log probabilities no greater than zero.
         """
         return _logisf(
-            self.neg_log, self.ppf, self.support, log_p,
+            self.neg_log,
+            self.ppf,
+            self.support,
+            log_p,
             log_tail_mass=self._exact_tail_log_mass,
         )
 
@@ -555,7 +582,9 @@ class _BaseSpaceView:
         scalar = np.asarray(x).ndim == 0
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
             h = np.asarray(np.exp(self.log_hazard(x)), dtype=np.float64)
-        out = h if n == 0 else h * (h - np.asarray(self.neg_log(x, 1), dtype=np.float64))
+        out = (
+            h if n == 0 else h * (h - np.asarray(self.neg_log(x, 1), dtype=np.float64))
+        )
         return float(out) if scalar else out
 
     def cumulative_hazard(self, x):
@@ -611,8 +640,14 @@ class _BaseSpaceView:
             Probability mass in ``(0, 1]``.
         """
         return _hpd(
-            self.logpdf, self.logcdf, self.logsf, self.ppf, self.isf,
-            self.support, level, modes=(self.mode,),
+            self.logpdf,
+            self.logcdf,
+            self.logsf,
+            self.ppf,
+            self.isf,
+            self.support,
+            level,
+            modes=(self.mode,),
         )
 
     def expect(self, func):
@@ -640,7 +675,10 @@ class _BaseSpaceView:
         if not isinstance(other, _BaseSpaceView):
             raise ValueError("cross_entropy requires another base-space view")
         return _cross_entropy(
-            self.neg_log, self.support, other.neg_log, other.support,
+            self.neg_log,
+            self.support,
+            other.neg_log,
+            other.support,
             points=(self.mode,),
         )
 
@@ -655,7 +693,10 @@ class _BaseSpaceView:
         if not isinstance(other, _BaseSpaceView):
             raise ValueError("kl_divergence requires another base-space view")
         return _kl_divergence(
-            self.neg_log, self.support, other.neg_log, other.support,
+            self.neg_log,
+            self.support,
+            other.neg_log,
+            other.support,
             points=(self.mode,),
         )
 
@@ -702,9 +743,7 @@ class _BaseSpaceView:
         support, _amps = self._p._internal_model_geometry()
         q_poly = np.asarray(self._p.data["q_poly"], dtype=np.float64)
         mu_eff, sigma_eff = self._p._mu_sigma_eff()
-        return _tail_rate_from_geometry(
-            support, q_poly, mu_eff, sigma_eff, side
-        )
+        return _tail_rate_from_geometry(support, q_poly, mu_eff, sigma_eff, side)
 
     def sample(self, size=None, rng=None):
         """Draw random samples in base coordinates.
@@ -732,7 +771,9 @@ class _BaseSpaceView:
         u = np.clip(gen.random(n), PROB_EPS, 1.0 - PROB_EPS)
         return self.ppf(u)
 
-    def moment(self, k: int, central: bool = False, standardized: bool = False) -> float:
+    def moment(
+        self, k: int, central: bool = False, standardized: bool = False
+    ) -> float:
         """Compute the *k*-th moment in base coordinates.
 
         Parameters
@@ -760,18 +801,16 @@ class _BaseSpaceView:
         # translated raw moments such as 1e24 - 1e24 for a distribution centered
         # near 1e12.
         z_mean = float(self._p._canonical_raw_moment(1))
-        z_cm = _pf._central_moment_from_raw(
-            self._p._canonical_raw_moment, k, z_mean)
+        z_cm = _pf._central_moment_from_raw(self._p._canonical_raw_moment, k, z_mean)
         _mu_eff, sigma_eff = self._p._mu_sigma_eff()
         alpha = 1.0 / float(sigma_eff)
-        cm = float((alpha ** k) * z_cm)
+        cm = float((alpha**k) * z_cm)
         if not standardized:
             return cm
         std = float(self.std)
         if not (std > 0.0):
             raise RuntimeError("Standardized moment is undefined because std <= 0.")
-        return float(cm / (std ** k))
-
+        return float(cm / (std**k))
 
     def cumulant(self, k: int) -> float:
         """Return the *k*-th cumulant in base coordinates.
@@ -863,7 +902,15 @@ class _ExpSpaceView:
         window = np.asarray(data["window"], dtype=np.float64)
         mu_eff, sigma_eff = self._p._mu_sigma_eff()
         terms = _terms_for_quad(base_support, boundary_amplitudes)
-        self._q_cache = (base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, terms)
+        self._q_cache = (
+            base_support,
+            q_poly,
+            boundary_amplitudes,
+            window,
+            mu_eff,
+            sigma_eff,
+            terms,
+        )
         return self._q_cache
 
     def _log_raw_moment(self, k: int) -> float:
@@ -881,11 +928,27 @@ class _ExpSpaceView:
         hit = self._log_raw_cache.get(k)
         if hit is not None:
             return hit
-        (base_support, q_poly, boundary_amplitudes, window,
-         mu_eff, sigma_eff, terms) = q_cache
-        value = float(_pf._log_raw_moment_exp(
-            base_support, q_poly, boundary_amplitudes, window,
-            mu_eff, sigma_eff, k, terms))
+        (
+            base_support,
+            q_poly,
+            boundary_amplitudes,
+            window,
+            mu_eff,
+            sigma_eff,
+            terms,
+        ) = q_cache
+        value = float(
+            _pf._log_raw_moment_exp(
+                base_support,
+                q_poly,
+                boundary_amplitudes,
+                window,
+                mu_eff,
+                sigma_eff,
+                k,
+                terms,
+            )
+        )
         self._log_raw_cache[k] = value
         return value
 
@@ -917,11 +980,19 @@ class _ExpSpaceView:
 
     def _log_mode_coordinate(self):
         """Return the exp-space component mode in base/log coordinates."""
-        (base_support, q_poly, boundary_amplitudes, window,
-         mu_eff, sigma_eff, _terms) = self._ensure_q_cache()
+        (
+            base_support,
+            q_poly,
+            boundary_amplitudes,
+            window,
+            mu_eff,
+            sigma_eff,
+            _terms,
+        ) = self._ensure_q_cache()
         shift = -1.0 / float(sigma_eff)
         z_star = _pf._valley(
-            window, base_support, q_poly, boundary_amplitudes, float(shift))
+            window, base_support, q_poly, boundary_amplitudes, float(shift)
+        )
         return float((z_star - mu_eff) / sigma_eff)
 
     def _ensure_stats(self):
@@ -951,11 +1022,27 @@ class _ExpSpaceView:
         k : int
             Centered-moment order.
         """
-        (base_support, q_poly, boundary_amplitudes, window,
-         mu_eff, sigma_eff, _terms) = self._ensure_q_cache()
-        return float(_pf._relative_centered_moment_exp(
-            base_support, q_poly, boundary_amplitudes, window,
-            mu_eff, sigma_eff, float(log_mean), int(k)))
+        (
+            base_support,
+            q_poly,
+            boundary_amplitudes,
+            window,
+            mu_eff,
+            sigma_eff,
+            _terms,
+        ) = self._ensure_q_cache()
+        return float(
+            _pf._relative_centered_moment_exp(
+                base_support,
+                q_poly,
+                boundary_amplitudes,
+                window,
+                mu_eff,
+                sigma_eff,
+                float(log_mean),
+                int(k),
+            )
+        )
 
     @property
     def support(self):
@@ -1021,8 +1108,10 @@ class _ExpSpaceView:
         """
         self._p._ensure_fitted()
         y = np.asarray(y, dtype=np.float64)
-        scalar = (y.ndim == 0)
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        scalar = y.ndim == 0
+        with np.errstate(
+            divide="ignore", invalid="ignore", over="ignore", under="ignore"
+        ):
             x = np.log(y)
             out = self._p.base.pdf(x) / y
             # Zero density at and below zero; NaN input propagates.
@@ -1043,8 +1132,10 @@ class _ExpSpaceView:
         """
         self._p._ensure_fitted()
         y = np.asarray(y, dtype=np.float64)
-        scalar = (y.ndim == 0)
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        scalar = y.ndim == 0
+        with np.errstate(
+            divide="ignore", invalid="ignore", over="ignore", under="ignore"
+        ):
             x = np.log(y)
             out = self._p.base.cdf(x)
             out = np.where(y > 0.0, out, np.where(np.isnan(y), np.nan, 0.0))
@@ -1065,7 +1156,7 @@ class _ExpSpaceView:
         """
         self._p._ensure_fitted()
         p = np.asarray(p, dtype=np.float64)
-        scalar = (p.ndim == 0)
+        scalar = p.ndim == 0
         if np.any(~np.isfinite(p) | (p < 0.0) | (p > 1.0)):
             raise ValueError("ppf is defined for finite p in [0, 1]")
         out = np.exp(self._p.base.ppf(p))
@@ -1090,7 +1181,7 @@ class _ExpSpaceView:
         if n < 0:
             raise ValueError("n must be >= 0")
         y = np.asarray(y, dtype=np.float64)
-        scalar = (y.ndim == 0)
+        scalar = y.ndim == 0
         out = self._p._base_exp_potential(y, n)
         return float(out) if scalar else out
 
@@ -1227,7 +1318,9 @@ class _ExpSpaceView:
         scalar = np.asarray(y).ndim == 0
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
             h = np.asarray(np.exp(self.log_hazard(y)), dtype=np.float64)
-        out = h if n == 0 else h * (h - np.asarray(self.neg_log(y, 1), dtype=np.float64))
+        out = (
+            h if n == 0 else h * (h - np.asarray(self.neg_log(y, 1), dtype=np.float64))
+        )
         return float(out) if scalar else out
 
     def cumulative_hazard(self, y):
@@ -1283,8 +1376,14 @@ class _ExpSpaceView:
             Probability mass in ``(0, 1]``.
         """
         return _hpd(
-            self.logpdf, self.logcdf, self.logsf, self.ppf, self.isf,
-            self.support, level, modes=(self.mode,),
+            self.logpdf,
+            self.logcdf,
+            self.logsf,
+            self.ppf,
+            self.isf,
+            self.support,
+            level,
+            modes=(self.mode,),
         )
 
     def expect(self, func):
@@ -1295,10 +1394,12 @@ class _ExpSpaceView:
         func : callable
             Scalar function of the exp-space random variable.
         """
+
         def transformed(x):
             with np.errstate(over="ignore"):
                 y = float(np.exp(x))
             return func(y)
+
         return self._p.base.expect(transformed)
 
     def entropy(self):
@@ -1325,7 +1426,9 @@ class _ExpSpaceView:
             with np.errstate(over="ignore"):
                 return other.neg_log(np.exp(x), 0)
 
-        return _expect_vectorized(base.neg_log, base.support, transformed, points=(base.mode,))
+        return _expect_vectorized(
+            base.neg_log, base.support, transformed, points=(base.mode,)
+        )
 
     def kl_divergence(self, other):
         """Return KL divergence, invariant under the common exp transform.
@@ -1401,7 +1504,9 @@ class _ExpSpaceView:
         s = self._p.base.sample(size=size, rng=rng)
         return np.exp(s)
 
-    def moment(self, k: int, central: bool = False, standardized: bool = False) -> float:
+    def moment(
+        self, k: int, central: bool = False, standardized: bool = False
+    ) -> float:
         """Compute the *k*-th moment in exp coordinates.
 
         Parameters
@@ -1427,9 +1532,13 @@ class _ExpSpaceView:
         if low_order is not None:
             return low_order
         return _pf._moment_from_raw(
-            self._raw_moment, k, float(self.mean), float(self.std),
-            bool(central), bool(standardized))
-
+            self._raw_moment,
+            k,
+            float(self.mean),
+            float(self.std),
+            bool(central),
+            bool(standardized),
+        )
 
     def cumulant(self, k: int) -> float:
         """Return the *k*-th cumulant in exp coordinates.

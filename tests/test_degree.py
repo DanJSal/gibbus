@@ -1,4 +1,5 @@
 """Tests for information-based omitted-statistic degree diagnostics."""
+
 import numpy as np
 import pytest
 from scipy.stats import gennorm
@@ -32,7 +33,9 @@ def _point_fit(support, x, degree, lower=False, upper=False, weights=None, /, **
 
 
 def _interval_fit(support, rows, degree, lower=False, upper=False, /):
-    objective, result = _fit_natural_conic_intervals(support, rows, degree, lower, upper)
+    objective, result = _fit_natural_conic_intervals(
+        support, rows, degree, lower, upper
+    )
     return _degree_diagnostic_fit(objective, result)
 
 
@@ -58,7 +61,7 @@ def test_power_covariance_matches_direct_empirical_covariance():
     z = rng.normal(size=500)
     stats = _build_empirical_stats(z, None, 10, (-np.inf, np.inf))
     got = stats.power_covariance(5)
-    values = np.column_stack([z ** k for k in range(6)])
+    values = np.column_stack([z**k for k in range(6)])
     expected = np.cov(values, rowvar=False, bias=True)
     np.testing.assert_allclose(got, expected, rtol=3e-13, atol=3e-13)
 
@@ -66,9 +69,7 @@ def test_power_covariance_matches_direct_empirical_covariance():
 def test_gaussian_degree_two_has_no_resolvable_omitted_block():
     rng = np.random.default_rng(2)
     x = rng.normal(size=3000)
-    fit = _point_fit(
-        (-np.inf, np.inf), x, 2, moment_order=12
-    )
+    fit = _point_fit((-np.inf, np.inf), x, 2, moment_order=12)
     diagnostic = _omitted_statistic_diagnostic(fit, (3, 4))
     assert diagnostic.rank >= 1
     assert not diagnostic.should_expand
@@ -78,9 +79,7 @@ def test_gaussian_degree_two_has_no_resolvable_omitted_block():
 def test_quartic_log_concave_shape_requests_more_capacity():
     rng = np.random.default_rng(3)
     x = gennorm.rvs(beta=4.0, size=4000, random_state=rng)
-    fit = _point_fit(
-        (-np.inf, np.inf), np.ascontiguousarray(x), 2, moment_order=12
-    )
+    fit = _point_fit((-np.inf, np.inf), np.ascontiguousarray(x), 2, moment_order=12)
     diagnostic = _omitted_statistic_diagnostic(fit, (3, 4))
     assert diagnostic.should_expand
     assert diagnostic.p_value < 1e-4
@@ -89,9 +88,7 @@ def test_quartic_log_concave_shape_requests_more_capacity():
 def test_extreme_outlier_moments_are_stopped_by_participation():
     rng = np.random.default_rng(4)
     x = np.concatenate([rng.normal(size=800), [1e9]])
-    fit = _point_fit(
-        (-np.inf, np.inf), x, 2, moment_order=12
-    )
+    fit = _point_fit((-np.inf, np.inf), x, 2, moment_order=12)
     config = _DegreeSelectionConfig(min_participation=8.0)
     diagnostic = _omitted_statistic_diagnostic(fit, (3, 4), config=config)
     assert diagnostic.stopped_for_reliability
@@ -139,9 +136,7 @@ def test_interval_diagnostic_matches_narrow_point_intuition():
 def test_interval_diagnostic_preserves_sub_ulp_boundary_point_distance():
     points = np.array([1e-22, 0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.2])
     intervals = np.column_stack([points, points])
-    fit = _interval_fit(
-        (0.0, np.inf), intervals, 2, True, False
-    )
+    fit = _interval_fit((0.0, np.inf), intervals, 2, True, False)
     tiny = int(np.argmin(fit.observations.point_lower_distance))
     assert fit.observations.intervals[tiny, 0] == fit.observations.support[0]
     assert 0.0 < fit.observations.point_lower_distance[tiny] < 1e-18
@@ -261,9 +256,7 @@ def test_auto_selector_runs_on_full_boundary_cone():
     """Enabled amplitudes remain part of every degree candidate."""
     rng = np.random.default_rng(102)
     x = np.ascontiguousarray(rng.gamma(2.0, 1.0, 900))
-    objective, result = _fit_natural_conic_points_auto(
-        (0.0, np.inf), x, True, False
-    )
+    objective, result = _fit_natural_conic_points_auto((0.0, np.inf), x, True, False)
     assert 2 <= objective.spec.requested_poly_degree <= 12
     assert objective.layout.lower_a_index is not None
     assert result.status in ("converged", "converged_approximately")

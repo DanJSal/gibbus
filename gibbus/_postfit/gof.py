@@ -113,9 +113,7 @@ def gof_statistic(u, statistic, /):
         d_minus = float(np.max(us - (i - 1.0) / n))
         return max(d_plus, d_minus)
     if key == "cvm":
-        return float(
-            np.sum((us - (2.0 * i - 1.0) / (2.0 * n)) ** 2) + 1.0 / (12.0 * n)
-        )
+        return float(np.sum((us - (2.0 * i - 1.0) / (2.0 * n)) ** 2) + 1.0 / (12.0 * n))
     terms = (2.0 * i - 1.0) * (np.log(us) + np.log1p(-us[::-1]))
     return float(-n - np.sum(terms) / n)
 

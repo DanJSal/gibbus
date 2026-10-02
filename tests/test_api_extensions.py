@@ -37,10 +37,12 @@ def gaussian_fit():
 @pytest.fixture(scope="module")
 def mixture_fit():
     rng = np.random.default_rng(314159)
-    sample = np.concatenate([
-        rng.normal(-2.0, 0.55, 450),
-        rng.normal(2.2, 0.75, 450),
-    ])
+    sample = np.concatenate(
+        [
+            rng.normal(-2.0, 0.55, 450),
+            rng.normal(2.2, 0.75, 450),
+        ]
+    )
     return Distribution().fit(
         sample,
         n_components=2,
@@ -99,13 +101,15 @@ def test_log_probability_and_extreme_inverse_round_trip(gaussian_fit):
 def test_log_quantile_deep_tail_uses_scipy_ndtri_exp():
     logp = np.array([-10.0, -100.0, -745.0, -800.0, -2000.0])
     got = scoring_module._ndtri_from_log(logp)
-    expected = np.array([
-        -3.913946240531893,
-        -13.888476033003888,
-        -38.4819489643302,
-        -39.88469483825668,
-        -63.165418608783604,
-    ])
+    expected = np.array(
+        [
+            -3.913946240531893,
+            -13.888476033003888,
+            -38.4819489643302,
+            -39.88469483825668,
+            -63.165418608783604,
+        ]
+    )
     np.testing.assert_allclose(got, expected, rtol=2e-13, atol=2e-13)
     assert np.all(np.isfinite(got))
 
@@ -160,21 +164,22 @@ def test_hazard_monotonicity_is_unknown_when_body_check_cannot_run(
 
 def test_logppf_body_and_tail_seams(gaussian_fit):
     c = gaussian_fit
-    p = np.array([
-        1e-10,
-        SF_HANDOVER_P * 0.999,
-        SF_HANDOVER_P,
-        0.5,
-        1.0 - SF_HANDOVER_P,
-        1.0 - SF_HANDOVER_P * 0.1,
-    ])
+    p = np.array(
+        [
+            1e-10,
+            SF_HANDOVER_P * 0.999,
+            SF_HANDOVER_P,
+            0.5,
+            1.0 - SF_HANDOVER_P,
+            1.0 - SF_HANDOVER_P * 0.1,
+        ]
+    )
     got = c.logppf(np.log(p))
     expected = c.ppf(p)
     np.testing.assert_allclose(got, expected, rtol=1e-10, atol=5e-10)
     assert np.isnan(c.logppf(np.nan))
     assert np.isnan(c.logisf(np.nan))
     assert np.isnan(c.isf(np.nan))
-
 
 
 def test_mean_residual_life_lower_tail_mills_identity(gaussian_fit):
@@ -188,13 +193,14 @@ def test_mean_residual_life_lower_tail_mills_identity(gaussian_fit):
     assert np.all(got >= c.mean - x - 1e-12)
 
 
-
 def test_mixture_mean_residual_life_uses_rightmost_mode_handoff():
     rng = np.random.default_rng(44)
-    sample = np.concatenate([
-        rng.normal(-3.0, 0.6, 400),
-        rng.normal(2.5, 0.8, 400),
-    ])
+    sample = np.concatenate(
+        [
+            rng.normal(-3.0, 0.6, 400),
+            rng.normal(2.5, 0.8, 400),
+        ]
+    )
     c = Distribution().fit(
         sample,
         n_components=2,
@@ -277,8 +283,13 @@ def test_ledger_quadrature_reports_problems_without_emitting_warnings():
 
     def run():
         return _quad_with_ledger(
-            lambda t: np.sin(1.0 / t) / t, 1e-6, 1.0,
-            epsabs=1e-14, epsrel=1e-14, limit=3, context="ledger quadrature test",
+            lambda t: np.sin(1.0 / t) / t,
+            1e-6,
+            1.0,
+            epsabs=1e-14,
+            epsrel=1e-14,
+            limit=3,
+            context="ledger quadrature test",
         )
 
     with warnings.catch_warnings(record=True) as caught:
@@ -290,7 +301,9 @@ def test_ledger_quadrature_reports_problems_without_emitting_warnings():
             run()
     assert not caught
     if not _defaults.DEBUG:
-        assert any(f["context"] == "ledger quadrature test" for f in suppressed_failures())
+        assert any(
+            f["context"] == "ledger quadrature test" for f in suppressed_failures()
+        )
 
 
 def test_tail_rate_reports_infinite_for_growing_polynomial_tail():
@@ -339,6 +352,7 @@ def test_extreme_scale_fit_reports_actionable_error():
             rng=0,
         )
 
+
 def test_set_default_invalidates_mixture_statistics(mixture_fit):
     c = mixture_fit.copy()
     base_mean = c.mean
@@ -369,9 +383,7 @@ def _rebuild_mixture_state(state, *, drop=(), replace=None):
     """Copy a structured mixture state, dropping or re-typing named fields."""
     replace = {} if replace is None else replace
     values = {
-        name: np.asarray(state[name])
-        for name in state.dtype.names
-        if name not in drop
+        name: np.asarray(state[name]) for name in state.dtype.names if name not in drop
     }
     values.update({name: np.asarray(value) for name, value in replace.items()})
     dtype = [
@@ -395,29 +407,38 @@ def test_mixture_state_without_cached_modes_uses_canonical_empty_layout(mixture_
     assert restored.modes == mixture_fit.modes
 
 
-@pytest.mark.parametrize("missing", [
-    ("base_modes",),
-    ("n_modes",),
-    ("base_modes", "n_modes"),
-])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        ("base_modes",),
+        ("n_modes",),
+        ("base_modes", "n_modes"),
+    ],
+)
 def test_mixture_state_missing_mode_fields_is_rejected(mixture_fit, missing):
     state = _rebuild_mixture_state(mixture_fit.data, drop=missing)
-    with pytest.raises(ValueError, match="not a gibbus mixture state; missing fields: "
-                       + ", ".join(missing)):
+    with pytest.raises(
+        ValueError,
+        match="not a gibbus mixture state; missing fields: " + ", ".join(missing),
+    ):
         Distribution(state)
 
 
-@pytest.mark.parametrize("base_modes,n_modes", [
-    pytest.param([-1.0, 1.0], 1, id="n_modes-smaller"),
-    pytest.param([-1.0, 1.0], 3, id="n_modes-larger"),
-    pytest.param([-1.0, 1.0], -1, id="n_modes-negative"),
-    pytest.param([-1.0, 1.0, np.nan], 2, id="nan-padded"),
-    pytest.param([[-1.0, 1.0]], 2, id="two-dimensional"),
-    pytest.param([-1.0, 1.0], [2], id="n_modes-not-scalar"),
-    pytest.param([-1.0, 1.0], 2.0, id="n_modes-not-integer"),
-])
-def test_mixture_state_inconsistent_mode_layout_is_rejected(mixture_fit, base_modes,
-                                                            n_modes):
+@pytest.mark.parametrize(
+    "base_modes,n_modes",
+    [
+        pytest.param([-1.0, 1.0], 1, id="n_modes-smaller"),
+        pytest.param([-1.0, 1.0], 3, id="n_modes-larger"),
+        pytest.param([-1.0, 1.0], -1, id="n_modes-negative"),
+        pytest.param([-1.0, 1.0, np.nan], 2, id="nan-padded"),
+        pytest.param([[-1.0, 1.0]], 2, id="two-dimensional"),
+        pytest.param([-1.0, 1.0], [2], id="n_modes-not-scalar"),
+        pytest.param([-1.0, 1.0], 2.0, id="n_modes-not-integer"),
+    ],
+)
+def test_mixture_state_inconsistent_mode_layout_is_rejected(
+    mixture_fit, base_modes, n_modes
+):
     state = _rebuild_mixture_state(
         mixture_fit.data,
         replace={
@@ -520,9 +541,7 @@ def test_frozen_bounded_expectation_and_moment(gaussian_fit):
     c = gaussian_fit
     rv = c.frozen()
     got = rv.expect(lambda x: x * x, lb=-0.5, ub=0.75)
-    expected = norm(loc=c.mean, scale=c.std).expect(
-        lambda x: x * x, lb=-0.5, ub=0.75
-    )
+    expected = norm(loc=c.mean, scale=c.std).expect(lambda x: x * x, lb=-0.5, ub=0.75)
     assert np.isclose(got, expected, rtol=0.0, atol=2e-9)
     assert np.isclose(rv.moment(2), c.moment(2), rtol=0.0, atol=0.0)
     with pytest.raises(TypeError):
@@ -544,10 +563,14 @@ def test_equal_tailed_hpd_and_exp_view_algebra(gaussian_fit):
     y = np.exp(c.mean + 0.7 * c.std)
     x = np.log(y)
     assert np.isclose(c.exp.logsf(y), c.base.logsf(x), atol=1e-14)
-    assert np.isclose(c.exp.cumulative_hazard(y), c.base.cumulative_hazard(x), atol=1e-14)
+    assert np.isclose(
+        c.exp.cumulative_hazard(y), c.base.cumulative_hazard(x), atol=1e-14
+    )
     assert np.isclose(c.exp.log_hazard(y), c.base.log_hazard(x) - np.log(y), atol=1e-14)
     assert np.isclose(c.exp.entropy(), c.base.entropy() + c.base.mean, atol=2e-10)
-    np.testing.assert_allclose(c.exp.interval(level), np.exp(c.base.interval(level)), rtol=1e-13)
+    np.testing.assert_allclose(
+        c.exp.interval(level), np.exp(c.base.interval(level)), rtol=1e-13
+    )
 
 
 def test_expect_information_and_scoring(gaussian_fit):
@@ -613,7 +636,6 @@ def test_log_concavity_margin_is_nonnegative(gaussian_fit):
     margin = gaussian_fit.spectral_diagnostics["log_concavity_margin"]
     assert np.isfinite(margin)
     assert margin > 0.0
-
 
 
 @pytest.fixture(scope="module")
@@ -743,8 +765,9 @@ def test_goodness_of_fit_accepts_a_correct_model_and_rejects_a_wrong_one():
 @pytest.mark.parametrize("statistic", ["ks", "cvm", "ad"])
 def test_goodness_of_fit_reports_its_calibration_contract(gaussian_fit, statistic):
     rng = np.random.default_rng(556)
-    out = gaussian_fit.goodness_of_fit(rng.normal(0.2, 1.1, size=300),
-                                       statistic=statistic)
+    out = gaussian_fit.goodness_of_fit(
+        rng.normal(0.2, 1.1, size=300), statistic=statistic
+    )
     assert out["statistic"] == statistic
     assert out["calibration"] == "asymptotic"
     assert out["pvalue_valid_for"] == "held-out observations only"
@@ -759,8 +782,9 @@ def test_goodness_of_fit_monte_carlo_calibration_is_valid_in_sample():
     rng = np.random.default_rng(557)
     data = rng.normal(size=400)
     c = Distribution().fit(data, n_components=1, poly_degree=2, rng=0)
-    out = c.goodness_of_fit(data, statistic="ad", calibration="montecarlo",
-                            n_resamples=25, rng=0)
+    out = c.goodness_of_fit(
+        data, statistic="ad", calibration="montecarlo", n_resamples=25, rng=0
+    )
     assert out["calibration"] == "montecarlo"
     assert out["pvalue_valid_for"] == "the sample the model was fitted to"
     assert 0.0 < out["pvalue"] <= 1.0
@@ -772,7 +796,12 @@ def test_goodness_of_fit_monte_carlo_is_deterministic_under_a_seed():
     rng = np.random.default_rng(558)
     data = rng.normal(size=250)
     c = Distribution().fit(data, n_components=1, poly_degree=2, rng=0)
-    kwargs = {"statistic": "ks", "calibration": "montecarlo", "n_resamples": 12, "rng": 7}
+    kwargs = {
+        "statistic": "ks",
+        "calibration": "montecarlo",
+        "n_resamples": 12,
+        "rng": 7,
+    }
     assert c.goodness_of_fit(data, **kwargs) == c.goodness_of_fit(data, **kwargs)
 
 
@@ -795,8 +824,9 @@ def test_bootstrap_bands_bracket_the_point_estimate():
     data = rng.normal(size=400)
     c = Distribution().fit(data, n_components=1, poly_degree=2, rng=0)
     grid = np.linspace(-2.0, 2.0, 9)
-    out = c.bootstrap_bands(data, grid, quantity="pdf", n_resamples=30,
-                            level=0.90, rng=0)
+    out = c.bootstrap_bands(
+        data, grid, quantity="pdf", n_resamples=30, level=0.90, rng=0
+    )
     assert out["quantity"] == "pdf"
     assert out["coverage_kind"] == "pointwise"
     assert out["level"] == 0.90
@@ -828,8 +858,14 @@ def test_bootstrap_bands_supports_each_quantity(quantity):
     rng = np.random.default_rng(561)
     data = rng.normal(size=300)
     c = Distribution().fit(data, n_components=1, poly_degree=2, rng=0)
-    out = c.bootstrap_bands(data, np.linspace(-1.5, 1.5, 6), quantity=quantity,
-                            n_resamples=15, level=0.95, rng=0)
+    out = c.bootstrap_bands(
+        data,
+        np.linspace(-1.5, 1.5, 6),
+        quantity=quantity,
+        n_resamples=15,
+        level=0.95,
+        rng=0,
+    )
     assert out["quantity"] == quantity
     assert np.all(out["lower"] <= out["upper"])
     if quantity in ("cdf", "sf"):
@@ -855,8 +891,9 @@ def test_bootstrap_bands_respects_the_active_space():
     c = Distribution().fit(data, n_components=1, poly_degree=2, rng=0)
     c.set_default("exp")
     grid = np.linspace(0.5, 2.0, 5)
-    out = c.bootstrap_bands(data, grid, quantity="cdf", n_resamples=12,
-                            level=0.9, rng=0)
+    out = c.bootstrap_bands(
+        data, grid, quantity="cdf", n_resamples=12, level=0.9, rng=0
+    )
     np.testing.assert_allclose(out["estimate"], c.cdf(grid))
     assert np.all(out["lower"] <= out["upper"])
 
@@ -889,8 +926,10 @@ def test_log_concavity_margin_is_reported_through_spectral_diagnostics(gaussian_
 def test_frozen_rvs_accepts_a_shape_tuple_like_scipy():
     rng = np.random.default_rng(413)
     c = Distribution().fit(
-        rng.normal(size=400), n_components=1,
-        support=(-np.inf, np.inf), rng=0,
+        rng.normal(size=400),
+        n_components=1,
+        support=(-np.inf, np.inf),
+        rng=0,
     )
     draws = c.frozen().rvs(size=(2, 3), random_state=np.random.default_rng(0))
     assert draws.shape == (2, 3)
@@ -900,8 +939,10 @@ def test_frozen_rvs_accepts_a_shape_tuple_like_scipy():
 def test_frozen_interval_accepts_an_array_of_levels():
     rng = np.random.default_rng(414)
     c = Distribution().fit(
-        rng.normal(size=400), n_components=1,
-        support=(-np.inf, np.inf), rng=0,
+        rng.normal(size=400),
+        n_components=1,
+        support=(-np.inf, np.inf),
+        rng=0,
     )
     rv = c.frozen()
     lower, upper = rv.interval(np.array([0.5, 0.9]))
@@ -921,7 +962,9 @@ def test_cumulants_match_moments_and_affine_law(gaussian_fit):
     c = gaussian_fit
     assert c.cumulant(1) == pytest.approx(c.mean)
     assert c.cumulant(2) == pytest.approx(c.var, rel=2e-11, abs=2e-12)
-    assert c.cumulant(3) == pytest.approx(c.moment(3, central=True), rel=2e-10, abs=2e-11)
+    assert c.cumulant(3) == pytest.approx(
+        c.moment(3, central=True), rel=2e-10, abs=2e-11
+    )
     expected4 = c.moment(4, central=True) - 3.0 * c.var**2
     assert c.cumulant(4) == pytest.approx(expected4, rel=2e-10, abs=2e-11)
 

@@ -33,8 +33,7 @@ from gibbus._spectral.chebyshev import (
 def _bernstein_eval(coeff, t):
     n = len(coeff) - 1
     return sum(
-        coeff[k] * math.comb(n, k) * t**k * (1.0 - t) ** (n - k)
-        for k in range(n + 1)
+        coeff[k] * math.comb(n, k) * t**k * (1.0 - t) ** (n - k) for k in range(n + 1)
     )
 
 
@@ -46,7 +45,6 @@ def test_lobatto_transform_matches_square_chebfit():
         expected = C.chebfit(nodes, values, degree)
         actual = lobatto_coefficients(values)
         np.testing.assert_allclose(actual, expected, rtol=2e-13, atol=2e-13)
-
 
 
 def test_compiled_panel_algebra_matches_numpy_chebyshev_calculus():
@@ -76,6 +74,7 @@ def test_compiled_panel_algebra_matches_numpy_chebyshev_calculus():
         np.testing.assert_allclose(
             compiled_chebder(coeff), C.chebder(coeff), rtol=3e-14, atol=3e-14
         )
+
 
 def test_chebyshev_bernstein_matrix_is_the_exact_basis_change():
     from fractions import Fraction
@@ -194,7 +193,6 @@ def _spectral_cdf_cases():
     )
 
 
-
 def test_compiled_compact_cdf_matches_construction_evaluator():
     """Packed compact-coordinate validation must match the builder CDF."""
     rng = np.random.default_rng(77123)
@@ -255,9 +253,7 @@ def test_compiled_panel_inversion_extreme_and_random_fractions():
             assert np.all(np.diff(z) >= 0.0)
             assert z[0] == rep.breaks[j]
             assert z[-1] == rep.breaks[j + 1]
-            np.testing.assert_allclose(
-                actual, expected, rtol=0.0, atol=8e-14
-            )
+            np.testing.assert_allclose(actual, expected, rtol=0.0, atol=8e-14)
 
 
 def test_exact_z_for_r_many_handles_boundaries_and_fallback_panels():
@@ -280,7 +276,9 @@ def test_exact_z_for_r_many_handles_boundaries_and_fallback_panels():
     if source_j > 0:
         outside.append(float(cdf.cum_mass[source_j - 1] + cdf.cum_mass[source_j]) / 2.0)
     if source_j + 1 < len(cdf.panels):
-        outside.append(float(cdf.cum_mass[source_j + 1] + cdf.cum_mass[source_j + 2]) / 2.0)
+        outside.append(
+            float(cdf.cum_mass[source_j + 1] + cdf.cum_mass[source_j + 2]) / 2.0
+        )
     probs = np.array(outside + inside.tolist(), dtype=np.float64)
     probs = np.clip(probs, 1e-12, 1.0 - 1e-12)
 
@@ -341,12 +339,28 @@ def test_half_line_map_resolves_a_body_far_from_the_endpoint():
         return np.exp(-polyval(np.asarray(z, dtype=np.float64), q_poly))
 
     density = density_spec(
-        [(q_poly, support[0], support[1], 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
-          -np.inf, np.inf)],
+        [
+            (
+                q_poly,
+                support[0],
+                support[1],
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                -np.inf,
+                np.inf,
+            )
+        ],
         view=False,
     )
     x = np.linspace(-3.0, 3.0, 25)
-    expected = np.array([quad(pdf, -np.inf, v, epsabs=1e-15, epsrel=1e-13)[0] for v in x])
+    expected = np.array(
+        [quad(pdf, -np.inf, v, epsabs=1e-15, epsrel=1e-13)[0] for v in x]
+    )
     for rep in (
         SpectralCDF(support, density=density, mode=0.1747, std=0.829),
         PythonSpectralCDFBuilder(pdf, support, mode=0.1747, std=0.829),

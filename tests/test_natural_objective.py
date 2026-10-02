@@ -20,9 +20,7 @@ def _real_line_problem(degree=4):
     coordinate = _build_fit_coordinate((-np.inf, np.inf), x, weights, None)
     z = coordinate.to_canonical(x)
     spec = _build_model_spec(coordinate, degree)
-    stats = _natural_point_stats(
-        z, weights, 2 * degree + 2, spec.support, False, False
-    )
+    stats = _natural_point_stats(z, weights, 2 * degree + 2, spec.support, False, False)
     observations = _PointObservations(stats)
     objective = _NaturalPointObjectiveFunction(
         spec, observations, (float(z.min()), float(z.max()))
@@ -64,9 +62,7 @@ def test_natural_point_gradient_and_hessian_match_finite_differences():
         finite_gradient[j] = (objective(up).nll - objective(down).nll) / (
             2.0 * gradient_step
         )
-    np.testing.assert_allclose(
-        analytic.gradient, finite_gradient, rtol=2e-6, atol=2e-7
-    )
+    np.testing.assert_allclose(analytic.gradient, finite_gradient, rtol=2e-6, atol=2e-7)
 
     hessian_step = 1e-5
     finite_hessian = np.empty_like(analytic.hessian)
@@ -78,9 +74,7 @@ def test_natural_point_gradient_and_hessian_match_finite_differences():
         finite_hessian[:, j] = (objective(up).gradient - objective(down).gradient) / (
             2.0 * hessian_step
         )
-    np.testing.assert_allclose(
-        analytic.hessian, finite_hessian, rtol=3e-5, atol=3e-6
-    )
+    np.testing.assert_allclose(analytic.hessian, finite_hessian, rtol=3e-5, atol=3e-6)
 
 
 def test_compiled_point_objective_matches_the_generic_evaluator():
@@ -100,8 +94,6 @@ def test_point_nll_is_the_weighted_potential_mean_plus_log_normalizer():
     state = objective.build_state(params)
     q = _q_eval(z, spec.support, state.q_poly, state.boundary_amplitudes, 0)
     expected = (
-        np.dot(weights / weights.sum(), q)
-        + state.log_Z
-        + np.log(spec.coordinate.scale)
+        np.dot(weights / weights.sum(), q) + state.log_Z + np.log(spec.coordinate.scale)
     )
     assert objective(params).nll == pytest.approx(expected, rel=1e-13, abs=1e-13)

@@ -63,7 +63,9 @@ def _assert_psd_blocks(blocks, /):
 
 @pytest.mark.parametrize(("support", "lower", "upper"), _GEOMETRIES)
 @pytest.mark.parametrize("degree", [4, 6, 8])
-def test_compiled_qp_is_consistent_with_the_python_reference(support, lower, upper, degree):
+def test_compiled_qp_is_consistent_with_the_python_reference(
+    support, lower, upper, degree
+):
     layout = _natural_layout(support, degree, lower, upper)
     representation = _support_representation(layout)
     rng = np.random.default_rng(degree + 17 * int(lower) + 31 * int(upper))
@@ -78,7 +80,10 @@ def test_compiled_qp_is_consistent_with_the_python_reference(support, lower, upp
         scale = max(1.0, abs(reference.model_value))
         # Each model value is a primal value within its certified gap of the
         # common optimum, so they differ by at most the larger gap.
-        assert abs(model - reference.model_value) <= max(gap, reference.gap) + 1e-12 * scale
+        assert (
+            abs(model - reference.model_value)
+            <= max(gap, reference.gap) + 1e-12 * scale
+        )
         assert gap <= 1e-6 * scale
         _assert_psd_blocks(representation.unpack_blocks(packed))
         assert np.all(np.isfinite(params))
@@ -96,7 +101,9 @@ def test_compiled_preconditioned_solve_matches_the_reference():
             representation = _support_representation(layout)
             rng = np.random.default_rng(3 * degree + 5 * int(lower) + 7 * int(upper))
             for _ in range(4):
-                hessian, gradient, theta0, blocks = _random_model(rng, layout, representation)
+                hessian, gradient, theta0, blocks = _random_model(
+                    rng, layout, representation
+                )
                 compiled, _, blocks_c, model_c = _preconditioned_subproblem(
                     hessian, gradient, theta0, representation, blocks
                 )
@@ -195,7 +202,9 @@ def _fitted_states():
     ]
     for support, x, lower, upper in cases:
         for degree in (4, 6):
-            objective, result = _fit_natural_conic_points(support, x, degree, lower, upper)
+            objective, result = _fit_natural_conic_points(
+                support, x, degree, lower, upper
+            )
             yield objective, result.params
 
 
@@ -232,12 +241,17 @@ def test_compiled_state_numerics_match_the_reference_quadrature():
         scale = np.sqrt(np.diag(fisher_r))
         np.testing.assert_allclose(mu_c / scale, mu_r / scale, rtol=0, atol=1e-8)
         np.testing.assert_allclose(
-            fisher_c / np.outer(scale, scale), fisher_r / np.outer(scale, scale),
-            rtol=0, atol=1e-7,
+            fisher_c / np.outer(scale, scale),
+            fisher_r / np.outer(scale, scale),
+            rtol=0,
+            atol=1e-7,
         )
         order = 2 * objective.layout.effective_poly_degree
         np.testing.assert_allclose(
-            compiled.moments.power(order), reference.moments.power(order), rtol=1e-8, atol=1e-10
+            compiled.moments.power(order),
+            reference.moments.power(order),
+            rtol=1e-8,
+            atol=1e-10,
         )
 
 
@@ -277,14 +291,19 @@ def test_compiled_point_newton_is_certified_and_self_consistent():
         assert run.decrease_bound <= options.accuracy_floor * scale
         exact = objective(run.params)
         assert run.evaluation.nll == pytest.approx(exact.nll, abs=5e-13)
-        np.testing.assert_allclose(run.evaluation.gradient, exact.gradient, rtol=0, atol=5e-13)
-        np.testing.assert_allclose(run.evaluation.hessian, exact.hessian, rtol=0, atol=1e-11)
+        np.testing.assert_allclose(
+            run.evaluation.gradient, exact.gradient, rtol=0, atol=5e-13
+        )
+        np.testing.assert_allclose(
+            run.evaluation.hessian, exact.hessian, rtol=0, atol=1e-11
+        )
         np.testing.assert_allclose(
             run.evaluation.model_partial_means,
             exact.model_partial_means,
             rtol=0,
             atol=5e-13,
         )
+
 
 def test_compiled_interval_newton_is_certified_and_self_consistent():
     """Real-line interval Newton endpoints carry exact accepted-trial geometry."""
@@ -327,15 +346,25 @@ def test_compiled_interval_newton_is_certified_and_self_consistent():
         scale = max(1.0, abs(float(run.evaluation.nll)))
         assert run.decrease_bound <= options.accuracy_floor * scale
         exact = objective(run.params)
-        np.testing.assert_allclose(run.evaluation.gradient, exact.gradient, rtol=0, atol=5e-14)
-        np.testing.assert_allclose(run.evaluation.hessian, exact.hessian, rtol=0, atol=5e-14)
-        np.testing.assert_allclose(run.evaluation.fisher, exact.fisher, rtol=0, atol=5e-14)
         np.testing.assert_allclose(
-            run.evaluation.missing_information, exact.missing_information, rtol=0, atol=5e-14
+            run.evaluation.gradient, exact.gradient, rtol=0, atol=5e-14
+        )
+        np.testing.assert_allclose(
+            run.evaluation.hessian, exact.hessian, rtol=0, atol=5e-14
+        )
+        np.testing.assert_allclose(
+            run.evaluation.fisher, exact.fisher, rtol=0, atol=5e-14
+        )
+        np.testing.assert_allclose(
+            run.evaluation.missing_information,
+            exact.missing_information,
+            rtol=0,
+            atol=5e-14,
         )
         assert run.evaluation.smallest_curvature == pytest.approx(
             exact.smallest_curvature, rel=0, abs=1e-13
         )
+
 
 def test_compiled_standalone_interval_newton_ignores_global_bound_locally():
     """Standalone global bounds do not contaminate the local fixed-face solve."""
@@ -390,6 +419,7 @@ def test_compiled_standalone_interval_newton_ignores_global_bound_locally():
         scale = max(1.0, abs(float(exact.nll)))
         assert run.decrease_bound <= options.accuracy_floor * scale
 
+
 def test_state_numerics_decline_a_nonconvex_potential():
     from gibbus._model._state_kernels import state_numerics
 
@@ -406,24 +436,39 @@ def test_state_numerics_decline_a_nonconvex_potential():
     # Double well q = z^4/12 - 2 z^2: curvature z^2 - 4 is negative near zero.
     q_poly = np.array([0.0, 0.3, -2.0, 0.0, 1.0 / 12.0])
     status = state_numerics(
-        numerics.support, q_poly, np.full(2, np.nan), np.array([-3.0, 3.0]),
-        False, False, numerics.kinds, numerics.lengths, numerics.coefficients,
-        _MODE_CONTROLS, 1.49e-8, 1.49e-8, 100,
+        numerics.support,
+        q_poly,
+        np.full(2, np.nan),
+        np.array([-3.0, 3.0]),
+        False,
+        False,
+        numerics.kinds,
+        numerics.lengths,
+        numerics.coefficients,
+        _MODE_CONTROLS,
+        1.49e-8,
+        1.49e-8,
+        100,
     )[0]
     assert status in (0, 2)
     # Whatever the compiled traversal decides, the state is normalized.
-    coordinate = _build_fit_coordinate((-np.inf, np.inf), np.linspace(-3, 3, 20), None, None)
+    coordinate = _build_fit_coordinate(
+        (-np.inf, np.inf), np.linspace(-3, 3, 20), None, None
+    )
     params = np.array([0.3, -4.0, 0.0, 2.0])
     state = _NaturalCoreState(coordinate, layout, params, (-3.0, 3.0))
     assert np.isfinite(state.log_Z)
 
 
 @pytest.mark.parametrize("weighted", [False, True])
-@pytest.mark.parametrize(("support", "lower", "upper"), [
-    ((-np.inf, np.inf), False, False),
-    ((0.0, np.inf), True, False),
-    ((0.0, 1.0), True, True),
-])
+@pytest.mark.parametrize(
+    ("support", "lower", "upper"),
+    [
+        ((-np.inf, np.inf), False, False),
+        ((0.0, np.inf), True, False),
+        ((0.0, 1.0), True, True),
+    ],
+)
 def test_compiled_point_statistics_match_direct_sums(weighted, support, lower, upper):
     from gibbus._fit.natural_objective import _natural_point_stats
 
@@ -432,7 +477,9 @@ def test_compiled_point_statistics_match_direct_sums(weighted, support, lower, u
     raw = rng.uniform(0.0, 3.0, z.size) if weighted else np.ones(z.size)
     if weighted:
         raw[::7] = 0.0
-    compiled = _natural_point_stats(z, raw if weighted else None, 12, support, lower, upper)
+    compiled = _natural_point_stats(
+        z, raw if weighted else None, 12, support, lower, upper
+    )
     w = raw / raw.sum()
     powers = z[None, :] ** np.arange(13)[:, None]
     np.testing.assert_allclose(compiled.moments, powers @ w, rtol=1e-13, atol=0)
@@ -478,14 +525,19 @@ def test_mixture_posterior_matches_logsumexp():
     log_weights = np.log(np.array([0.2, 0.5, 0.3]))
     w = rng.uniform(size=50)
     w /= w.sum()
-    status, value, responsibilities, rows = mixture_posterior(log_values, log_weights, w)
+    status, value, responsibilities, rows = mixture_posterior(
+        log_values, log_weights, w
+    )
     joint = log_values + log_weights
     expected_rows = logsumexp(joint, axis=1)
     assert status == 0
     np.testing.assert_allclose(rows, expected_rows, rtol=1e-15, atol=1e-13)
     assert value == pytest.approx(float(w @ expected_rows), rel=1e-14)
     np.testing.assert_allclose(
-        responsibilities, np.exp(joint - expected_rows[:, None]), rtol=1e-13, atol=1e-300
+        responsibilities,
+        np.exp(joint - expected_rows[:, None]),
+        rtol=1e-13,
+        atol=1e-300,
     )
     log_values[7] = -np.inf
     assert mixture_posterior(log_values, log_weights, w)[0] == 1
@@ -504,12 +556,16 @@ def test_joint_information_matches_the_score_formula():
     pi = np.array([0.4, 0.6])
     w = rng.uniform(size=rows)
     w /= w.sum()
-    gradient, missing = joint_information(responsibility, centered, within, offsets, pi, w)
+    gradient, missing = joint_information(
+        responsibility, centered, within, offsets, pi, w
+    )
 
     scores = np.zeros((rows, k_count, n_total))
     for k in range(k_count):
-        scores[:, k, offsets[k]: offsets[k + 1]] = centered[:, offsets[k]: offsets[k + 1]]
-        scores[:, k, offsets[-1]:] = pi[:-1]
+        scores[:, k, offsets[k] : offsets[k + 1]] = centered[
+            :, offsets[k] : offsets[k + 1]
+        ]
+        scores[:, k, offsets[-1] :] = pi[:-1]
         if k < k_count - 1:
             scores[:, k, offsets[-1] + k] -= 1.0
     mean_score = np.einsum("ik,ikn->in", responsibility, scores)
@@ -517,7 +573,9 @@ def test_joint_information_matches_the_score_formula():
     expected = np.einsum("ik,ikn,ikm->nm", w[:, None] * responsibility, scores, scores)
     expected -= np.einsum("i,in,im->nm", w, mean_score, mean_score)
     block = slice(offsets[1], offsets[2])
-    expected[block, block] += np.einsum("i,iab->ab", w * responsibility[:, 1], within[1])
+    expected[block, block] += np.einsum(
+        "i,iab->ab", w * responsibility[:, 1], within[1]
+    )
     np.testing.assert_allclose(gradient, expected_gradient, rtol=1e-13, atol=1e-15)
     np.testing.assert_allclose(missing, expected, rtol=1e-12, atol=1e-14)
     np.testing.assert_array_equal(missing, missing.T)
@@ -541,8 +599,22 @@ def test_compiled_spectral_builders_reproduce_python_harness():
         support = np.asarray(state.spec.support, dtype=np.float64)
         amps = np.asarray(state.boundary_amplitudes, dtype=np.float64)
         density = density_spec(
-            [(state.q_poly, support[0], support[1], amps[0], amps[1], state.log_Z,
-              0.0, 1.0, 1.0, 1.0, -np.inf, np.inf)],
+            [
+                (
+                    state.q_poly,
+                    support[0],
+                    support[1],
+                    amps[0],
+                    amps[1],
+                    state.log_Z,
+                    0.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    -np.inf,
+                    np.inf,
+                )
+            ],
             view=False,
         )
         grid = np.linspace(-4.0, 4.0, 101)
@@ -550,10 +622,12 @@ def test_compiled_spectral_builders_reproduce_python_harness():
         breaks = boundary_aware_breaks_from_amplitudes(support, amps)
         moments = state.moments.power(2)
         std = float(np.sqrt(max(moments[2] - moments[1] ** 2, 0.0)))
-        reference = PythonSpectralCDFBuilder(state.pdf, support, mode=state.mode, std=std,
-                                         initial_breaks=breaks)
-        compiled = SpectralCDF(support, density=density, mode=state.mode, std=std,
-                               initial_breaks=breaks)
+        reference = PythonSpectralCDFBuilder(
+            state.pdf, support, mode=state.mode, std=std, initial_breaks=breaks
+        )
+        compiled = SpectralCDF(
+            support, density=density, mode=state.mode, std=std, initial_breaks=breaks
+        )
         np.testing.assert_array_equal(compiled.breaks, reference.breaks)
         assert compiled.map == reference.map
         z = np.linspace(-1.0, 1.0, 1001)
@@ -575,7 +649,8 @@ def test_compiled_mixture_spectral_cache_reproduces_python_harness(monkeypatch):
     p = np.linspace(1e-8, 1.0 - 1e-8, 801)
     compiled = (fitted.cdf(grid), fitted.ppf(p))
     monkeypatch.setattr(
-        mixture_stats, "SpectralCDF",
+        mixture_stats,
+        "SpectralCDF",
         lambda support, **kwargs: PythonSpectralCDFBuilder(None, support, **kwargs),
     )
     monkeypatch.setattr(mixture_stats, "SpectralPPF", PythonSpectralPPFBuilder)
@@ -603,13 +678,19 @@ def test_compiled_interval_newton_is_consistent_across_finite_row_supports():
     rng = np.random.default_rng(270930)
     finite_centers = rng.uniform(0.15, 0.85, size=180)
     finite_widths = rng.uniform(0.01, 0.08, size=finite_centers.size)
-    finite_rows = np.column_stack((finite_centers - 0.5 * finite_widths, finite_centers + 0.5 * finite_widths))
+    finite_rows = np.column_stack(
+        (finite_centers - 0.5 * finite_widths, finite_centers + 0.5 * finite_widths)
+    )
     lower_centers = rng.gamma(2.2, 0.8, size=180) + 0.2
     lower_widths = rng.uniform(0.01, 0.08, size=lower_centers.size)
-    lower_rows = np.column_stack((lower_centers - 0.5 * lower_widths, lower_centers + 0.5 * lower_widths))
+    lower_rows = np.column_stack(
+        (lower_centers - 0.5 * lower_widths, lower_centers + 0.5 * lower_widths)
+    )
     upper_centers = -(rng.gamma(1.8, 0.9, size=180) + 0.2)
     upper_widths = rng.uniform(0.01, 0.08, size=upper_centers.size)
-    upper_rows = np.column_stack((upper_centers - 0.5 * upper_widths, upper_centers + 0.5 * upper_widths))
+    upper_rows = np.column_stack(
+        (upper_centers - 0.5 * upper_widths, upper_centers + 0.5 * upper_widths)
+    )
     cases = [
         ((0.0, 1.0), finite_rows, 4, False, False),
         ((0.0, 1.0), finite_rows, 4, True, True),
@@ -618,9 +699,14 @@ def test_compiled_interval_newton_is_consistent_across_finite_row_supports():
     ]
 
     for support, rows, degree, lower, upper in cases:
-        prepared = _prepare_natural_interval_objective(support, rows, degree, lower, upper, None)
+        prepared = _prepare_natural_interval_objective(
+            support, rows, degree, lower, upper, None
+        )
         objective = _NaturalIntervalObjectiveFunction(
-            prepared.spec, prepared.observations, prepared.z_data_bounds, nonparametric_bound=False
+            prepared.spec,
+            prepared.observations,
+            prepared.z_data_bounds,
+            nonparametric_bound=False,
         )
         assert objective._compiled_interval_newton_eligible
         params = _interior_start(objective)
@@ -634,12 +720,22 @@ def test_compiled_interval_newton_is_consistent_across_finite_row_supports():
         exact = objective(run.params)
         scale = max(1.0, abs(float(exact.nll)))
         assert run.decrease_bound <= options.accuracy_floor * scale
-        np.testing.assert_allclose(run.evaluation.gradient, exact.gradient, rtol=0, atol=2e-12)
-        np.testing.assert_allclose(run.evaluation.hessian, exact.hessian, rtol=0, atol=2e-12)
-        np.testing.assert_allclose(run.evaluation.fisher, exact.fisher, rtol=0, atol=2e-12)
         np.testing.assert_allclose(
-            run.evaluation.missing_information, exact.missing_information, rtol=0, atol=2e-12
+            run.evaluation.gradient, exact.gradient, rtol=0, atol=2e-12
         )
+        np.testing.assert_allclose(
+            run.evaluation.hessian, exact.hessian, rtol=0, atol=2e-12
+        )
+        np.testing.assert_allclose(
+            run.evaluation.fisher, exact.fisher, rtol=0, atol=2e-12
+        )
+        np.testing.assert_allclose(
+            run.evaluation.missing_information,
+            exact.missing_information,
+            rtol=0,
+            atol=2e-12,
+        )
+
 
 def test_compiled_interval_newton_is_consistent_for_adaptive_row_geometries():
     """Boundary-touching and infinite censoring retain exact endpoint statistics."""
@@ -658,34 +754,44 @@ def test_compiled_interval_newton_is_consistent_for_adaptive_row_geometries():
 
     options = _NewtonOptions(1e-10, 1e-9, 1e-7, 50, 1e-4, 0.5, 30)
     rng = np.random.default_rng(271001)
-    bounded_internal = np.column_stack((rng.uniform(0.15, 0.60, 80), rng.uniform(0.65, 0.85, 80)))
-    bounded_rows = np.vstack([
-        bounded_internal,
-        np.column_stack((np.zeros(25), rng.uniform(0.03, 0.18, 25))),
-        np.column_stack((rng.uniform(0.82, 0.95, 25), np.ones(25))),
-        np.tile([0.0, 1.0], (5, 1)),
-    ])
+    bounded_internal = np.column_stack(
+        (rng.uniform(0.15, 0.60, 80), rng.uniform(0.65, 0.85, 80))
+    )
+    bounded_rows = np.vstack(
+        [
+            bounded_internal,
+            np.column_stack((np.zeros(25), rng.uniform(0.03, 0.18, 25))),
+            np.column_stack((rng.uniform(0.82, 0.95, 25), np.ones(25))),
+            np.tile([0.0, 1.0], (5, 1)),
+        ]
+    )
     lower = rng.gamma(2.0, 0.5, size=100) + 0.1
-    halfline_rows = np.vstack([
-        np.column_stack((lower, lower + rng.uniform(0.02, 0.20, 100))),
-        np.column_stack((rng.uniform(0.8, 2.0, 30), np.full(30, np.inf))),
-        np.column_stack((np.zeros(20), rng.uniform(0.03, 0.20, 20))),
-        np.tile([0.0, np.inf], (5, 1)),
-    ])
+    halfline_rows = np.vstack(
+        [
+            np.column_stack((lower, lower + rng.uniform(0.02, 0.20, 100))),
+            np.column_stack((rng.uniform(0.8, 2.0, 30), np.full(30, np.inf))),
+            np.column_stack((np.zeros(20), rng.uniform(0.03, 0.20, 20))),
+            np.tile([0.0, np.inf], (5, 1)),
+        ]
+    )
     upper = -(rng.gamma(1.8, 0.6, size=100) + 0.1)
-    upper_halfline_rows = np.vstack([
-        np.column_stack((upper - rng.uniform(0.02, 0.20, 100), upper)),
-        np.column_stack((np.full(30, -np.inf), -rng.uniform(0.8, 2.0, 30))),
-        np.column_stack((-rng.uniform(0.03, 0.20, 20), np.zeros(20))),
-        np.tile([-np.inf, 0.0], (5, 1)),
-    ])
+    upper_halfline_rows = np.vstack(
+        [
+            np.column_stack((upper - rng.uniform(0.02, 0.20, 100), upper)),
+            np.column_stack((np.full(30, -np.inf), -rng.uniform(0.8, 2.0, 30))),
+            np.column_stack((-rng.uniform(0.03, 0.20, 20), np.zeros(20))),
+            np.tile([-np.inf, 0.0], (5, 1)),
+        ]
+    )
     lower = rng.normal(0.0, 1.0, size=100)
-    real_rows = np.vstack([
-        np.column_stack((lower, lower + rng.uniform(0.05, 0.25, 100))),
-        np.column_stack((np.full(20, -np.inf), rng.normal(-1.0, 0.3, 20))),
-        np.column_stack((rng.normal(1.0, 0.3, 20), np.full(20, np.inf))),
-        np.tile([-np.inf, np.inf], (5, 1)),
-    ])
+    real_rows = np.vstack(
+        [
+            np.column_stack((lower, lower + rng.uniform(0.05, 0.25, 100))),
+            np.column_stack((np.full(20, -np.inf), rng.normal(-1.0, 0.3, 20))),
+            np.column_stack((rng.normal(1.0, 0.3, 20), np.full(20, np.inf))),
+            np.tile([-np.inf, np.inf], (5, 1)),
+        ]
+    )
     cases = [
         ((0.0, 1.0), bounded_rows, True, True),
         ((0.0, np.inf), halfline_rows, True, False),
@@ -697,7 +803,10 @@ def test_compiled_interval_newton_is_consistent_for_adaptive_row_geometries():
             support, rows, 2, lower_boundary, upper_boundary, None
         )
         objective = _NaturalIntervalObjectiveFunction(
-            prepared.spec, prepared.observations, prepared.z_data_bounds, nonparametric_bound=False
+            prepared.spec,
+            prepared.observations,
+            prepared.z_data_bounds,
+            nonparametric_bound=False,
         )
         assert objective._compiled_interval_newton_eligible
         packed = objective._compiled_interval_newton_inputs()
@@ -715,18 +824,29 @@ def test_compiled_interval_newton_is_consistent_for_adaptive_row_geometries():
         # status, its accepted endpoint must be feasible and exactly
         # re-evaluable; converged statuses additionally carry the local gap.
         assert run.status in {
-            "converged", "converged_approximately", "non_descent",
-            "line_search_failed", "iteration_limit",
+            "converged",
+            "converged_approximately",
+            "non_descent",
+            "line_search_failed",
+            "iteration_limit",
         }
         assert _certify(objective.layout, run.params).feasible
         exact = objective(run.params)
         scale = max(1.0, abs(float(exact.nll)))
         if run.status in ("converged", "converged_approximately"):
             assert run.decrease_bound <= options.accuracy_floor * scale
-        np.testing.assert_allclose(run.evaluation.gradient, exact.gradient, rtol=0, atol=3e-12)
-        np.testing.assert_allclose(run.evaluation.hessian, exact.hessian, rtol=0, atol=3e-12)
-        np.testing.assert_allclose(run.evaluation.fisher, exact.fisher, rtol=0, atol=3e-12)
         np.testing.assert_allclose(
-            run.evaluation.missing_information, exact.missing_information, rtol=0, atol=3e-12
+            run.evaluation.gradient, exact.gradient, rtol=0, atol=3e-12
         )
-
+        np.testing.assert_allclose(
+            run.evaluation.hessian, exact.hessian, rtol=0, atol=3e-12
+        )
+        np.testing.assert_allclose(
+            run.evaluation.fisher, exact.fisher, rtol=0, atol=3e-12
+        )
+        np.testing.assert_allclose(
+            run.evaluation.missing_information,
+            exact.missing_information,
+            rtol=0,
+            atol=3e-12,
+        )

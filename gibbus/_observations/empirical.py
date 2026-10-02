@@ -89,7 +89,7 @@ class _EmpiricalStats:
             raise ValueError(
                 "polynomial degree exceeds the available empirical moment order"
             )
-        return float(np.dot(c, self.moments[:c.size]))
+        return float(np.dot(c, self.moments[: c.size]))
 
     def potential_expectation(
         self, coefficients, /, *, lower_amplitude=0.0, upper_amplitude=0.0
@@ -128,7 +128,6 @@ class _EmpiricalStats:
             out += amp * stat
         return float(out)
 
-
     def power_covariance(self, max_order, /):
         """Return the empirical covariance of ``1,z,...,z**max_order``.
 
@@ -153,7 +152,7 @@ class _EmpiricalStats:
             raise ValueError("need stored moments through order 2*max_order")
         index = np.arange(K + 1)
         second = self.moments[index[:, None] + index[None, :]]
-        mean = self.moments[:K + 1]
+        mean = self.moments[: K + 1]
         return second - mean[:, None] * mean[None, :]
 
     def moment_participation(self, order, /):
@@ -259,8 +258,7 @@ def _normalized_weights(n, weights, subject="point", /):
 
     w = np.asarray(weights, dtype=np.float64).reshape(-1)
     if w.size != n:
-        raise ValueError(
-            f"weights must have one entry per {subject} observation")
+        raise ValueError(f"weights must have one entry per {subject} observation")
     if not np.all(np.isfinite(w)) or np.any(w < 0.0):
         raise ValueError("weights must be finite and non-negative")
     wmax = float(np.max(w))
@@ -445,8 +443,9 @@ def _uniform_boundary_log_expectation(
     return value
 
 
-def _uniform_interval_empirical_stats(observations, max_order, /, *,
-                                      has_lower_log=False, has_upper_log=False):
+def _uniform_interval_empirical_stats(
+    observations, max_order, /, *, has_lower_log=False, has_upper_log=False
+):
     """Build point-style sufficient statistics from finite interval uniforms.
 
     Parameters
@@ -484,12 +483,18 @@ def _uniform_interval_empirical_stats(observations, max_order, /, *,
     lower, upper = map(float, observations.support)
     if has_lower_log:
         boundary[0] = _uniform_boundary_log_expectation(
-            observations.intervals, observations.weights, lower, "lower",
+            observations.intervals,
+            observations.weights,
+            lower,
+            "lower",
             point_distances=observations.point_lower_distance,
         )
     if has_upper_log:
         boundary[1] = _uniform_boundary_log_expectation(
-            observations.intervals, observations.weights, upper, "upper",
+            observations.intervals,
+            observations.weights,
+            upper,
+            "upper",
             point_distances=observations.point_upper_distance,
         )
     return _EmpiricalStats(

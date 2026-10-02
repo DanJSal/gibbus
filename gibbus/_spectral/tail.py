@@ -271,12 +271,12 @@ def _displacement_coordinate(potential, endpoint, direction, start, /):
             # Root the displacement coordinate at the nearest representable
             # interior point instead.  The exact correction may still return
             # the endpoint when that is the correctly rounded public quantile.
-            inward = np.nextafter(
-                endpoint, -np.inf if direction > 0.0 else np.inf)
+            inward = np.nextafter(endpoint, -np.inf if direction > 0.0 else np.inf)
             distance0 = abs(float(inward) - float(endpoint))
             if not np.isfinite(distance0) or distance0 <= 0.0:
                 raise RuntimeError(
-                    "tail inversion seed has no representable interior displacement")
+                    "tail inversion seed has no representable interior displacement"
+                )
 
         def to_x(v):
             distance = distance0 * np.exp(-v)
@@ -348,7 +348,8 @@ def _bracket(log_target, f_at, /):
 
     raise RuntimeError(
         f"tail inversion could not bracket log p = {log_target:.6g} "
-        f"within {TAIL_BRACKET_MAX_EXPAND} expansions")
+        f"within {TAIL_BRACKET_MAX_EXPAND} expansions"
+    )
 
 
 def _bisect_tail(log_target, f_at, lo, hi, /):
@@ -378,7 +379,9 @@ def _bisect_tail(log_target, f_at, lo, hi, /):
     return 0.5 * (lo + hi)
 
 
-def invert_tail(potential, log_p, endpoint, start, /, *, upper=False, log_tail_mass=None):
+def invert_tail(
+    potential, log_p, endpoint, start, /, *, upper=False, log_tail_mass=None
+):
     """Solve an extreme tail quantile with asymptotic seeding and exact correction.
 
     The leading asymptotic tail is used only to obtain a robust seed.  The
@@ -406,8 +409,7 @@ def invert_tail(potential, log_p, endpoint, start, /, *, upper=False, log_tail_m
         Python potential-callback boundary during root correction.
     """
     direction = 1.0 if upper else -1.0
-    to_x, dx_dv = _displacement_coordinate(
-        potential, endpoint, direction, float(start))
+    to_x, dx_dv = _displacement_coordinate(potential, endpoint, direction, float(start))
 
     def asym_at(v):
         return tail_log_cdf(potential, to_x(v), endpoint, upper=upper)
@@ -422,8 +424,7 @@ def invert_tail(potential, log_p, endpoint, start, /, *, upper=False, log_tail_m
         x_eval = to_x(vv)
         if log_tail_mass is not None:
             return float(log_tail_mass(x_eval, endpoint, upper=upper))
-        return exact_tail_log_cdf(
-            potential, x_eval, endpoint, upper=upper)
+        return exact_tail_log_cdf(potential, x_eval, endpoint, upper=upper)
 
     # Re-bracket the *exact* target.  This is usually a very small adjustment,
     # but it also handles a spectral seed that was on the wrong side.
@@ -531,24 +532,34 @@ def refine_tail_quantiles(
     for idx in np.flatnonzero(lower):
         try:
             out[idx] = invert_tail(
-                potential, float(np.log(p[idx])), lo_edge, seed_lo, upper=False,
-                log_tail_mass=log_tail_mass)
+                potential,
+                float(np.log(p[idx])),
+                lo_edge,
+                seed_lo,
+                upper=False,
+                log_tail_mass=log_tail_mass,
+            )
         except NUMERIC_FAILURES as exc:
             # Keep the spectral answer rather than fail a query; it is
             # wrong out here, but raising would be a regression for
             # callers who only wanted a rough tail value.
             _reraise_if_debug(
-                exc, f"asymptotic lower-tail quantile at p={p[idx]:.3e}",
-                routine=True)
+                exc, f"asymptotic lower-tail quantile at p={p[idx]:.3e}", routine=True
+            )
     for idx in np.flatnonzero(upper):
         try:
             out[idx] = invert_tail(
-                potential, float(np.log1p(-p[idx])), hi_edge, seed_hi, upper=True,
-                log_tail_mass=log_tail_mass)
+                potential,
+                float(np.log1p(-p[idx])),
+                hi_edge,
+                seed_hi,
+                upper=True,
+                log_tail_mass=log_tail_mass,
+            )
         except NUMERIC_FAILURES as exc:
             _reraise_if_debug(
-                exc, f"asymptotic upper-tail quantile at p={p[idx]:.3e}",
-                routine=True)
+                exc, f"asymptotic upper-tail quantile at p={p[idx]:.3e}", routine=True
+            )
     return out
 
 
@@ -579,7 +590,7 @@ def tail_rate(potential, support, mode, scale, side, /):
     step = max(float(scale), 1.0)
     vals = []
     for k in range(1, 22):
-        x = float(mode + direction * step * (2.0 ** k))
+        x = float(mode + direction * step * (2.0**k))
         slope = abs(float(potential(x, 1)))
         if not np.isfinite(slope):
             return np.inf

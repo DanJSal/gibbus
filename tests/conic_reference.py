@@ -135,9 +135,7 @@ def _dual_value(hessian, gradient, params0, representation, dual, /):
     if float(np.max(np.abs(hessian @ step - w))) > 1e-10 * scale:
         return -np.inf
     theta = params0 + step
-    return float(
-        gradient @ step + 0.5 * step @ hessian @ step + dual @ (b @ theta)
-    )
+    return float(gradient @ step + 0.5 * step @ hessian @ step + dual @ (b @ theta))
 
 
 def _certified_gap(hessian, gradient, params0, representation, params, blocks, dual, /):
@@ -172,7 +170,9 @@ def _certified_gap(hessian, gradient, params0, representation, params, blocks, d
     # residual has reached roundoff; an infeasible endpoint can sit below the
     # optimum and must not be certified.
     image = representation.gram_map(blocks)
-    residual = float(np.max(np.abs(representation.b_matrix @ endpoint - image), initial=0.0))
+    residual = float(
+        np.max(np.abs(representation.b_matrix @ endpoint - image), initial=0.0)
+    )
     if residual > 1e-13 * max(1.0, float(np.max(np.abs(image), initial=0.0))):
         return endpoint, model_value, np.inf
     dual = np.asarray(dual, dtype=np.float64)
@@ -207,7 +207,9 @@ class _KKTSystem:
     complement: np.ndarray
 
 
-def _kkt_system(hessian, gradient, params0, representation, params, blocks, dual, slacks, /):
+def _kkt_system(
+    hessian, gradient, params0, representation, params, blocks, dual, slacks, /
+):
     """Assemble the reduced HKM Newton system at one primal-dual iterate.
 
     Eliminating the Gram and slack directions leaves
@@ -419,9 +421,7 @@ def _solve_conic_newton_qp(
         if gap <= float(gap_tolerance) * max(1.0, abs(model_value)):
             break
         slacks = rep.dual_slacks(dual)
-        mu = sum(
-            float(np.sum(q * s)) for q, s in zip(blocks, slacks, strict=True)
-        ) / nu
+        mu = sum(float(np.sum(q * s)) for q, s in zip(blocks, slacks, strict=True)) / nu
         # Stall detection applies only near the roundoff floor; earlier the
         # certified gap can legitimately plateau while infeasibility falls.
         if mu <= 1e-9 * max(1.0, abs(model_value)):
@@ -435,17 +435,24 @@ def _solve_conic_newton_qp(
             alpha_aff = min(
                 1.0, _step_limit(blocks, d_blocks_aff, slacks, d_slacks_aff)
             )
-            mu_aff = sum(
-                float(np.sum((q + alpha_aff * d_q) * (s + alpha_aff * d_s)))
-                for q, d_q, s, d_s in zip(
-                    blocks, d_blocks_aff, slacks, d_slacks_aff, strict=True
+            mu_aff = (
+                sum(
+                    float(np.sum((q + alpha_aff * d_q) * (s + alpha_aff * d_s)))
+                    for q, d_q, s, d_s in zip(
+                        blocks, d_blocks_aff, slacks, d_slacks_aff, strict=True
+                    )
                 )
-            ) / nu
+                / nu
+            )
             sigma = min(1.0, max(0.0, mu_aff / mu)) ** 3 if mu > 0.0 else 0.0
             corrector_targets = [
                 sigma * mu * identity - q @ s - d_q @ d_s
                 for identity, q, s, d_q, d_s in zip(
-                    identities, blocks, slacks, d_blocks_aff, d_slacks_aff,
+                    identities,
+                    blocks,
+                    slacks,
+                    d_blocks_aff,
+                    d_slacks_aff,
                     strict=True,
                 )
             ]
@@ -509,7 +516,9 @@ def _interior_shift(blocks, relative, /):
     return shifted
 
 
-def _preconditioned_subproblem_reference(hessian, gradient, params, representation, blocks, /):
+def _preconditioned_subproblem_reference(
+    hessian, gradient, params, representation, blocks, /
+):
     """Solve one Newton model with a fixed diagonal rescaling (reference Python).
 
     In the monomial basis the Fisher matrix of a degree-10 fit can span
@@ -575,7 +584,9 @@ def _preconditioned_subproblem_reference(hessian, gradient, params, representati
         b_matrix=(row_scale[:, None] * b) * column[None, :],
         row_matrices=tuple(
             row_scale[:, None, None] * matrices / np.outer(scale, scale)[None, :, :]
-            for matrices, scale in zip(representation.row_matrices, gram_scales, strict=True)
+            for matrices, scale in zip(
+                representation.row_matrices, gram_scales, strict=True
+            )
         ),
         reference_dual=representation.reference_dual / row_scale,
         row_degrees=degrees,

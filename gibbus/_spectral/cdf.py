@@ -42,7 +42,14 @@ _RECERTIFY_GAUSS_N = 24
 """Gauss-Legendre nodes per subinterval when the builder re-measures the mass
 of a panel it could not certify."""
 
-_KIND_CODE = {"finite": 0, "lower": 1, "upper": 2, "real": 3, "lower_centered": 4, "upper_centered": 5}
+_KIND_CODE = {
+    "finite": 0,
+    "lower": 1,
+    "upper": 2,
+    "real": 3,
+    "lower_centered": 4,
+    "upper_centered": 5,
+}
 
 _TABLES: dict = {}
 
@@ -211,10 +218,7 @@ class _Map:
                 dt_dz = 0.5 * (t_edge + 1.0)
                 t = -1.0 + (z + 1.0) * dt_dz
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return (
-                    2.0 * self.scale * (1.0 + t * t)
-                    / (1.0 - t * t) ** 2
-                ) * dt_dz
+                return (2.0 * self.scale * (1.0 + t * t) / (1.0 - t * t) ** 2) * dt_dz
         raise RuntimeError("unknown map kind")
 
     def z_from_x(self, x):
@@ -354,17 +358,40 @@ class SpectralCDF:
         if not isinstance(density, _builders.DensitySpec):
             raise TypeError("density must be a DensitySpec (see density_spec)")
         breaks, s0 = self._configure(
-            support, mode, std, degree_options, rel_tol, abs_tol, coeff_tol,
-            max_depth, max_panels, map_scale, initial_breaks, density,
+            support,
+            mode,
+            std,
+            degree_options,
+            rel_tol,
+            abs_tol,
+            coeff_tol,
+            max_depth,
+            max_panels,
+            map_scale,
+            initial_breaks,
+            density,
         )
         panels = self._build_compiled(
             breaks, choose=map_scale is None and self.map.kind != "finite", s0=s0
         )
         self._finish(panels, recertified=self.n_masses_recertified)
 
-    def _configure(self, support, mode, std, degree_options, rel_tol, abs_tol,
-                   coeff_tol, max_depth, max_panels, map_scale, initial_breaks,
-                   density, /):
+    def _configure(
+        self,
+        support,
+        mode,
+        std,
+        degree_options,
+        rel_tol,
+        abs_tol,
+        coeff_tol,
+        max_depth,
+        max_panels,
+        map_scale,
+        initial_breaks,
+        density,
+        /,
+    ):
         """Store the options, choose the compactifying map and seed the breaks.
 
         Parameters
@@ -415,10 +442,14 @@ class SpectralCDF:
         else:
             c = float(mode) if mode is not None and np.isfinite(mode) else 0.0
             if np.isfinite(L):
-                remote = np.isfinite(c) and c > L and (c - L) > _REMOTE_BOUNDARY_RATIO * s0
+                remote = (
+                    np.isfinite(c) and c > L and (c - L) > _REMOTE_BOUNDARY_RATIO * s0
+                )
                 kind = "lower_centered" if remote else "lower"
             elif np.isfinite(U):
-                remote = np.isfinite(c) and c < U and (U - c) > _REMOTE_BOUNDARY_RATIO * s0
+                remote = (
+                    np.isfinite(c) and c < U and (U - c) > _REMOTE_BOUNDARY_RATIO * s0
+                )
                 kind = "upper_centered" if remote else "upper"
             else:
                 kind = "real"
@@ -504,11 +535,20 @@ class SpectralCDF:
         scale, rows, ints, coeff, icoeff, exhausted, fixed = _builders.build_cdf(
             self.density,
             _builder_tables(self.degree_options),
-            _KIND_CODE[mp.kind], float(mp.L), float(mp.U), float(mp.center),
-            float(mp.scale) if not choose else 1.0, bool(choose), float(s0),
+            _KIND_CODE[mp.kind],
+            float(mp.L),
+            float(mp.U),
+            float(mp.center),
+            float(mp.scale) if not choose else 1.0,
+            bool(choose),
+            float(s0),
             np.ascontiguousarray(breaks, dtype=np.float64),
             np.asarray(self.degree_options, dtype=np.int32),
-            self.rel_tol, self.abs_tol, self.coeff_tol, self.max_depth, self.max_panels,
+            self.rel_tol,
+            self.abs_tol,
+            self.coeff_tol,
+            self.max_depth,
+            self.max_panels,
         )
         if choose:
             self.map = replace(mp, scale=float(scale))
@@ -517,38 +557,41 @@ class SpectralCDF:
         panels = []
         for j in range(rows.shape[0]):
             nc = int(ints[j, 2])
-            panels.append(_Panel(
-                a=float(rows[j, 0]), b=float(rows[j, 1]), coeff=coeff[j, :nc].copy(),
-                icoeff=icoeff[j, :nc + 1].copy(), mass=float(rows[j, 2]),
-                fit_error=float(rows[j, 3]), error_mass=float(rows[j, 4]),
-                tail_ratio=float(rows[j, 5]), lift=float(rows[j, 6]),
-                depth=int(ints[j, 0]), certified=bool(ints[j, 1]),
-            ))
+            panels.append(
+                _Panel(
+                    a=float(rows[j, 0]),
+                    b=float(rows[j, 1]),
+                    coeff=coeff[j, :nc].copy(),
+                    icoeff=icoeff[j, : nc + 1].copy(),
+                    mass=float(rows[j, 2]),
+                    fit_error=float(rows[j, 3]),
+                    error_mass=float(rows[j, 4]),
+                    tail_ratio=float(rows[j, 5]),
+                    lift=float(rows[j, 6]),
+                    depth=int(ints[j, 0]),
+                    certified=bool(ints[j, 1]),
+                )
+            )
         return panels
 
     # ------------------------------------------------------------------
     # Mapping / transformed density
     # ------------------------------------------------------------------
 
-
-
-
-
     # ------------------------------------------------------------------
     # Panel construction
     # ------------------------------------------------------------------
 
-
-
-
-
-
-
-
-
     def _build_cython_evaluator(self):
         """Pack the immutable query-time representation for the Cython kernel."""
-        kind_map = {"finite": 0, "lower": 1, "upper": 2, "real": 3, "lower_centered": 4, "upper_centered": 5}
+        kind_map = {
+            "finite": 0,
+            "lower": 1,
+            "upper": 2,
+            "real": 3,
+            "lower_centered": 4,
+            "upper_centered": 5,
+        }
         m = len(self.panels)
         # D <= 32 implies integrated series length <= 34. Keep the storage
         # generic so construction can still experiment with other degrees.
@@ -563,14 +606,20 @@ class SpectralCDF:
             ic = np.asarray(p.icoeff, dtype=np.float64).copy()
             ic[0] -= C.chebval(-1.0, ic)
             ic /= self.total_mass
-            coeffs[j, :ic.size] = ic
+            coeffs[j, : ic.size] = ic
             ncoeff[j] = ic.size
 
         self._packed = (offsets, coeffs, ncoeff)
         return SpectralEvaluator(
-            kind_map[self.map.kind], float(self.map.L), float(self.map.U),
-            float(self.map.center), float(self.map.scale), self.breaks,
-            offsets, coeffs, ncoeff,
+            kind_map[self.map.kind],
+            float(self.map.L),
+            float(self.map.U),
+            float(self.map.center),
+            float(self.map.scale),
+            self.breaks,
+            offsets,
+            coeffs,
+            ncoeff,
         )
 
     def cdf_cython(self, x):
@@ -690,8 +739,7 @@ class SpectralCDF:
         if not self.panels or not (self.total_mass > 0.0):
             return 0.0
         return max(
-            (float(p.error_mass) / self.total_mass
-             for p in self.panels if p.certified),
+            (float(p.error_mass) / self.total_mass for p in self.panels if p.certified),
             default=0.0,
         )
 
@@ -716,12 +764,10 @@ class SpectralCDF:
         if not self.panels or not (self.total_mass > 0.0):
             return 0.0
         certified_local = max(
-            (float(p.error_mass) / self.total_mass
-             for p in self.panels if p.certified),
+            (float(p.error_mass) / self.total_mass for p in self.panels if p.certified),
             default=0.0,
         )
-        estimate = (self.mass_defect + self.uncertified_mass_fraction
-                    + certified_local)
+        estimate = self.mass_defect + self.uncertified_mass_fraction + certified_local
         return float(min(max(estimate, 0.0), 1.0))
 
     @property
@@ -765,6 +811,7 @@ class SpectralCDF:
         float
         """
         return abs(1.0 - float(self.total_mass))
+
 
 def boundary_aware_breaks_from_amplitudes(support, boundary_amplitudes):
     """Return compact-coordinate seed breaks near active endpoint logs.

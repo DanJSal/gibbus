@@ -56,11 +56,13 @@ class _PointObservations:
         """
         lower_amp = (
             float(state.boundary_amplitudes[0])
-            if state.spec.canonical_lower_a_index is not None else 0.0
+            if state.spec.canonical_lower_a_index is not None
+            else 0.0
         )
         upper_amp = (
             float(state.boundary_amplitudes[1])
-            if state.spec.canonical_upper_a_index is not None else 0.0
+            if state.spec.canonical_upper_a_index is not None
+            else 0.0
         )
         return self.stats.potential_expectation(
             state.q_poly,

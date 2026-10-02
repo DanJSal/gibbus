@@ -121,11 +121,16 @@ def hpd(logpdf, logcdf, logsf, ppf, isf, support, level, /, *, modes=()):
                 start = float(xs[i])
             if inside[i] != inside[i + 1]:
                 a, b = float(xs[i]), float(xs[i + 1])
-                root = float(brentq(
-                    lambda z: float(logpdf(z)) - threshold,
-                    a, b, xtol=1e-13, rtol=4 * np.finfo(float).eps,
-                    maxiter=100,
-                ))
+                root = float(
+                    brentq(
+                        lambda z: float(logpdf(z)) - threshold,
+                        a,
+                        b,
+                        xtol=1e-13,
+                        rtol=4 * np.finfo(float).eps,
+                        maxiter=100,
+                    )
+                )
                 if inside[i]:
                     if start is None:
                         start = a
@@ -136,7 +141,11 @@ def hpd(logpdf, logcdf, logsf, ppf, isf, support, level, /, *, modes=()):
         if inside[-1]:
             if start is None:
                 start = float(xs[-1])
-            end = hi if np.isfinite(hi) and float(logpdf(hi)) >= threshold else float(xs[-1])
+            end = (
+                hi
+                if np.isfinite(hi) and float(logpdf(hi)) >= threshold
+                else float(xs[-1])
+            )
             intervals.append([start, end])
 
         if intervals and np.isfinite(lo) and float(logpdf(lo)) >= threshold:

@@ -49,13 +49,21 @@ def _support_for_geometry(geometry, rng, /):
 def _latent_sample(support, n, rng, /):
     lower, upper = support
     if np.isneginf(lower) and np.isposinf(upper):
-        return rng.normal(float(rng.uniform(-0.5, 0.5)), float(rng.uniform(0.6, 1.5)), n)
+        return rng.normal(
+            float(rng.uniform(-0.5, 0.5)), float(rng.uniform(0.6, 1.5)), n
+        )
     if np.isfinite(lower) and np.isposinf(upper):
-        return lower + rng.gamma(float(rng.uniform(1.4, 3.5)), float(rng.uniform(0.3, 1.1)), n)
+        return lower + rng.gamma(
+            float(rng.uniform(1.4, 3.5)), float(rng.uniform(0.3, 1.1)), n
+        )
     if np.isneginf(lower) and np.isfinite(upper):
-        return upper - rng.gamma(float(rng.uniform(1.4, 3.5)), float(rng.uniform(0.3, 1.1)), n)
+        return upper - rng.gamma(
+            float(rng.uniform(1.4, 3.5)), float(rng.uniform(0.3, 1.1)), n
+        )
     width = upper - lower
-    return lower + width * rng.beta(float(rng.uniform(1.2, 4.0)), float(rng.uniform(1.2, 4.0)), n)
+    return lower + width * rng.beta(
+        float(rng.uniform(1.2, 4.0)), float(rng.uniform(1.2, 4.0)), n
+    )
 
 
 def _finite_scale(x, support, /):
@@ -84,9 +92,17 @@ def _make_rows(x, support, rng, /):
                 hi = min(hi, float(upper))
         elif kind == 4 and np.isfinite(lower):
             lo = float(lower)
-            hi = min(float(value + width), float(upper)) if np.isfinite(upper) else float(value + width)
+            hi = (
+                min(float(value + width), float(upper))
+                if np.isfinite(upper)
+                else float(value + width)
+            )
         elif kind == 5 and np.isfinite(upper):
-            lo = max(float(value - width), float(lower)) if np.isfinite(lower) else float(value - width)
+            lo = (
+                max(float(value - width), float(lower))
+                if np.isfinite(lower)
+                else float(value - width)
+            )
             hi = float(upper)
         elif kind == 6 and np.isneginf(lower):
             lo, hi = -np.inf, float(value)
@@ -125,7 +141,9 @@ def make_case(seed, geometry=None, /):
     if rng.random() < 0.70:
         weights = rng.lognormal(mean=0.0, sigma=0.65, size=rows.shape[0])
         if rows.shape[0] >= 12:
-            zero = rng.choice(rows.shape[0], size=max(1, rows.shape[0] // 15), replace=False)
+            zero = rng.choice(
+                rows.shape[0], size=max(1, rows.shape[0] // 15), replace=False
+            )
             weights[zero] = 0.0
     return IntervalSolverCase(
         seed=seed,

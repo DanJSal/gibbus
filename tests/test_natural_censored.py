@@ -124,10 +124,12 @@ def test_right_censored_exponential_starts_on_zero_boundary_face():
     evaluations on the degenerate positive-amplitude cone.
     """
     edges = np.arange(0.0, 2.0001, 0.25)
-    rows = np.vstack([
-        np.column_stack([edges[:-1], edges[1:]]),
-        [2.0, np.inf],
-    ])
+    rows = np.vstack(
+        [
+            np.column_stack([edges[:-1], edges[1:]]),
+            [2.0, np.inf],
+        ]
+    )
     weights = np.r_[
         np.exp(-edges[:-1]) - np.exp(-edges[1:]),
         np.exp(-2.0),
@@ -150,7 +152,9 @@ def test_right_censored_exponential_starts_on_zero_boundary_face():
 def test_nonparametric_bound_is_the_saturated_multinomial_for_disjoint_bins():
     x = np.random.default_rng(5).normal(size=300)
     rows = _binned(x, 0.5)
-    objective = _prepare_natural_interval_objective(_REAL_LINE, rows, 4, False, False, None)
+    objective = _prepare_natural_interval_objective(
+        _REAL_LINE, rows, 4, False, False, None
+    )
     w = objective.observations.weights
     exact = -float(np.sum(w * np.log(w)))
     bound = _interval_nll_lower_bound(objective.observations)
@@ -161,9 +165,13 @@ def test_nonparametric_bound_is_the_saturated_multinomial_for_disjoint_bins():
 def test_nonparametric_bound_holds_for_overlapping_rows():
     rng = np.random.default_rng(6)
     x = rng.logistic(size=200)
-    rows = np.column_stack([x - rng.exponential(0.5, 200), x + rng.exponential(0.5, 200)])
+    rows = np.column_stack(
+        [x - rng.exponential(0.5, 200), x + rng.exponential(0.5, 200)]
+    )
     _, result = _fit_natural_conic_intervals(_REAL_LINE, rows, 6)
-    objective = _prepare_natural_interval_objective(_REAL_LINE, rows, 6, False, False, None)
+    objective = _prepare_natural_interval_objective(
+        _REAL_LINE, rows, 6, False, False, None
+    )
     bound = _interval_nll_lower_bound(objective.observations)
     assert bound is not None and bound < result.objective_value
     exact_rows = np.column_stack([x, x])
@@ -191,7 +199,9 @@ def test_interval_start_is_log_concave_and_the_fit_reaches_its_optimum():
     rng = np.random.default_rng(270908)
     x = rng.beta(2.0, 3.0, 120)
     rows = _binned(x, 0.1)
-    objective = _prepare_natural_interval_objective((0.0, 1.0), rows, 8, True, True, None)
+    objective = _prepare_natural_interval_objective(
+        (0.0, 1.0), rows, 8, True, True, None
+    )
     start, _ = _natural_interval_start(objective)
     layout = objective.layout
     candidate = layout.build_candidate(start)
@@ -220,7 +230,11 @@ def test_duplicate_rows_are_reduced_once_without_changing_the_fit(n_components):
     nudged = rows + jitter[:, None] * np.maximum(1.0, np.abs(rows))
 
     merged = Distribution().fit(rows, n_components=n_components, poly_degree=4, rng=0)
-    separate = Distribution().fit(nudged, n_components=n_components, poly_degree=4, rng=0)
+    separate = Distribution().fit(
+        nudged, n_components=n_components, poly_degree=4, rng=0
+    )
     grid = np.linspace(-3.0, 8.0, 23)
-    np.testing.assert_allclose(merged.logpdf(grid), separate.logpdf(grid), rtol=0.0, atol=1e-6)
+    np.testing.assert_allclose(
+        merged.logpdf(grid), separate.logpdf(grid), rtol=0.0, atol=1e-6
+    )
     np.testing.assert_allclose(merged.weights, separate.weights, rtol=0.0, atol=1e-7)

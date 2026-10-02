@@ -85,6 +85,7 @@ class _InversePanel:
     def degree(self):
         return int(self.coeff.size - 1)
 
+
 class SpectralPPF:
     """Adaptive monotone spectral inverse of a :class:`SpectralCDF`.
 
@@ -168,7 +169,8 @@ class SpectralPPF:
         # coordinates.  Zero-mass CDF tail panels are naturally skipped.
         probs = [self.pmin]
         probs.extend(
-            float(p) for p in spectral_cdf.cum_mass[1:-1]
+            float(p)
+            for p in spectral_cdf.cum_mass[1:-1]
             if self.pmin < float(p) < self.pmax
         )
         probs.append(self.pmax)
@@ -199,7 +201,9 @@ class SpectralPPF:
         if not panels:
             raise RuntimeError("spectral CDF has no invertible interior panels")
         self.panels = panels
-        self.breaks_r = np.array([panels[0].ra] + [p.rb for p in panels], dtype=np.float64)
+        self.breaks_r = np.array(
+            [panels[0].ra] + [p.rb for p in panels], dtype=np.float64
+        )
         self.breaks_r[0] = self.rmin
         self.breaks_r[-1] = self.rmax
         self._cython_evaluator = self._build_cython_evaluator()
@@ -245,7 +249,7 @@ class SpectralPPF:
         icoeff = np.zeros((m, istride), dtype=np.float64)
         nicoeff = np.empty(m, dtype=np.int32)
         for j, panel in enumerate(sp.panels):
-            icoeff[j, :panel.icoeff.size] = panel.icoeff
+            icoeff[j, : panel.icoeff.size] = panel.icoeff
             nicoeff[j] = panel.icoeff.size
         seed_src = np.array([iv[0] for iv in intervals], dtype=np.int32)
         seed = np.array([iv[1:] for iv in intervals], dtype=np.float64).reshape(-1, 6)
@@ -253,7 +257,11 @@ class SpectralPPF:
         status, rows, ints, coeff, detail = _builders.build_ppf(
             sp.density,
             _builder_tables(sp.degree_options, self.degree_options),
-            _KIND_CODE[mp.kind], float(mp.L), float(mp.U), float(mp.center), float(mp.scale),
+            _KIND_CODE[mp.kind],
+            float(mp.L),
+            float(mp.U),
+            float(mp.center),
+            float(mp.scale),
             np.ascontiguousarray(sp.breaks, dtype=np.float64),
             np.ascontiguousarray(offsets, dtype=np.float64),
             np.ascontiguousarray(sp.cum_mass, dtype=np.float64),
@@ -261,17 +269,32 @@ class SpectralPPF:
             np.ascontiguousarray(ev_ncoeff, dtype=np.int32),
             np.array([p.a for p in sp.panels], dtype=np.float64),
             np.array([p.b for p in sp.panels], dtype=np.float64),
-            icoeff, nicoeff, float(sp.total_mass), seed_src, seed,
+            icoeff,
+            nicoeff,
+            float(sp.total_mass),
+            seed_src,
+            seed,
             np.asarray(self.degree_options, dtype=np.int32),
-            self.prob_tol, self.max_depth, self.max_panels, self.certify_subdivide,
+            self.prob_tol,
+            self.max_depth,
+            self.max_panels,
+            self.certify_subdivide,
         )
         panels = [
             _InversePanel(
-                ra=float(r[0]), rb=float(r[1]), pa=float(r[2]), pb=float(r[3]),
-                za=float(r[4]), zb=float(r[5]), coeff=coeff[j, :int(ints[j, 2])].copy(),
-                fit_error=float(r[6]), logit_residual=float(r[7]),
-                prob_residual=float(r[8]), tail_abs=float(r[9]),
-                derivative_lower=float(r[10]), depth=int(ints[j, 0]),
+                ra=float(r[0]),
+                rb=float(r[1]),
+                pa=float(r[2]),
+                pb=float(r[3]),
+                za=float(r[4]),
+                zb=float(r[5]),
+                coeff=coeff[j, : int(ints[j, 2])].copy(),
+                fit_error=float(r[6]),
+                logit_residual=float(r[7]),
+                prob_residual=float(r[8]),
+                tail_abs=float(r[9]),
+                derivative_lower=float(r[10]),
+                depth=int(ints[j, 0]),
                 source_panel=int(ints[j, 1]),
             )
             for j, r in enumerate(rows)
@@ -323,7 +346,6 @@ class SpectralPPF:
         j = int(np.searchsorted(cm, float(p), side="right") - 1)
         return int(np.clip(j, 0, len(self.cdf_rep.panels) - 1))
 
-
     def _invert_source(self, j, p):
         """Invert the CDF for *p* known to lie within source panel *j*.
 
@@ -351,7 +373,6 @@ class SpectralPPF:
             return float(sp.breaks[j])
         frac = float(np.clip((p - pa) / (pb - pa), 0.0, 1.0))
         return float(sp._cython_evaluator.invert_panel_fraction(j, frac))
-
 
     def _invert_global(self, p, *, prefer_left=False):
         """Invert the CDF for an arbitrary probability.
@@ -382,7 +403,9 @@ class SpectralPPF:
         j = int(np.clip(j, 0, len(self.cdf_rep.panels) - 1))
         # If rounding selected a zero-mass panel, walk to one that brackets p.
         if not (float(cm[j]) <= p <= float(cm[j + 1])) or not (cm[j + 1] > cm[j]):
-            candidates = np.flatnonzero((cm[:-1] <= p) & (cm[1:] >= p) & (cm[1:] > cm[:-1]))
+            candidates = np.flatnonzero(
+                (cm[:-1] <= p) & (cm[1:] >= p) & (cm[1:] > cm[:-1])
+            )
             if candidates.size:
                 j = int(candidates[0] if prefer_left else candidates[-1])
         return self._invert_source(j, p)
@@ -391,12 +414,9 @@ class SpectralPPF:
     # Monotonicity certificate
     # ------------------------------------------------------------------
 
-
     # ------------------------------------------------------------------
     # Panel construction
     # ------------------------------------------------------------------
-
-
 
     @staticmethod
     def _z_from_v(v, za, zb):
@@ -415,11 +435,6 @@ class SpectralPPF:
             Compact coordinates.
         """
         return 0.5 * ((zb - za) * np.asarray(v) + (za + zb))
-
-
-
-
-
 
     @staticmethod
     def _failure_message(panel):
@@ -444,7 +459,6 @@ class SpectralPPF:
             f"tail={panel.tail_abs:.3e}, dmin={panel.derivative_lower:.3e}"
         )
 
-
     def _build_cython_evaluator(self):
         """Pack the immutable inverse and source CDF for the compiled kernel."""
         m = len(self.panels)
@@ -453,7 +467,7 @@ class SpectralPPF:
         ncoeff = np.empty(m, dtype=np.int32)
         for j, panel in enumerate(self.panels):
             c = np.asarray(panel.coeff, dtype=np.float64)
-            coeffs[j, :c.size] = c
+            coeffs[j, : c.size] = c
             ncoeff[j] = c.size
         breaks_z = np.array(
             [self.panels[0].za] + [panel.zb for panel in self.panels],
@@ -470,16 +484,34 @@ class SpectralPPF:
             ic = np.asarray(panel.icoeff, dtype=np.float64).copy()
             ic[0] -= C.chebval(-1.0, ic)
             ic /= sp.total_mass
-            ccoeffs[j, :ic.size] = ic
+            ccoeffs[j, : ic.size] = ic
             cncoeff[j] = ic.size
 
-        kind_map = {"finite": 0, "lower": 1, "upper": 2, "real": 3, "lower_centered": 4, "upper_centered": 5}
+        kind_map = {
+            "finite": 0,
+            "lower": 1,
+            "upper": 2,
+            "real": 3,
+            "lower_centered": 4,
+            "upper_centered": 5,
+        }
         mp = sp.map
         return SpectralPPFEvaluator(
-            self.pmin, self.pmax, kind_map[mp.kind],
-            float(mp.L), float(mp.U), float(mp.center), float(mp.scale),
-            self.breaks_r, breaks_z, coeffs, ncoeff,
-            np.asarray(sp.breaks, dtype=np.float64), coffsets, ccoeffs, cncoeff,
+            self.pmin,
+            self.pmax,
+            kind_map[mp.kind],
+            float(mp.L),
+            float(mp.U),
+            float(mp.center),
+            float(mp.scale),
+            self.breaks_r,
+            breaks_z,
+            coeffs,
+            ncoeff,
+            np.asarray(sp.breaks, dtype=np.float64),
+            coffsets,
+            ccoeffs,
+            cncoeff,
         )
 
     # ------------------------------------------------------------------
@@ -546,7 +578,9 @@ class SpectralPPF:
             out[core] = zz
         tails = (~nan) & (flat > 0.0) & (flat < 1.0) & (~core)
         if np.any(tails):
-            out[tails] = np.array([self._invert_global(pp) for pp in flat[tails]], dtype=np.float64)
+            out[tails] = np.array(
+                [self._invert_global(pp) for pp in flat[tails]], dtype=np.float64
+            )
         return float(out[0]) if scalar else out.reshape(arr.shape)
 
     def ppf_cython(self, p, *, simd=True):
@@ -593,4 +627,3 @@ class SpectralPPF:
     def max_depth_used(self):
         """Deepest refinement level reached by any accepted inverse panel."""
         return int(max(p.depth for p in self.panels)) if self.panels else 0
-

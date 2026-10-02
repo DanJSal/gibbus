@@ -89,15 +89,17 @@ def _potential_base_func(support, q_poly, boundary_amplitudes):
             raise ValueError("n must be >= 0")
 
         zz = np.asarray(z, dtype=np.float64)
-        scalar = (zz.ndim == 0)
+        scalar = zz.ndim == 0
 
         mask = np.isfinite(zz)
         if np.isfinite(L):
-            mask &= (zz >= L)
+            mask &= zz >= L
         if np.isfinite(U):
-            mask &= (zz <= U)
+            mask &= zz <= U
 
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        with np.errstate(
+            divide="ignore", invalid="ignore", over="ignore", under="ignore"
+        ):
             if n == 0:
                 out = _q_eval(zz, support, q_poly, boundary_amplitudes, 0)
                 out = np.where(mask & np.isfinite(out), out, np.inf)
@@ -109,8 +111,6 @@ def _potential_base_func(support, q_poly, boundary_amplitudes):
             return float(out) if scalar else out
 
     return pot
-
-
 
 
 @cache
@@ -189,7 +189,7 @@ def _potential_exp_from_x_potential(pot_x):
             raise ValueError("n must be >= 0")
 
         yy = np.asarray(y, dtype=np.float64)
-        scalar = (yy.ndim == 0)
+        scalar = yy.ndim == 0
 
         out = np.empty_like(yy, dtype=np.float64)
         out.fill(np.inf if n == 0 else np.nan)
@@ -248,9 +248,10 @@ def _pdf_func(support, q_poly, boundary_amplitudes, /):
 
     def pdf(x, /):
         x_arr = np.asarray(x, dtype=np.float64)
-        scalar = (x_arr.ndim == 0)
-        out = _pdf_vec(np.ascontiguousarray(np.atleast_1d(x_arr)).reshape(-1),
-                       supp, qp, qb, 0.0)
+        scalar = x_arr.ndim == 0
+        out = _pdf_vec(
+            np.ascontiguousarray(np.atleast_1d(x_arr)).reshape(-1), supp, qp, qb, 0.0
+        )
         if scalar:
             return float(out[0])
         return out.reshape(x_arr.shape)
@@ -318,7 +319,7 @@ def _potential_oriented_affine_eval(
             out = np.where(mask & np.isfinite(out), out, np.inf)
             return float(out) if scalar else out
 
-        out = (sig ** n) * _polyval(z, polyder(q_poly, n))
+        out = (sig**n) * _polyval(z, polyder(q_poly, n))
         fac = float(factorial(n - 1))
         if np.isfinite(L) and aL > 0.0:
             sign = -1.0 if (n & 1) else 1.0

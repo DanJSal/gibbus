@@ -215,12 +215,15 @@ def _reraise_if_debug(exc, context, /, *, routine=False):
     buffer = _suppressed_buffer()
     if len(buffer) >= _SUPPRESSED_MAX:
         del buffer[0]
-    buffer.append({
-        "context": str(context),
-        "type": type(exc).__name__,
-        "message": str(exc)[:1000],
-        "routine": bool(routine),
-    })
+    buffer.append(
+        {
+            "context": str(context),
+            "type": type(exc).__name__,
+            "message": str(exc)[:1000],
+            "routine": bool(routine),
+        }
+    )
+
 
 _F64_INFO: Final = np.finfo(np.float64)
 

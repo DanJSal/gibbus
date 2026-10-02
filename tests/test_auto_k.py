@@ -5,6 +5,7 @@ always refitted on every sample.  These tests therefore assert that the
 selection agrees with the full-data selection and that the fitted
 parameters are unaffected, not that any particular speed-up is reached.
 """
+
 import numpy as np
 import pytest
 from scipy.integrate import trapezoid
@@ -49,8 +50,7 @@ class TestStratifiedSubsample:
     def test_rare_component_survives(self):
         """A 1% cluster must appear in the subsample, not vanish."""
         gen = np.random.default_rng(3)
-        x = np.concatenate([gen.normal(0, 1, 19800),
-                            gen.normal(20, 0.3, 200)])
+        x = np.concatenate([gen.normal(0, 1, 19800), gen.normal(20, 0.3, 200)])
         for seed in range(10):
             idx = _stratified_subsample(x, 2000, np.random.default_rng(seed))
             n_rare = int(np.sum(x[idx] > 15))
@@ -59,8 +59,7 @@ class TestStratifiedSubsample:
     def test_lower_variance_than_simple_random(self):
         """Stratification is chosen for variance reduction; verify it."""
         gen = np.random.default_rng(4)
-        x = np.concatenate([gen.normal(0, 1, 19800),
-                            gen.normal(20, 0.3, 200)])
+        x = np.concatenate([gen.normal(0, 1, 19800), gen.normal(20, 0.3, 200)])
         strat, simple = [], []
         for seed in range(30):
             g = np.random.default_rng(seed)
@@ -72,16 +71,16 @@ class TestStratifiedSubsample:
 @pytest.fixture(scope="module")
 def big_bimodal():
     rng = np.random.default_rng(20250101)
-    return np.concatenate([rng.normal(-3, 0.7, 15000),
-                           rng.normal(3, 0.7, 15000)])
+    return np.concatenate([rng.normal(-3, 0.7, 15000), rng.normal(3, 0.7, 15000)])
 
 
 class TestSelectionAgreement:
     def test_subsampled_selection_matches_full(self, big_bimodal):
         # ``rng=None`` for fitting is deliberately equivalent to seed 0.
         sub = Distribution().fit(big_bimodal, support=(-np.inf, np.inf))
-        full = Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0,
-                           auto_k_subsample=False)
+        full = Distribution().fit(
+            big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=False
+        )
         assert sub.n_components == full.n_components == 2
         diag = sub.selection_diagnostics
         assert diag["selected_n_components"] == 2
@@ -91,26 +90,26 @@ class TestSelectionAgreement:
     def test_fitted_parameters_are_unaffected(self, big_bimodal):
         """Selection is approximate; the refit that follows is not."""
         sub = Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0)
-        full = Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0,
-                           auto_k_subsample=False)
+        full = Distribution().fit(
+            big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=False
+        )
         assert sub.mean == pytest.approx(full.mean, rel=1e-9)
         assert sub.var == pytest.approx(full.var, rel=1e-9)
         assert sub.weights == pytest.approx(full.weights, rel=1e-9)
 
     def test_unimodal_still_selects_one(self):
         rng = np.random.default_rng(6)
-        c = Distribution().fit(rng.normal(size=25000), support=(-np.inf, np.inf),
-                        rng=0)
+        c = Distribution().fit(rng.normal(size=25000), support=(-np.inf, np.inf), rng=0)
         assert c.n_components == 1
 
     def test_small_input_is_not_subsampled(self):
         """Below the threshold, results must be exactly as before."""
         rng = np.random.default_rng(7)
-        x = np.concatenate([rng.normal(-3, 0.7, 400),
-                            rng.normal(3, 0.7, 400)])
+        x = np.concatenate([rng.normal(-3, 0.7, 400), rng.normal(3, 0.7, 400)])
         a = Distribution().fit(x, support=(-np.inf, np.inf), rng=0)
-        b = Distribution().fit(x, support=(-np.inf, np.inf), rng=0,
-                        auto_k_subsample=False)
+        b = Distribution().fit(
+            x, support=(-np.inf, np.inf), rng=0, auto_k_subsample=False
+        )
         assert a.n_components == b.n_components
         assert a.mean == pytest.approx(b.mean, rel=1e-12)
         diag = a.selection_diagnostics
@@ -118,13 +117,11 @@ class TestSelectionAgreement:
         assert diag["subsampled"] is False
         assert diag["scores"]
 
-
     def test_selection_candidates_remain_lite(self, monkeypatch):
         """Discarded BIC candidates must not build spectral CDF/PPF state."""
 
         rng = np.random.default_rng(17)
-        x = np.concatenate([rng.normal(-3, 0.5, 75),
-                            rng.normal(3, 0.5, 75)])
+        x = np.concatenate([rng.normal(-3, 0.5, 75), rng.normal(3, 0.5, 75)])
         original = _fitting._pack_natural_component
         calls = 0
 
@@ -143,38 +140,49 @@ class TestSelectionAgreement:
 
 class TestSubsampleOption:
     def test_explicit_size_accepted(self, big_bimodal):
-        c = Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0,
-                        auto_k_subsample=3000)
+        c = Distribution().fit(
+            big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=3000
+        )
         assert c.n_components == 2
 
     def test_rejects_bad_string(self, big_bimodal):
         with pytest.raises(ValueError, match="must be 'auto'"):
-            Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0,
-                        auto_k_subsample="sometimes")
+            Distribution().fit(
+                big_bimodal,
+                support=(-np.inf, np.inf),
+                rng=0,
+                auto_k_subsample="sometimes",
+            )
 
     def test_rejects_degenerate_size(self, big_bimodal):
         with pytest.raises(ValueError, match="at least 2"):
-            Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0,
-                        auto_k_subsample=1)
+            Distribution().fit(
+                big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=1
+            )
 
     def test_ignored_for_explicit_k(self, big_bimodal):
         """The option only affects automatic selection."""
-        a = Distribution().fit(big_bimodal, n_components=2,
-                        support=(-np.inf, np.inf), rng=0)
-        b = Distribution().fit(big_bimodal, n_components=2,
-                        support=(-np.inf, np.inf), rng=0,
-                        auto_k_subsample=500)
+        a = Distribution().fit(
+            big_bimodal, n_components=2, support=(-np.inf, np.inf), rng=0
+        )
+        b = Distribution().fit(
+            big_bimodal,
+            n_components=2,
+            support=(-np.inf, np.inf),
+            rng=0,
+            auto_k_subsample=500,
+        )
         assert a.mean == pytest.approx(b.mean, rel=1e-12)
 
 
 class TestWeightedSubsampling:
     def test_weights_are_renormalized_on_subsample(self, big_bimodal):
         w = np.ones(big_bimodal.size)
-        w[big_bimodal.size // 2:] = 5.0
-        c = Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0,
-                        sample_weights=w)
-        assert c.mean == pytest.approx(np.average(big_bimodal, weights=w),
-                                       abs=0.1)
+        w[big_bimodal.size // 2 :] = 5.0
+        c = Distribution().fit(
+            big_bimodal, support=(-np.inf, np.inf), rng=0, sample_weights=w
+        )
+        assert c.mean == pytest.approx(np.average(big_bimodal, weights=w), abs=0.1)
 
 
 class TestBinnedKDE:
@@ -217,11 +225,14 @@ class TestBinnedKDE:
         for row in dens:
             assert abs(trapezoid(row, grid) - 1.0) < 1e-3
 
-    @pytest.mark.parametrize("specs,expected", [
-        ([(0.0, 1.0, 1.0)], 1),
-        ([(-3.0, 0.7, 0.5), (3.0, 0.7, 0.5)], 2),
-        ([(-5.0, 0.8, 0.35), (0.0, 1.0, 0.3), (5.0, 0.6, 0.35)], 3),
-    ])
+    @pytest.mark.parametrize(
+        "specs,expected",
+        [
+            ([(0.0, 1.0, 1.0)], 1),
+            ([(-3.0, 0.7, 0.5), (3.0, 0.7, 0.5)], 2),
+            ([(-5.0, 0.8, 0.35), (0.0, 1.0, 0.3), (5.0, 0.6, 0.35)], 3),
+        ],
+    )
     def test_recovers_known_mode_count(self, specs, expected):
 
         rng = np.random.default_rng(6)
@@ -237,7 +248,8 @@ class TestGMMInit:
         rng = np.random.default_rng(8)
         x = np.concatenate([rng.normal(-3, 0.7, 500), rng.normal(3, 0.7, 500)])
         resp, weights = _gmm_init_responsibilities(
-            np.ascontiguousarray(x), 2, np.random.default_rng(0))
+            np.ascontiguousarray(x), 2, np.random.default_rng(0)
+        )
         assert resp.shape == (x.size, 2)
         assert np.allclose(resp.sum(axis=1), 1.0)
         assert np.isclose(weights.sum(), 1.0)
@@ -247,7 +259,8 @@ class TestGMMInit:
 
         rng = np.random.default_rng(9)
         x = np.ascontiguousarray(
-            np.concatenate([rng.normal(-3, 0.7, 500), rng.normal(3, 0.7, 500)]))
+            np.concatenate([rng.normal(-3, 0.7, 500), rng.normal(3, 0.7, 500)])
+        )
         a, _ = _gmm_init_responsibilities(x, 2, np.random.default_rng(0))
         b, _ = _gmm_init_responsibilities(10.0 * x, 2, np.random.default_rng(0))
         assert np.allclose(np.sort(a, axis=1), np.sort(b, axis=1), atol=1e-6)

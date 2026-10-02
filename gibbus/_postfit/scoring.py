@@ -82,7 +82,9 @@ def _direct_interval_log_mass(logpdf, lo, hi, /):
     if not np.isfinite(width) or width <= 0.0:
         return np.nan
     mid = float(lo + 0.5 * width)
-    probes = np.asarray(logpdf(np.array([lo, mid, hi], dtype=np.float64)), dtype=np.float64)
+    probes = np.asarray(
+        logpdf(np.array([lo, mid, hi], dtype=np.float64)), dtype=np.float64
+    )
     finite = probes[np.isfinite(probes)]
     if finite.size == 0:
         return np.nan
@@ -96,7 +98,12 @@ def _direct_interval_log_mass(logpdf, lo, hi, /):
         return float(np.exp(lp - anchor))
 
     value, error = _quad_with_ledger(
-        relative, 0.0, 1.0, epsabs=1e-12, epsrel=1e-11, limit=100,
+        relative,
+        0.0,
+        1.0,
+        epsabs=1e-12,
+        epsrel=1e-11,
+        limit=100,
         context="direct interval log-mass quadrature",
     )
     scale = max(abs(value), 1.0)
@@ -108,6 +115,7 @@ def _direct_interval_log_mass(logpdf, lo, hi, /):
     ):
         return np.nan
     return float(np.log(width) + anchor + np.log(value))
+
 
 def interval_loglik(rows, weights, logpdf, logcdf, logsf, /):
     """Evaluate weighted log likelihood for canonical interval rows.

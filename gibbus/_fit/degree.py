@@ -150,7 +150,9 @@ def _omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None):
     max_order = int(orders[-1])
     stats = fit.observations.stats
     if stats.max_order < 2 * max_order:
-        raise ValueError("empirical summary needs moments through twice the probe order")
+        raise ValueError(
+            "empirical summary needs moments through twice the probe order"
+        )
 
     moments = _ModelMoments(fit.state)
     model_power = moments.power(2 * max_order)
@@ -190,9 +192,7 @@ def _omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None):
         out=np.ones_like(empirical_var),
         where=np.isfinite(empirical_var),
     )
-    inflation = np.clip(
-        np.maximum(1.0, ratio), 1.0, float(cfg.max_variance_inflation)
-    )
+    inflation = np.clip(np.maximum(1.0, ratio), 1.0, float(cfg.max_variance_inflation))
     scale = np.sqrt(inflation)
     test_cov = conditional * scale[:, None] * scale[None, :]
     test_cov = _project_psd(test_cov, cfg.covariance_rtol)
@@ -389,7 +389,7 @@ def _probe_nuisance_covariance(
     n_t = len(nuisance_orders) + len(sides)
     out = np.empty((n_u, n_t), dtype=np.float64)
     if nuisance_orders:
-        out[:, :len(nuisance_orders)] = _power_covariance_block(
+        out[:, : len(nuisance_orders)] = _power_covariance_block(
             model_power, probe_orders, nuisance_orders
         )
     for row, order in enumerate(probe_orders):
@@ -482,6 +482,7 @@ def _project_psd(matrix, rtol, /):
     else:
         values = np.maximum(values, 0.0)
     return (vectors * values) @ vectors.T
+
 
 @dataclass(frozen=True)
 class _IntervalDegreeDiagnostic:
@@ -591,8 +592,7 @@ def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None)
             if b < a:
                 continue
             e_product = (
-                moments.log_square(side_a)
-                if side_a == side_b else moments.log_cross()
+                moments.log_square(side_a) if side_a == side_b else moments.log_cross()
             )
             value = e_product - model_mean[a] * model_mean[b]
             model_cov[a, b] = value
@@ -614,9 +614,7 @@ def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None)
         def _point_q(z_values):
             """Potential at exact-point rows, keeping sub-ulp edge distances."""
             out = np.empty(z_values.size, dtype=np.float64)
-            for j, (z, r) in enumerate(
-                zip(z_values, point_global_rows, strict=True)
-            ):
+            for j, (z, r) in enumerate(zip(z_values, point_global_rows, strict=True)):
                 out[j] = _point_q_with_boundary_distances(
                     state,
                     z,
@@ -625,8 +623,9 @@ def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None)
                 )
             return out
 
-        nodes, log_kernel, point_mid, log_integrals = (
-            _finite_interval_log_kernel(state, support, plan, _point_q))
+        nodes, log_kernel, point_mid, log_integrals = _finite_interval_log_kernel(
+            state, support, plan, _point_q
+        )
         node_values = np.empty(nodes.shape + (n_stats,), dtype=np.float64)
         ordinary = ~plan.point_limit
         if np.any(ordinary):
@@ -658,9 +657,8 @@ def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None)
         infinite_rows = np.ascontiguousarray(
             observations.intervals[infinite_idx], dtype=np.float64
         )
-        whole_support = (
-            (infinite_rows[:, 0] == float(support[0]))
-            & (infinite_rows[:, 1] == float(support[1]))
+        whole_support = (infinite_rows[:, 0] == float(support[0])) & (
+            infinite_rows[:, 1] == float(support[1])
         )
         if np.any(whole_support):
             whole_idx = infinite_idx[whole_support]
@@ -678,15 +676,9 @@ def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None)
             row_mean[reduce_idx] = np.asarray(batch_mean, dtype=np.float64)
             row_cov[reduce_idx] = np.asarray(batch_cov, dtype=np.float64)
 
-    observed_mean = np.einsum(
-        "r,ri->i", observations.weights, row_mean, optimize=True
-    )
-    missing_cov = np.einsum(
-        "r,rij->ij", observations.weights, row_cov, optimize=True
-    )
-    information = 0.5 * (
-        (model_cov - missing_cov) + (model_cov - missing_cov).T
-    )
+    observed_mean = np.einsum("r,ri->i", observations.weights, row_mean, optimize=True)
+    missing_cov = np.einsum("r,rij->ij", observations.weights, row_cov, optimize=True)
+    information = 0.5 * ((model_cov - missing_cov) + (model_cov - missing_cov).T)
 
     # The statistic order is powers first then logs; nuisance logs must be moved
     # next to nuisance powers before taking the Schur complement.
@@ -780,18 +772,14 @@ def _point_natural_statistic_values(
     shape = z.shape + (len(power_orders) + len(sides),)
     values = np.empty(shape, dtype=np.float64)
     if len(power_orders):
-        values[..., :len(power_orders)] = out
+        values[..., : len(power_orders)] = out
 
     lower, upper = map(float, support)
     for j, side in enumerate(sides, start=len(power_orders)):
         if side == _LOWER:
-            distance = np.where(
-                np.isfinite(lower_distance), lower_distance, z - lower
-            )
+            distance = np.where(np.isfinite(lower_distance), lower_distance, z - lower)
         else:
-            distance = np.where(
-                np.isfinite(upper_distance), upper_distance, upper - z
-            )
+            distance = np.where(np.isfinite(upper_distance), upper_distance, upper - z)
         values[..., j] = -np.log(distance)
     return values
 

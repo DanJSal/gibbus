@@ -221,7 +221,9 @@ class FrozenDistribution:
             return values[0]
         return tuple(values)
 
-    def expect(self, func=None, args=(), lb=None, ub=None, conditional=False, **_kwargs):
+    def expect(
+        self, func=None, args=(), lb=None, ub=None, conditional=False, **_kwargs
+    ):
         """Compute an expectation with SciPy-compatible options.
 
         Parameters
@@ -247,6 +249,7 @@ class FrozenDistribution:
 
             func = wrapped_func
         if func is None:
+
             def identity(x):
                 return x
 

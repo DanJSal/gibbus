@@ -59,7 +59,7 @@ def _to_generator(rng, /):
     if isinstance(rng, np.random.Generator):
         return rng
     if isinstance(rng, np.random.RandomState):
-        return np.random.default_rng(rng.randint(0, 2 ** 32 - 1))
+        return np.random.default_rng(rng.randint(0, 2**32 - 1))
     return np.random.default_rng(rng)
 
 
@@ -92,7 +92,9 @@ def _normalize_sample_weights_1d(R, w, /):
         or np.any(w < 0)
         or np.all(w == 0)
     ):
-        raise ValueError("sample_weights must be non-negative, finite, length R, and not all zero.")
+        raise ValueError(
+            "sample_weights must be non-negative, finite, length R, and not all zero."
+        )
     return w / np.sum(w)
 
 
@@ -165,9 +167,7 @@ def _canon_univariate_samples(samples, /, *, min_samples=2):
     """
     raw = np.asarray(samples)
     if raw.dtype.kind == "c":
-        raise ValueError(
-            "samples must be real-valued; complex input is not supported."
-        )
+        raise ValueError("samples must be real-valued; complex input is not supported.")
     # The fit works on its own contiguous copy, frozen below: the caller's
     # array may be modified after (or during) the call, and fit-time caches
     # key on the array object.
@@ -213,7 +213,9 @@ def _canon_univariate_samples(samples, /, *, min_samples=2):
             S = S.copy()
             S[swap, 0] = U[swap]
             S[swap, 1] = L[swap]
-        invalid_infinite_point = (~np.isfinite(S[:, 0]) | ~np.isfinite(S[:, 1])) & (S[:, 0] == S[:, 1])
+        invalid_infinite_point = (~np.isfinite(S[:, 0]) | ~np.isfinite(S[:, 1])) & (
+            S[:, 0] == S[:, 1]
+        )
         if np.any(invalid_infinite_point):
             raise ValueError("infinite censoring intervals must have positive width")
 
@@ -320,7 +322,11 @@ def _validate_endpoint_observations(
         enabled zero-offset logarithmic boundary basis.
     """
     S = np.asarray(samples_rk, dtype=np.float64)
-    active = np.ones(S.shape[0], dtype=bool) if weights is None else np.asarray(weights) > 0.0
+    active = (
+        np.ones(S.shape[0], dtype=bool)
+        if weights is None
+        else np.asarray(weights) > 0.0
+    )
     if S.shape[1] == 1:
         point = active
         value = S[:, 0]
@@ -534,9 +540,7 @@ def _normalize_univariate_fit_inputs(
 
     if init_from is not None:
         seed = init_from.data if isinstance(init_from, ComponentType) else init_from
-        missing = [
-            name for name in _SEED_FIELDS if not _state_has_field(seed, name)
-        ]
+        missing = [name for name in _SEED_FIELDS if not _state_has_field(seed, name)]
         if missing:
             raise ValueError(
                 "init_from must be a fitted state; missing fields: "
@@ -556,8 +560,12 @@ def _normalize_univariate_fit_inputs(
         allowed = np.asarray(seed["boundary_allowed"], dtype=bool).reshape(-1)
         if allowed.size != 2:
             raise ValueError("seed has invalid boundary_allowed field")
-        log_boundary_lower = bool(allowed[0]) if caller_log_lower is None else bool(caller_log_lower)
-        log_boundary_upper = bool(allowed[1]) if caller_log_upper is None else bool(caller_log_upper)
+        log_boundary_lower = (
+            bool(allowed[0]) if caller_log_lower is None else bool(caller_log_lower)
+        )
+        log_boundary_upper = (
+            bool(allowed[1]) if caller_log_upper is None else bool(caller_log_upper)
+        )
         seed_state = seed
     else:
         if poly_degree is None:
@@ -567,7 +575,11 @@ def _normalize_univariate_fit_inputs(
             poly_degree = int(poly_degree)
             if poly_degree < 2:
                 raise ValueError("poly_degree must be >= 2")
-        supp = _default_univariate_support() if support is None else _validate_support(support)
+        supp = (
+            _default_univariate_support()
+            if support is None
+            else _validate_support(support)
+        )
         log_boundary_lower = _boundary_policy(caller_log_lower, supp[0])
         log_boundary_upper = _boundary_policy(caller_log_upper, supp[1])
 
@@ -585,12 +597,20 @@ def _normalize_univariate_fit_inputs(
             raise ValueError(f"interval samples fall outside the {origin} support.")
 
     _check_spread(S)
-    weights = None if sample_weights is None else _normalize_sample_weights_1d(R, sample_weights)
+    weights = (
+        None
+        if sample_weights is None
+        else _normalize_sample_weights_1d(R, sample_weights)
+    )
 
     if log_boundary_lower is True and not np.isfinite(L):
-        raise ValueError("log_boundary_lower=True requires a finite lower support endpoint")
+        raise ValueError(
+            "log_boundary_lower=True requires a finite lower support endpoint"
+        )
     if log_boundary_upper is True and not np.isfinite(U):
-        raise ValueError("log_boundary_upper=True requires a finite upper support endpoint")
+        raise ValueError(
+            "log_boundary_upper=True requires a finite upper support endpoint"
+        )
     log_boundary_lower, log_boundary_upper = _resolve_endpoint_observations(
         S, supp, log_boundary_lower, log_boundary_upper, weights
     )
@@ -720,8 +740,11 @@ def _normalize_mixture_fit_inputs(
             )
 
         _forbidden_keys = {
-            "support", "sample_weights", "init_from",
-            "log_boundary_lower", "log_boundary_upper",
+            "support",
+            "sample_weights",
+            "init_from",
+            "log_boundary_lower",
+            "log_boundary_upper",
         }
         for i, opts in enumerate(component_options):
             if not isinstance(opts, dict):
@@ -737,8 +760,10 @@ def _normalize_mixture_fit_inputs(
                     f"'init_from' is handled at the Distribution level."
                 )
 
-    w = None if sample_weights is None else _normalize_sample_weights_1d(
-        R, sample_weights
+    w = (
+        None
+        if sample_weights is None
+        else _normalize_sample_weights_1d(R, sample_weights)
     )
 
     return {

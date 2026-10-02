@@ -115,13 +115,13 @@ class _ModelMoments:
                 _reraise_if_debug(exc, "shared power-moment quadrature")
                 raw = np.empty(K + 1, dtype=np.float64)
                 if self._power is not None:
-                    raw[:self._power.size] = self._power
+                    raw[: self._power.size] = self._power
                 start = max(0, have + 1)
                 for k in range(start, K + 1):
                     raw[k] = self._integral(0, k, 0) / self.state.Z
             raw[0] = 1.0
             self._power = raw
-        return self._power[:K + 1].copy()
+        return self._power[: K + 1].copy()
 
     def power_covariance(self, max_order, /):
         """Return covariance of power statistics ``1,Z,...,Z**max_order``.
@@ -142,7 +142,7 @@ class _ModelMoments:
         moments = self.power(2 * K)
         index = np.arange(K + 1)
         second = moments[index[:, None] + index[None, :]]
-        mean = moments[:K + 1]
+        mean = moments[: K + 1]
         return second - mean[:, None] * mean[None, :]
 
     def log_power(self, side, max_order, /):
@@ -176,12 +176,12 @@ class _ModelMoments:
         if have < K:
             out = np.empty(K + 1, dtype=np.float64)
             if cached is not None:
-                out[:cached.size] = cached
+                out[: cached.size] = cached
             t_index = self._side_to_term[side]
             for k in range(max(0, have + 1), K + 1):
                 out[k] = self._integral(1, k, t_index) / self.state.Z
             self._log_power[side] = out
-        return self._log_power[side][:K + 1].copy()
+        return self._log_power[side][: K + 1].copy()
 
     def log_square(self, side, /):
         """Return ``E[(log d_side(Z))**2]``.
@@ -283,7 +283,6 @@ class _ModelMoments:
             points=self.state.quad_points,
         )
         return float(value / self.state.Z)
-
 
 
 def _complete_boundary_terms(state, /):

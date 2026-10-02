@@ -8,6 +8,7 @@ checking observable behavior under numerically demanding fixtures.
 Most fits are intentionally small.  Higher-degree and extreme-scale fixtures are
 kept only where the numerical mechanism requires them.
 """
+
 import itertools
 from types import SimpleNamespace
 
@@ -35,15 +36,18 @@ from gibbus._model.natural_state import _NaturalCoreState
 # helpers
 # --------------------------------------------------------------------------
 
+
 def _density(c):
     """Reference density as ``exp(-neg_log(x))``.
 
     Never build a reference on ``pdf()``: it floors small values, so any
     quadrature over it measures the floor rather than the density.
     """
+
     def f(t):
         v = c.neg_log(float(t))
         return float(np.exp(-v)) if np.isfinite(v) else 0.0
+
     return f
 
 
@@ -65,8 +69,9 @@ def _total_mass(c, n_seg=16):
     if not np.isfinite(lo):
         total += quad(_density(c), -np.inf, a, limit=200)[0]
     for u, v in itertools.pairwise(edges):
-        total += quad(_density(c), float(u), float(v),
-                      limit=200, epsabs=1e-13, epsrel=1e-13)[0]
+        total += quad(
+            _density(c), float(u), float(v), limit=200, epsabs=1e-13, epsrel=1e-13
+        )[0]
     if not np.isfinite(hi):
         total += quad(_density(c), b, np.inf, limit=200)[0]
     return total
@@ -78,19 +83,21 @@ def samples():
     return {
         "normal": r.normal(0.0, 1.0, 600),
         "gamma": r.gamma(2.0, 1.0, 600),
-        "bimodal": np.concatenate([r.normal(-2.5, 0.6, 300),
-                                   r.normal(2.5, 0.6, 300)]),
+        "bimodal": np.concatenate([r.normal(-2.5, 0.6, 300), r.normal(2.5, 0.6, 300)]),
     }
 
 
-SUPPORTS = {"normal": (-np.inf, np.inf),
-            "gamma": (0.0, np.inf),
-            "bimodal": (-np.inf, np.inf)}
+SUPPORTS = {
+    "normal": (-np.inf, np.inf),
+    "gamma": (0.0, np.inf),
+    "bimodal": (-np.inf, np.inf),
+}
 
 
 # --------------------------------------------------------------------------
 # A fit must explain the data it was fitted to
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("shape", ["normal", "gamma", "bimodal"])
 @pytest.mark.parametrize("degree", [4, 8])
@@ -108,10 +115,10 @@ def test_fit_explains_its_training_data(samples, shape, degree):
     data = samples[shape]
     support = SUPPORTS[shape]
 
-    baseline = Distribution().fit(data, n_components=1, poly_degree=2,
-                           support=support)
-    richer = Distribution().fit(data, n_components=1, poly_degree=degree,
-                         support=support)
+    baseline = Distribution().fit(data, n_components=1, poly_degree=2, support=support)
+    richer = Distribution().fit(
+        data, n_components=1, poly_degree=degree, support=support
+    )
 
     nll_baseline = float(np.mean(baseline.neg_log(data)))
     nll_richer = float(np.mean(richer.neg_log(data)))
@@ -127,6 +134,7 @@ def test_fit_explains_its_training_data(samples, shape, degree):
 # Reported training NLL must match the public density
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("shape", ["normal", "gamma"])
 def test_reported_nll_matches_training_data(samples, shape):
     """``data['nll']`` is the absolute user-coordinate training NLL.
@@ -136,8 +144,7 @@ def test_reported_nll_matches_training_data(samples, shape):
     negative-log density directly.
     """
     data = samples[shape]
-    c = Distribution().fit(data, n_components=1, poly_degree=4,
-                    support=SUPPORTS[shape])
+    c = Distribution().fit(data, n_components=1, poly_degree=4, support=SUPPORTS[shape])
 
     state = c.components[0].data
     reported = float(state["nll"])
@@ -154,7 +161,8 @@ def test_reported_nll_matches_high_degree_lognormal():
     rng = np.random.default_rng(0)
     data = rng.lognormal(0.0, 1.0, 1200)
     fitted = Distribution().fit(
-        data, n_components=1, poly_degree=12, support=(0.0, np.inf))
+        data, n_components=1, poly_degree=12, support=(0.0, np.inf)
+    )
 
     state = fitted.components[0].data
     reported = float(state["nll"])
@@ -166,12 +174,14 @@ def test_reported_nll_matches_high_degree_lognormal():
 # Fitted densities must integrate to one
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("shape", ["normal", "gamma", "bimodal"])
 @pytest.mark.parametrize("degree", [4, 8])
 def test_density_integrates_to_one(samples, shape, degree):
     """Independent quadrature of ``exp(-neg_log)`` must give 1."""
-    c = Distribution().fit(samples[shape], n_components=1, poly_degree=degree,
-                    support=SUPPORTS[shape])
+    c = Distribution().fit(
+        samples[shape], n_components=1, poly_degree=degree, support=SUPPORTS[shape]
+    )
     mass = _total_mass(c)
     assert mass == pytest.approx(1.0, abs=1e-6), (
         f"fitted density integrates to {mass:.12f}, not 1"
@@ -188,13 +198,16 @@ def test_high_degree_density_integrates_to_one():
     space, rather than integrating a kernel scaled down by ``1 / sigma``.
     """
     r = np.random.default_rng(0)
-    data = np.ascontiguousarray(np.r_[
-        r.normal(-4.0, 0.4, 1200),
-        r.normal(0.0, 0.4, 1200),
-        r.normal(4.0, 0.4, 1200),
-    ])
-    c = Distribution().fit(data, n_components=1, poly_degree=12,
-                    support=(-np.inf, np.inf))
+    data = np.ascontiguousarray(
+        np.r_[
+            r.normal(-4.0, 0.4, 1200),
+            r.normal(0.0, 0.4, 1200),
+            r.normal(4.0, 0.4, 1200),
+        ]
+    )
+    c = Distribution().fit(
+        data, n_components=1, poly_degree=12, support=(-np.inf, np.inf)
+    )
 
     mass = _total_mass(c)
     assert mass == pytest.approx(1.0, abs=1e-8), (
@@ -207,6 +220,7 @@ def test_high_degree_density_integrates_to_one():
 # Public PPF views must agree in the extreme tail
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("p", [1e-6, 1e-12, 1e-16, 1e-18, 1e-30])
 def test_base_view_ppf_agrees_with_distribution_ppf(samples, p):
     """``.base.ppf`` must not diverge from ``Distribution.ppf`` in the extreme tail.
@@ -215,8 +229,9 @@ def test_base_view_ppf_agrees_with_distribution_ppf(samples, p):
     they must expose the same quantile map rather than diverging through
     wrapper-specific tail handling.
     """
-    c = Distribution().fit(samples["normal"], n_components=1, poly_degree=4,
-                    support=(-np.inf, np.inf))
+    c = Distribution().fit(
+        samples["normal"], n_components=1, poly_degree=4, support=(-np.inf, np.inf)
+    )
 
     wrapped = float(c.ppf(p))
     view = float(c.base.ppf(p))
@@ -230,6 +245,7 @@ def test_base_view_ppf_agrees_with_distribution_ppf(samples, p):
 # sample(size=...) must reject non-integers
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("bad_size", [2.7, np.float64(4.9), "3", True])
 def test_sample_rejects_non_integer_size(samples, bad_size):
     """``size`` is documented as a non-negative integer and must be enforced.
@@ -237,17 +253,17 @@ def test_sample_rejects_non_integer_size(samples, bad_size):
     Floating-point, string, and boolean inputs are not valid sample counts,
     even when Python could coerce them to integers.
     """
-    c = Distribution().fit(samples["normal"], n_components=1, poly_degree=2,
-                    support=(-np.inf, np.inf))
+    c = Distribution().fit(
+        samples["normal"], n_components=1, poly_degree=2, support=(-np.inf, np.inf)
+    )
     with pytest.raises((TypeError, ValueError)):
         c.sample(size=bad_size, rng=np.random.default_rng(0))
-
-
 
 
 # --------------------------------------------------------------------------
 # High-degree fits must be equivariant to a pure change of units
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     ("seed", "scale"),
@@ -277,35 +293,39 @@ def test_degree8_density_is_scale_equivariant(seed, scale):
     assert l1 < 5e-8, f"density L1 mismatch under unit change: {l1:.3e}"
     assert float(scaled._components[0]._data["nll"]) == pytest.approx(
         float(ref._components[0]._data["nll"]) + np.log(scale),
-        abs=2e-10, rel=0.0,
+        abs=2e-10,
+        rel=0.0,
     )
     if seed == 2:
         assert float(ref._components[0]._data["nll"]) < 1.41865
-
 
 
 # --------------------------------------------------------------------------
 # High-degree fitting must retain a numerically sound likelihood basin
 # --------------------------------------------------------------------------
 
+
 def test_high_degree_fit_retains_a_sound_likelihood_basin():
     """A high-degree fit must avoid a materially inferior numerical basin."""
-    data = np.ascontiguousarray(
-        np.random.default_rng(0).lognormal(0.0, 1.0, 3000)
-    )
+    data = np.ascontiguousarray(np.random.default_rng(0).lognormal(0.0, 1.0, 3000))
 
     fitted = Distribution().fit(
-        data, n_components=1, support=(0.0, np.inf),
-        poly_degree=12, rng=0,
+        data,
+        n_components=1,
+        support=(0.0, np.inf),
+        poly_degree=12,
+        rng=0,
     )
 
     training_nll = float(np.mean(fitted.neg_log(data)))
     assert training_nll < 1.6
     assert float(fitted.mean) == pytest.approx(float(np.mean(data)), rel=5e-3)
 
+
 # --------------------------------------------------------------------------
 # Uniform weights must reduce to the unweighted path
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("n", [5, 50, 500, 5000])
 def test_uniform_weights_reproduce_unweighted_bandwidth(n):
@@ -350,6 +370,7 @@ def test_weighted_bandwidth_is_scale_invariant():
 # Interval-mixture EM must use interval probability mass
 # --------------------------------------------------------------------------
 
+
 def test_interval_e_step_matches_independent_component_cdf_oracle():
     """Interval responsibilities must be posterior masses, not midpoint PDFs.
 
@@ -360,37 +381,46 @@ def test_interval_e_step_matches_independent_component_cdf_oracle():
     """
 
     rng = np.random.default_rng(18019)
-    data = np.concatenate([
-        rng.normal(-1.5, 0.7, 250),
-        rng.normal(1.0, 0.9, 350),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-1.5, 0.7, 250),
+            rng.normal(1.0, 0.9, 350),
+        ]
+    )
     fitted = Distribution().fit(
-        data, n_components=2, poly_degree=2,
-        support=(-np.inf, np.inf), rng=0,
+        data,
+        n_components=2,
+        poly_degree=2,
+        support=(-np.inf, np.inf),
+        rng=0,
     )
 
-    intervals = np.array([
-        [-3.0, -2.0],
-        [-2.0, -1.0],
-        [-1.0, 0.0],
-        [0.0, 1.0],
-        [1.0, 2.0],
-        [2.0, 3.0],
-    ])
+    intervals = np.array(
+        [
+            [-3.0, -2.0],
+            [-2.0, -1.0],
+            [-1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 2.0],
+            [2.0, 3.0],
+        ]
+    )
     obs_weights = np.array([1.0, 2.0, 5.0, 4.0, 2.0, 1.0])
     obs_weights /= obs_weights.sum()
 
     resp, ll = _e_step_intervals(
-        intervals, fitted.components, fitted.weights,
+        intervals,
+        fitted.components,
+        fitted.weights,
         obs_weights=obs_weights,
     )
 
-    oracle_mass = np.column_stack([
-        fitted.weights[k] * (
-            comp.cdf(intervals[:, 1]) - comp.cdf(intervals[:, 0])
-        )
-        for k, comp in enumerate(fitted.components)
-    ])
+    oracle_mass = np.column_stack(
+        [
+            fitted.weights[k] * (comp.cdf(intervals[:, 1]) - comp.cdf(intervals[:, 0]))
+            for k, comp in enumerate(fitted.components)
+        ]
+    )
     row_mass = oracle_mass.sum(axis=1)
     oracle_resp = oracle_mass / row_mass[:, None]
     oracle_ll = float(np.dot(obs_weights, np.log(row_mass)))
@@ -407,28 +437,37 @@ def test_interval_mixture_relative_sample_weights_are_scale_invariant():
     component M-steps.
     """
     rng = np.random.default_rng(19018)
-    data = np.concatenate([
-        rng.normal(-1.7, 0.65, 180),
-        rng.normal(1.2, 0.8, 220),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-1.7, 0.65, 180),
+            rng.normal(1.2, 0.8, 220),
+        ]
+    )
     width = 0.8
     edges = np.arange(
         np.floor(data.min() / width) * width,
         np.ceil(data.max() / width) * width + width,
         width,
     )
-    idx = np.clip(np.searchsorted(edges, data, side="right") - 1,
-                  0, len(edges) - 2)
+    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
     intervals = np.column_stack([edges[idx], edges[idx + 1]])
     weights = np.where(data > 0.0, 3.0, 1.0)
 
     a = Distribution().fit(
-        intervals, n_components=2, poly_degree=2,
-        progressive=False, rng=0, sample_weights=weights,
+        intervals,
+        n_components=2,
+        poly_degree=2,
+        progressive=False,
+        rng=0,
+        sample_weights=weights,
     )
     b = Distribution().fit(
-        intervals, n_components=2, poly_degree=2,
-        progressive=False, rng=0, sample_weights=37.0 * weights,
+        intervals,
+        n_components=2,
+        poly_degree=2,
+        progressive=False,
+        rng=0,
+        sample_weights=37.0 * weights,
     )
 
     grid = np.linspace(float(intervals.min()), float(intervals.max()), 301)
@@ -443,23 +482,27 @@ def test_interval_mass_probability_invariant_rejects_invalid_em_refit():
     a state whose interval probability violates the probability axioms.
     """
     rng = np.random.default_rng(0)
-    data = np.concatenate([
-        rng.normal(-2.0, 0.7, 500),
-        rng.normal(2.0, 0.7, 500),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-2.0, 0.7, 500),
+            rng.normal(2.0, 0.7, 500),
+        ]
+    )
     width = 2.0
     edges = np.arange(
         np.floor(data.min() / width) * width,
         np.ceil(data.max() / width) * width + width,
         width,
     )
-    idx = np.clip(np.searchsorted(edges, data, side="right") - 1,
-                  0, len(edges) - 2)
+    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
     intervals = np.column_stack([edges[idx], edges[idx + 1]])
 
     fitted = Distribution().fit(
-        intervals, n_components=2, poly_degree=2,
-        progressive=False, rng=0,
+        intervals,
+        n_components=2,
+        poly_degree=2,
+        progressive=False,
+        rng=0,
     )
 
     for comp in fitted.components:
@@ -467,8 +510,6 @@ def test_interval_mass_probability_invariant_rejects_invalid_em_refit():
         assert np.all(np.isfinite(masses))
         assert np.all(masses >= -1e-12)
         assert np.all(masses <= 1.0 + 1e-12)
-
-
 
 
 def test_coarse_width2_default_interval_mixture_completes():
@@ -479,18 +520,19 @@ def test_coarse_width2_default_interval_mixture_completes():
     residual path that still failed after the midpoint-only guard was added.
     """
     rng = np.random.default_rng(0)
-    data = np.concatenate([
-        rng.normal(-2.0, 0.7, 500),
-        rng.normal(2.0, 0.7, 500),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-2.0, 0.7, 500),
+            rng.normal(2.0, 0.7, 500),
+        ]
+    )
     width = 2.0
     edges = np.arange(
         np.floor(data.min() / width) * width,
         np.ceil(data.max() / width) * width + width,
         width,
     )
-    idx = np.clip(np.searchsorted(edges, data, side="right") - 1,
-                  0, len(edges) - 2)
+    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
     intervals = np.column_stack([edges[idx], edges[idx + 1]])
 
     fitted = Distribution().fit(intervals, n_components=2, rng=0)
@@ -515,23 +557,24 @@ def test_saturated_coarse_interval_mixture_reports_nonidentifiability():
     ultra-narrow component happened to finalize would be misleading.
     """
     rng = np.random.default_rng(0)
-    data = np.concatenate([
-        rng.normal(-2.0, 0.7, 500),
-        rng.normal(2.0, 0.7, 500),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-2.0, 0.7, 500),
+            rng.normal(2.0, 0.7, 500),
+        ]
+    )
     width = 4.0
     edges = np.arange(
         np.floor(data.min() / width) * width,
         np.ceil(data.max() / width) * width + width,
         width,
     )
-    idx = np.clip(np.searchsorted(edges, data, side="right") - 1,
-                  0, len(edges) - 2)
+    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
     intervals = np.column_stack([edges[idx], edges[idx + 1]])
 
     with pytest.raises(
-            RuntimeError,
-            match=r"non-identifiable.*nonparametric interval-likelihood bound"):
+        RuntimeError, match=r"non-identifiable.*nonparametric interval-likelihood bound"
+    ):
         Distribution().fit(intervals, n_components=2, rng=0)
 
 
@@ -545,18 +588,24 @@ def test_overlapping_interval_saturation_reports_nonidentifiability():
     coordinates for five free mixture parameters.  Returning one arbitrary
     component decomposition would therefore be misleading.
     """
-    intervals = np.vstack([
-        np.repeat([[-4.0, -1.0]], 30, axis=0),
-        np.repeat([[-4.0, 1.0]], 40, axis=0),
-        np.repeat([[-3.0, 2.0]], 30, axis=0),
-    ])
+    intervals = np.vstack(
+        [
+            np.repeat([[-4.0, -1.0]], 30, axis=0),
+            np.repeat([[-4.0, 1.0]], 40, axis=0),
+            np.repeat([[-3.0, 2.0]], 30, axis=0),
+        ]
+    )
 
     with pytest.raises(
-            RuntimeError,
-            match=r"non-identifiable.*overlapping censoring pattern"):
+        RuntimeError, match=r"non-identifiable.*overlapping censoring pattern"
+    ):
         Distribution().fit(
-            intervals, n_components=2, poly_degree=2,
-            progressive=False, em_max_iter=80, rng=0,
+            intervals,
+            n_components=2,
+            poly_degree=2,
+            progressive=False,
+            em_max_iter=80,
+            rng=0,
         )
 
 
@@ -569,11 +618,13 @@ def test_nested_interval_pattern_is_recognized_by_identifiability_diagnostic():
     observe, so its component decomposition is not identified.
     """
 
-    intervals = np.vstack([
-        np.repeat([[-4.0, 4.0]], 20, axis=0),
-        np.repeat([[-3.0, 3.0]], 30, axis=0),
-        np.repeat([[-2.0, 2.0]], 50, axis=0),
-    ])
+    intervals = np.vstack(
+        [
+            np.repeat([[-4.0, 4.0]], 20, axis=0),
+            np.repeat([[-3.0, 3.0]], 30, axis=0),
+            np.repeat([[-2.0, 2.0]], 50, axis=0),
+        ]
+    )
     support = (-5.0, 5.0)
     bound = _interval_nonparametric_loglik_bound(intervals, support)
     components = [
@@ -581,9 +632,7 @@ def test_nested_interval_pattern_is_recognized_by_identifiability_diagnostic():
         SimpleNamespace(layout=SimpleNamespace(n_params=2)),
     ]
 
-    diag = _interval_identifiability_diagnostic(
-        intervals, components, bound, support
-    )
+    diag = _interval_identifiability_diagnostic(intervals, components, bound, support)
 
     assert diag is not None
     assert diag["observable_dim"] == 3
@@ -602,18 +651,19 @@ def test_auto_k_rejects_unidentifiable_richer_interval_candidate():
     """
 
     rng = np.random.default_rng(0)
-    data = np.concatenate([
-        rng.normal(-2.0, 0.7, 500),
-        rng.normal(2.0, 0.7, 500),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-2.0, 0.7, 500),
+            rng.normal(2.0, 0.7, 500),
+        ]
+    )
     width = 4.0
     edges = np.arange(
         np.floor(data.min() / width) * width,
         np.ceil(data.max() / width) * width + width,
         width,
     )
-    idx = np.clip(np.searchsorted(edges, data, side="right") - 1,
-                  0, len(edges) - 2)
+    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
     intervals = np.column_stack([edges[idx], edges[idx + 1]])
 
     with pytest.raises(RuntimeError, match=r"non-identifiable"):
@@ -641,18 +691,19 @@ def test_interval_auto_k_scores_the_interval_likelihood(monkeypatch):
     """
 
     rng = np.random.default_rng(4)
-    data = np.concatenate([
-        rng.normal(-2.0, 0.7, 140),
-        rng.normal(2.0, 0.7, 140),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(-2.0, 0.7, 140),
+            rng.normal(2.0, 0.7, 140),
+        ]
+    )
     width = 1.0
     edges = np.arange(
         np.floor(data.min() / width) * width,
         np.ceil(data.max() / width) * width + width,
         width,
     )
-    idx = np.clip(np.searchsorted(edges, data, side="right") - 1,
-                  0, len(edges) - 2)
+    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
     intervals = np.column_stack([edges[idx], edges[idx + 1]])
 
     seen_k1_cols = []
@@ -671,13 +722,17 @@ def test_interval_auto_k_scores_the_interval_likelihood(monkeypatch):
         seen_multi_cols.append((int(resp.shape[1]), int(arr.shape[1])))
         return original_run(*args, **kwargs)
 
-    monkeypatch.setattr(_selection, "_fit_natural_conic_intervals",
-                        wrapped_interval_fit)
+    monkeypatch.setattr(
+        _selection, "_fit_natural_conic_intervals", wrapped_interval_fit
+    )
     monkeypatch.setattr(_selection, "_run_natural_em", wrapped_run)
 
     fitted = Distribution().fit(
-        intervals, n_components="auto", poly_degree=2,
-        auto_k_subsample=False, rng=0,
+        intervals,
+        n_components="auto",
+        poly_degree=2,
+        auto_k_subsample=False,
+        rng=0,
     )
 
     assert fitted.n_components >= 1
@@ -690,9 +745,6 @@ def test_interval_auto_k_scores_the_interval_likelihood(monkeypatch):
 # --------------------------------------------------------------------------
 # Interval likelihood must remain stable under coarse and extreme censoring
 # --------------------------------------------------------------------------
-
-
-
 
 
 def test_coarse_binning_is_fittable_and_recovers_the_distribution():
@@ -711,10 +763,12 @@ def test_coarse_binning_is_fittable_and_recovers_the_distribution():
     for width in (0.5, 1.0, 2.0, 4.0):
         edges = np.round(x / width) * width
         intervals = np.ascontiguousarray(
-            np.column_stack([edges - width / 2.0, edges + width / 2.0]))
+            np.column_stack([edges - width / 2.0, edges + width / 2.0])
+        )
         gibbus.clear_suppressed_failures()
-        fitted = Distribution().fit(intervals, n_components=1, poly_degree=4,
-                             support=(-np.inf, np.inf), rng=0)
+        fitted = Distribution().fit(
+            intervals, n_components=1, poly_degree=4, support=(-np.inf, np.inf), rng=0
+        )
         assert np.isfinite(fitted.mean), width
         assert abs(fitted.mean) < 0.25, (width, fitted.mean)
         assert 0.7 < fitted.var < 1.4, (width, fitted.var)
@@ -732,19 +786,19 @@ def test_degenerate_intervals_reproduce_the_point_fit():
     x = np.ascontiguousarray(rng.normal(0.0, 1.0, 1500))
     grid = np.linspace(-4.0, 4.0, 300)
 
-    point = Distribution().fit(x, n_components=1, support=(-np.inf, np.inf),
-                        poly_degree=4)
+    point = Distribution().fit(
+        x, n_components=1, support=(-np.inf, np.inf), poly_degree=4
+    )
     degenerate = Distribution().fit(
         np.ascontiguousarray(np.column_stack([x - 1e-9, x + 1e-9])),
-        n_components=1, support=(-np.inf, np.inf), poly_degree=4)
+        n_components=1,
+        support=(-np.inf, np.inf),
+        poly_degree=4,
+    )
 
     assert np.max(np.abs(point.pdf(grid) - degenerate.pdf(grid))) < 1e-4
     assert degenerate.mean == pytest.approx(point.mean, abs=1e-4)
     assert degenerate.var == pytest.approx(point.var, abs=1e-4)
-
-
-
-
 
 
 def test_far_tail_interval_still_moves_the_public_fit():
@@ -757,19 +811,25 @@ def test_far_tail_interval_still_moves_the_public_fit():
     rng = np.random.default_rng(0)
     x = rng.normal(size=800)
     width = 0.2
-    base = np.column_stack([
-        np.floor(x / width) * width,
-        np.floor(x / width) * width + width,
-    ])
+    base = np.column_stack(
+        [
+            np.floor(x / width) * width,
+            np.floor(x / width) * width + width,
+        ]
+    )
 
     fit40 = Distribution().fit(
         np.vstack([base, [40.0, 40.0 + width]]),
-        n_components=1, poly_degree=2, support=(-np.inf, np.inf),
+        n_components=1,
+        poly_degree=2,
+        support=(-np.inf, np.inf),
         rng=0,
     )
     fit60 = Distribution().fit(
         np.vstack([base, [60.0, 60.0 + width]]),
-        n_components=1, poly_degree=2, support=(-np.inf, np.inf),
+        n_components=1,
+        poly_degree=2,
+        support=(-np.inf, np.inf),
         rng=0,
     )
 
@@ -778,9 +838,11 @@ def test_far_tail_interval_still_moves_the_public_fit():
     assert fit60.mean > fit40.mean + 1e-2
     assert fit60.std > fit40.std + 0.2
 
+
 # --------------------------------------------------------------------------
 # Spectral diagnostics must live on the probability scale
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "seed,builder,support,degree",
@@ -792,11 +854,16 @@ def test_far_tail_interval_still_moves_the_public_fit():
     ids=["gamma-d4", "beta-d4", "lognormal-d8-capped"],
 )
 def test_spectral_error_estimate_tracks_independent_cdf_error(
-        seed, builder, support, degree):
+    seed, builder, support, degree
+):
     """Public spectral health numbers must be meaningful CDF-scale quantities."""
     data = np.ascontiguousarray(builder(np.random.default_rng(seed)))
     c = Distribution().fit(
-        data, n_components=1, support=support, poly_degree=degree, rng=0,
+        data,
+        n_components=1,
+        support=support,
+        poly_degree=degree,
+        rng=0,
     )
     diag = c.spectral_diagnostics
 
@@ -808,8 +875,12 @@ def test_spectral_error_estimate_tracks_independent_cdf_error(
     reference = []
     for x in xs:
         val, _ = quad(
-            _density(c), float(support[0]), float(x),
-            epsabs=2e-13, epsrel=2e-13, limit=400,
+            _density(c),
+            float(support[0]),
+            float(x),
+            epsabs=2e-13,
+            epsrel=2e-13,
+            limit=400,
         )
         reference.append(val)
     measured = float(np.max(np.abs(np.asarray(c.cdf(xs)) - reference)))
@@ -834,16 +905,20 @@ def test_uncertified_mass_is_failure_exposure_not_accuracy_rank():
 
     def beta_pdf(x):
         x = np.asarray(x, dtype=np.float64)
-        return np.where((x >= 0.0) & (x <= 1.0),
-                        30.0 * x * (1.0 - x) ** 4, 0.0)
+        return np.where((x >= 0.0) & (x <= 1.0), 30.0 * x * (1.0 - x) ** 4, 0.0)
 
     # Force acceptance of a deliberately crude quadratic panel.  With no
     # certified panels, the raw local residual is intentionally not presented
     # as an accuracy number; the full mass under the failed panel is the risk.
     rep = PythonSpectralCDFBuilder(
-        beta_pdf, (0.0, 1.0), degree_options=(2,),
-        rel_tol=1e-14, abs_tol=1e-16, coeff_tol=1e-14,
-        max_depth=0, max_panels=2,
+        beta_pdf,
+        (0.0, 1.0),
+        degree_options=(2,),
+        rel_tol=1e-14,
+        abs_tol=1e-16,
+        coeff_tol=1e-14,
+        max_depth=0,
+        max_panels=2,
     )
     xs = np.linspace(0.0, 1.0, 201)
     measured = float(np.max(np.abs(rep.cdf(xs) - betainc(2.0, 5.0, xs))))
@@ -858,6 +933,7 @@ def test_uncertified_mass_is_failure_exposure_not_accuracy_rank():
 # Disparate component scales must remain numerically resolvable
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("ratio", [1_000.0, 10_000.0])
 def test_disparate_scale_mixture_tracks_narrow_component(ratio):
     """A genuine narrow component must not disappear into quadrature failure.
@@ -869,12 +945,16 @@ def test_disparate_scale_mixture_tracks_narrow_component(ratio):
     """
     rng = np.random.default_rng(0)
     narrow_sd = 1.5 / ratio
-    data = np.concatenate([
-        rng.normal(0.0, narrow_sd, 1500),
-        rng.normal(5.0, 1.5, 2500),
-    ])
+    data = np.concatenate(
+        [
+            rng.normal(0.0, narrow_sd, 1500),
+            rng.normal(5.0, 1.5, 2500),
+        ]
+    )
     fitted = Distribution().fit(
-        data, n_components=2, poly_degree=4,
+        data,
+        n_components=2,
+        poly_degree=4,
         support=(-np.inf, np.inf),
     )
 
@@ -888,6 +968,7 @@ def test_disparate_scale_mixture_tracks_narrow_component(ratio):
     assert comp_sd[broad_i] == pytest.approx(1.5, rel=0.15)
     assert np.isfinite(np.mean(fitted.neg_log(data)))
 
+
 def test_finite_lower_boundary_potential_uses_public_distance():
     """Boundary potentials must remain finite at representable public distances.
 
@@ -897,8 +978,7 @@ def test_finite_lower_boundary_potential_uses_public_distance():
     """
     rng = np.random.default_rng(1601)
     data = np.ascontiguousarray(rng.beta(2.0, 5.0, 6000))
-    c = Distribution().fit(data, n_components=1, support=(0.0, 1.0),
-                    poly_degree=4)
+    c = Distribution().fit(data, n_components=1, support=(0.0, 1.0), poly_degree=4)
 
     aL = float(c._components[0]._data["boundary_amplitudes"][0])
     x = np.array([1e-20, 1e-100, 1e-200, 1e-300], dtype=np.float64)
@@ -914,6 +994,7 @@ def test_finite_lower_boundary_potential_uses_public_distance():
 # Spectral panel budgets must be strict resource bounds
 # --------------------------------------------------------------------------
 
+
 def test_spectral_cdf_panel_budget_is_a_strict_global_leaf_cap():
     """Pending recursive siblings must not overshoot ``max_panels``.
 
@@ -928,8 +1009,11 @@ def test_spectral_cdf_panel_budget_is_a_strict_global_leaf_cap():
         return 1.0 + 0.25 * np.sin(10_000.0 * x)
 
     rep = PythonSpectralCDFBuilder(
-        rough_pdf, (-1.0, 1.0), degree_options=(4,),
-        max_depth=12, max_panels=8,
+        rough_pdf,
+        (-1.0, 1.0),
+        degree_options=(4,),
+        max_depth=12,
+        max_panels=8,
     )
 
     assert len(rep.panels) == 8
@@ -966,7 +1050,10 @@ def test_spectral_ppf_budget_bounds_failed_refinement_work():
 
     with pytest.raises(RuntimeError, match="exhausted its 8-panel budget"):
         NeverCertifies(
-            cdf, degree_options=(4,), max_depth=50, max_panels=8,
+            cdf,
+            degree_options=(4,),
+            max_depth=50,
+            max_panels=8,
         )
 
     assert NeverCertifies.fit_calls == 15
@@ -975,6 +1062,7 @@ def test_spectral_ppf_budget_bounds_failed_refinement_work():
 # --------------------------------------------------------------------------
 # Point-mixture estimability at the one-location boundary
 # --------------------------------------------------------------------------
+
 
 class TestPointMixtureEstimability:
     """Point mixtures must not expose the one-observation singular boundary."""
@@ -998,9 +1086,7 @@ class TestPointMixtureEstimability:
     def test_duplicate_rows_count_as_one_support_location(self):
         """Repeating the same outlier must not fake component estimability."""
         rng = np.random.default_rng(1)
-        data = np.ascontiguousarray(
-            np.r_[rng.normal(0.0, 1.0, 99), np.repeat(6.0, 5)]
-        )
+        data = np.ascontiguousarray(np.r_[rng.normal(0.0, 1.0, 99), np.repeat(6.0, 5)])
 
         with pytest.raises(RuntimeError, match="effective distinct sample locations"):
             Distribution().fit(
@@ -1042,6 +1128,7 @@ def test_boundary_amplitudes_are_linear_nonnegative_coordinates():
         assert np.all(amps >= 0.0)
         assert np.isfinite(c.mean) and np.isfinite(c.var)
 
+
 def test_mixed_censoring_at_a_boundary_amplitude_is_certified():
     """Left-censored rows ending near 0, narrow rows touching 0 and exact
     points on a half-line with an active lower amplitude: the interval fit
@@ -1068,8 +1155,9 @@ def test_degree_screening_uses_the_real_boundary_structure():
     ]
     for name, build, support in cases:
         data = np.ascontiguousarray(build(np.random.default_rng(0)))
-        chosen = Distribution().fit(data, n_components=1, support=support,
-                             poly_degree="auto")
+        chosen = Distribution().fit(
+            data, n_components=1, support=support, poly_degree="auto"
+        )
         chosen_deg = int(chosen.data["requested_poly_degree"])
 
         # Converged BIC over the admissible degrees, using the library's
@@ -1077,8 +1165,9 @@ def test_degree_screening_uses_the_real_boundary_structure():
         best_deg, best_bic = None, np.inf
         for deg in range(2, 9):
             try:
-                c = Distribution().fit(data, n_components=1, support=support,
-                                poly_degree=deg)
+                c = Distribution().fit(
+                    data, n_components=1, support=support, poly_degree=deg
+                )
             except (ValueError, RuntimeError):
                 continue
             state = c.data
@@ -1090,7 +1179,8 @@ def test_degree_screening_uses_the_real_boundary_structure():
 
         assert chosen_deg == best_deg, (
             f"{name}: screening chose degree {chosen_deg}, converged BIC "
-            f"prefers {best_deg}")
+            f"prefers {best_deg}"
+        )
 
 
 def test_mixed_censoring_roundoff_step_does_not_contract_trust_radius():
@@ -1112,9 +1202,7 @@ def test_mixed_censoring_roundoff_step_does_not_contract_trust_radius():
             intervals[i] = (0.0, upper)
         elif selector[i] < 0.40:
             half_width = sample_scale * 10.0 ** (-3.0 + 2.85 * narrow_u[i])
-            intervals[i] = (
-                max(0.0, value - half_width), value + half_width
-            )
+            intervals[i] = (max(0.0, value - half_width), value + half_width)
         else:
             intervals[i] = (value, value)
 
@@ -1181,8 +1269,12 @@ def test_interval_mixture_seed_keeps_the_exact_support_endpoint():
     rows = np.column_stack([lower, lower + 0.5])
     assert np.any(rows[:, 0] == 0.0)
     fitted = Distribution().fit(
-        rows, n_components=2, poly_degree=4, support=(0.0, np.inf),
-        log_boundary_lower=True, rng=0,
+        rows,
+        n_components=2,
+        poly_degree=4,
+        support=(0.0, np.inf),
+        log_boundary_lower=True,
+        rng=0,
     )
     assert np.isfinite(fitted._em_diagnostics["final_log_likelihood"])
 
@@ -1199,8 +1291,13 @@ def test_a_valley_start_does_not_lock_a_mixture_onto_the_extreme_points(seed):
     """
     data = np.random.default_rng(seed).lognormal(0.0, 0.6, 300)
     model = Distribution().fit(
-        data, n_components=2, poly_degree=4, support=(0.0, np.inf),
-        log_boundary_lower=False, rng=seed)
+        data,
+        n_components=2,
+        poly_degree=4,
+        support=(0.0, np.inf),
+        log_boundary_lower=False,
+        rng=seed,
+    )
     diagnostics = model.fit_diagnostics
     assert diagnostics["converged"]
     assert min(model.weights) > 0.1
@@ -1210,7 +1307,11 @@ def test_a_valley_start_does_not_lock_a_mixture_onto_the_extreme_points(seed):
 
 def test_an_unsupported_explicit_component_count_says_what_to_do():
     """Five copies of one far value are one location: no second component."""
-    data = np.concatenate([np.random.default_rng(1).normal(0.0, 1.0, 200), np.full(5, 40.0)])
-    with pytest.raises(RuntimeError, match=r"do not support n_components=2; use n_components='auto'"):
+    data = np.concatenate(
+        [np.random.default_rng(1).normal(0.0, 1.0, 200), np.full(5, 40.0)]
+    )
+    with pytest.raises(
+        RuntimeError, match=r"do not support n_components=2; use n_components='auto'"
+    ):
         Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
     assert Distribution().fit(data, support=(-np.inf, np.inf), rng=0).n_components == 1

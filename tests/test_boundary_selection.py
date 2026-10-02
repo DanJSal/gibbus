@@ -27,7 +27,9 @@ def test_p_value_is_the_one_sided_boundary_mixture():
 def test_selection_drops_the_least_significant_side_first_and_stops():
     # Toy models: dicts of amplitudes and NLLs keyed by flags.
     nlls = {
-        (True, True): 1.000, (False, True): 1.001, (True, False): 1.100,
+        (True, True): 1.000,
+        (False, True): 1.001,
+        (True, False): 1.100,
         (False, False): 1.200,
     }
 
@@ -35,9 +37,12 @@ def test_selection_drops_the_least_significant_side_first_and_stops():
         return {"flags": (lo, up), "nll": nlls[(lo, up)]}
 
     model, flags, p_values = _select_boundary_terms(
-        fit, lambda m: m["nll"],
+        fit,
+        lambda m: m["nll"],
         lambda m, side: 1.0 if m["flags"][0 if side == "lower" else 1] else 0.0,
-        AUTO, AUTO, 400.0,
+        AUTO,
+        AUTO,
+        400.0,
     )
     assert flags == (False, True)
     assert model["flags"] == (False, True)
@@ -52,7 +57,12 @@ def test_explicit_flags_are_never_tested():
         return {"nll": 1.0}
 
     _, flags, p_values = _select_boundary_terms(
-        fit, lambda m: m["nll"], lambda m, side: 1.0, True, False, 100.0,
+        fit,
+        lambda m: m["nll"],
+        lambda m, side: 1.0,
+        True,
+        False,
+        100.0,
     )
     assert flags == (True, False) and calls == [(True, False)]
     assert np.all(np.isnan(p_values))
@@ -88,10 +98,17 @@ def test_an_unresolvable_term_is_dropped_and_an_explicit_one_is_flagged():
     assert all(p >= 0.05 for p in _record(automatic)["boundary_p_values"])
 
     explicit = Distribution().fit(
-        x, n_components=1, poly_degree=8, support=(0.0, 1.0),
-        log_boundary_lower=True, log_boundary_upper=True,
+        x,
+        n_components=1,
+        poly_degree=8,
+        support=(0.0, 1.0),
+        log_boundary_lower=True,
+        log_boundary_upper=True,
     )
-    assert set(_record(explicit)["weakly_identified_boundary_terms"]) == {"lower", "upper"}
+    assert set(_record(explicit)["weakly_identified_boundary_terms"]) == {
+        "lower",
+        "upper",
+    }
 
 
 def test_standard_error_shrinks_like_one_over_root_n():
@@ -100,7 +117,10 @@ def test_standard_error_shrinks_like_one_over_root_n():
     for n in (500, 2000):
         x = rng.gamma(3.0, 1.0, n)
         model = Distribution().fit(
-            x, n_components=1, poly_degree=2, support=(0.0, np.inf),
+            x,
+            n_components=1,
+            poly_degree=2,
+            support=(0.0, np.inf),
             log_boundary_lower=True,
         )
         errors.append(_record(model)["boundary_standard_errors"][0])

@@ -120,8 +120,9 @@ def percentile_bands(curves, level, /):
     return np.asarray(lower, dtype=np.float64), np.asarray(upper, dtype=np.float64)
 
 
-def _collect_replicates(make_replicate, n_resamples, width, context, /,
-                        *, max_failure_fraction):
+def _collect_replicates(
+    make_replicate, n_resamples, width, context, /, *, max_failure_fraction
+):
     """Run replicate work, discarding failures and enforcing a failure budget.
 
     Parameters
@@ -182,8 +183,17 @@ def _collect_replicates(make_replicate, n_resamples, width, context, /,
     return np.asarray(rows, dtype=np.float64), n_failed
 
 
-def bootstrap_curves(evaluate_resample, n_rows, n_points, /, *, n_resamples,
-                     level, rng, max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION):
+def bootstrap_curves(
+    evaluate_resample,
+    n_rows,
+    n_points,
+    /,
+    *,
+    n_resamples,
+    level,
+    rng,
+    max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+):
     """Build pointwise bands by nonparametric resampling of observation rows.
 
     Rows are drawn with replacement, which is the right unit for both point
@@ -228,7 +238,10 @@ def bootstrap_curves(evaluate_resample, n_rows, n_points, /, *, n_resamples,
         return evaluate_resample(rng.integers(0, rows, size=rows))
 
     curves, n_failed = _collect_replicates(
-        make_replicate, count, width, "bootstrap",
+        make_replicate,
+        count,
+        width,
+        "bootstrap",
         max_failure_fraction=max_failure_fraction,
     )
     lower, upper = percentile_bands(curves, coverage)
@@ -241,8 +254,13 @@ def bootstrap_curves(evaluate_resample, n_rows, n_points, /, *, n_resamples,
     }
 
 
-def simulated_statistics(simulate_statistic, /, *, n_resamples,
-                         max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION):
+def simulated_statistics(
+    simulate_statistic,
+    /,
+    *,
+    n_resamples,
+    max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+):
     """Collect a null distribution of scalar statistics by simulation.
 
     Parameters
@@ -268,7 +286,10 @@ def simulated_statistics(simulate_statistic, /, *, n_resamples,
         return None if value is None else np.asarray([value], dtype=np.float64)
 
     rows, n_failed = _collect_replicates(
-        make_replicate, count, 1, "parametric bootstrap",
+        make_replicate,
+        count,
+        1,
+        "parametric bootstrap",
         max_failure_fraction=max_failure_fraction,
     )
     return rows.reshape(-1), n_failed

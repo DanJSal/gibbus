@@ -61,8 +61,17 @@ class PythonSpectralCDFBuilder(SpectralCDF):
     production implementation.
     """
 
-    def __init__(self, pdf=None, support=None, *, density=None, mode=None, std=None,
-                 degree_options=SPECTRAL_DEGREE_OPTIONS, **options):
+    def __init__(
+        self,
+        pdf=None,
+        support=None,
+        *,
+        density=None,
+        mode=None,
+        std=None,
+        degree_options=SPECTRAL_DEGREE_OPTIONS,
+        **options,
+    ):
         """Build the Python-harness representation.
 
         Parameters
@@ -94,13 +103,18 @@ class PythonSpectralCDFBuilder(SpectralCDF):
             raise TypeError(f"unexpected options {sorted(options)}")
         defaults = SpectralCDF.__init__.__kwdefaults__
         breaks, _ = self._configure(
-            support, mode, std, degree_options,
+            support,
+            mode,
+            std,
+            degree_options,
             defaults["rel_tol"] if rel_tol is None else rel_tol,
             defaults["abs_tol"] if abs_tol is None else abs_tol,
             defaults["coeff_tol"] if coeff_tol is None else coeff_tol,
             defaults["max_depth"] if max_depth is None else max_depth,
             defaults["max_panels"] if max_panels is None else max_panels,
-            map_scale, initial_breaks, density,
+            map_scale,
+            initial_breaks,
+            density,
         )
         panels = self._build_partition(breaks)
         panels.sort(key=lambda p: p.a)
@@ -155,7 +169,9 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         multipliers = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0)
         best = None
         if kind is None:
-            kind = "lower" if np.isfinite(L) else ("upper" if np.isfinite(U) else "real")
+            kind = (
+                "lower" if np.isfinite(L) else ("upper" if np.isfinite(U) else "real")
+            )
         c = float(mode) if mode is not None and np.isfinite(mode) else 0.0
         for mult in multipliers:
             s = max(float(s0) * mult, np.finfo(float).tiny)
@@ -248,7 +264,9 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         approx = C.chebval(uv, coeff)
         scale = max(float(np.max(np.abs(exact))), float(np.max(np.abs(vals))), 1e-15)
         err = float(np.max(np.abs(exact - approx))) / scale
-        tail = float(np.max(np.abs(coeff[-4:]))) / max(float(np.max(np.abs(coeff))), 1e-15)
+        tail = float(np.max(np.abs(coeff[-4:]))) / max(
+            float(np.max(np.abs(coeff))), 1e-15
+        )
         return err + tail
 
     @staticmethod
@@ -363,8 +381,16 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         # probability-mass units.
         error_mass = panel_width * (fit_error + lift)
         return converged, _Panel(
-            a=a, b=b, coeff=coeff, icoeff=icoeff, mass=mass,
-            fit_error=fit_error, error_mass=error_mass, tail_ratio=tail_ratio, lift=lift, depth=depth,
+            a=a,
+            b=b,
+            coeff=coeff,
+            icoeff=icoeff,
+            mass=mass,
+            fit_error=fit_error,
+            error_mass=error_mass,
+            tail_ratio=tail_ratio,
+            lift=lift,
+            depth=depth,
             certified=bool(converged),
         )
 
@@ -446,7 +472,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
             Non-negative refinement priority in transformed-mass units.
         """
         width = float(panel.b - panel.a)
-        tail_abs = float(np.max(np.abs(panel.coeff[-min(4, panel.coeff.size):])))
+        tail_abs = float(np.max(np.abs(panel.coeff[-min(4, panel.coeff.size) :])))
         priority = max(float(panel.error_mass), width * tail_abs)
         return priority if np.isfinite(priority) else math.inf
 
@@ -486,8 +512,11 @@ class PythonSpectralCDFBuilder(SpectralCDF):
             candidates = [
                 (self._refinement_priority(panel), j)
                 for j, (ok, panel) in enumerate(leaves)
-                if (not ok and panel.depth < self.max_depth
-                    and (panel.b - panel.a) >= min_width)
+                if (
+                    not ok
+                    and panel.depth < self.max_depth
+                    and (panel.b - panel.a) >= min_width
+                )
             ]
             if not candidates:
                 break
@@ -500,7 +529,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
             mid = 0.5 * (panel.a + panel.b)
             left = self._fit_best_panel(panel.a, mid, panel.depth + 1)
             right = self._fit_best_panel(mid, panel.b, panel.depth + 1)
-            leaves[j:j + 1] = [left, right]
+            leaves[j : j + 1] = [left, right]
 
         return [panel for _, panel in leaves]
 
@@ -575,11 +604,11 @@ class PythonSpectralCDFBuilder(SpectralCDF):
                 coeff = np.array([height], dtype=np.float64)
                 icoeff = C.chebint(coeff) * half
 
-            panels[j] = replace(panel, coeff=coeff, icoeff=icoeff,
-                                mass=true_mass)
+            panels[j] = replace(panel, coeff=coeff, icoeff=icoeff, mass=true_mass)
             fixed += 1
 
         return fixed
+
 
 class PythonSpectralPPFBuilder(SpectralPPF):
     """Spectral inverse built by the Python construction."""
@@ -620,9 +649,12 @@ class PythonSpectralPPFBuilder(SpectralPPF):
             self._dicoeff_cache[j] = dicoeff
         arr = np.asarray(u, dtype=np.float64)
         flat = np.ascontiguousarray(np.atleast_1d(arr).reshape(-1))
-        d_du = np.asarray(
-            _chebval_many(flat, np.ascontiguousarray(dicoeff)), dtype=np.float64
-        ).reshape(np.atleast_1d(arr).shape) / sp.total_mass
+        d_du = (
+            np.asarray(
+                _chebval_many(flat, np.ascontiguousarray(dicoeff)), dtype=np.float64
+            ).reshape(np.atleast_1d(arr).shape)
+            / sp.total_mass
+        )
         out = d_du * (2.0 / (panel.b - panel.a))
         return float(out[0]) if arr.ndim == 0 else out.reshape(arr.shape)
 
@@ -679,9 +711,11 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         coeff = np.asarray(coeff, dtype=np.float64)
         if coeff.size == 0:
             return 0.0
-        return float(chebyshev_lower_bound(
-            coeff, chebyshev_bernstein_matrix(len(coeff) - 1), int(max_subdivide)
-        ))
+        return float(
+            chebyshev_lower_bound(
+                coeff, chebyshev_bernstein_matrix(len(coeff) - 1), int(max_subdivide)
+            )
+        )
 
     @staticmethod
     def _r_from_u(u, ra, rb):
@@ -740,7 +774,10 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         # Usually the interval stays within source_j; if rounded source masses
         # disagree at an extreme boundary, the global inversion is safer.
         cm = self.cdf_rep.cum_mass
-        if float(cm[source_j]) <= p <= float(cm[source_j + 1]) and cm[source_j + 1] > cm[source_j]:
+        if (
+            float(cm[source_j]) <= p <= float(cm[source_j + 1])
+            and cm[source_j + 1] > cm[source_j]
+        ):
             return self._invert_source(source_j, p)
         return self._invert_global(p)
 
@@ -832,10 +869,19 @@ class PythonSpectralPPFBuilder(SpectralPPF):
 
         if not np.all(np.isfinite(qvals)) or np.any(qvals < 0.0):
             return False, _InversePanel(
-                ra=float(ra), rb=float(rb), pa=float(pa), pb=float(pb),
-                za=float(za), zb=float(zb), coeff=np.array([-1.0, 1.0]),
-                fit_error=math.inf, logit_residual=math.inf, prob_residual=math.inf,
-                tail_abs=math.inf, derivative_lower=-math.inf, depth=int(depth),
+                ra=float(ra),
+                rb=float(rb),
+                pa=float(pa),
+                pb=float(pb),
+                za=float(za),
+                zb=float(zb),
+                coeff=np.array([-1.0, 1.0]),
+                fit_error=math.inf,
+                logit_residual=math.inf,
+                prob_residual=math.inf,
+                tail_abs=math.inf,
+                derivative_lower=-math.inf,
+                depth=int(depth),
                 source_panel=int(source_j),
             )
 
@@ -843,7 +889,9 @@ class PythonSpectralPPFBuilder(SpectralPPF):
             np.ascontiguousarray(qvals, dtype=np.float64),
             np.ascontiguousarray(_lobatto_transform(n), dtype=np.float64),
         )
-        lift = PythonSpectralCDFBuilder._positivity_lift_bernstein(qcoeff, max_subdivide=self.certify_subdivide)
+        lift = PythonSpectralCDFBuilder._positivity_lift_bernstein(
+            qcoeff, max_subdivide=self.certify_subdivide
+        )
         if lift > 0.0:
             qcoeff = np.asarray(qcoeff, dtype=np.float64).copy()
             qcoeff[0] += lift
@@ -862,10 +910,19 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         imass = float(imass)
         if not np.isfinite(imass) or imass <= 0.0:
             return False, _InversePanel(
-                ra=float(ra), rb=float(rb), pa=float(pa), pb=float(pb),
-                za=float(za), zb=float(zb), coeff=np.array([-1.0, 1.0]),
-                fit_error=math.inf, logit_residual=math.inf, prob_residual=math.inf,
-                tail_abs=math.inf, derivative_lower=-math.inf, depth=int(depth),
+                ra=float(ra),
+                rb=float(rb),
+                pa=float(pa),
+                pb=float(pb),
+                za=float(za),
+                zb=float(zb),
+                coeff=np.array([-1.0, 1.0]),
+                fit_error=math.inf,
+                logit_residual=math.inf,
+                prob_residual=math.inf,
+                tail_abs=math.inf,
+                derivative_lower=-math.inf,
+                depth=int(depth),
                 source_panel=int(source_j),
             )
         coeff = np.asarray(icoeff, dtype=np.float64) * (2.0 / imass)
@@ -891,11 +948,9 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         prob_resid = float(np.max(np.abs(pback - pv)))
         pback_safe = np.clip(pback, float(_PMIN), float(_PMAX))
         logit_resid = float(np.max(np.abs(_logit(pback_safe) - rv)))
-        tail_abs = float(np.max(np.abs(coeff[-min(4, coeff.size):])))
+        tail_abs = float(np.max(np.abs(coeff[-min(4, coeff.size) :])))
 
-        dcoeff = _chebder_kernel(
-            np.ascontiguousarray(coeff, dtype=np.float64)
-        )
+        dcoeff = _chebder_kernel(np.ascontiguousarray(coeff, dtype=np.float64))
         derivative_lower = self._bernstein_lower_bound(
             dcoeff, max_subdivide=self.certify_subdivide
         )
@@ -917,16 +972,21 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         # requirement becomes ill-conditioned near p=0 or p=1 and can force
         # meaningless subdivision below the representable z spacing even when
         # the absolute inverse residual is already at the float64 floor.
-        ok = (
-            prob_resid <= max(self.prob_tol, prob_floor)
-            and monotone
-        )
+        ok = prob_resid <= max(self.prob_tol, prob_floor) and monotone
         return ok, _InversePanel(
-            ra=float(ra), rb=float(rb), pa=float(pa), pb=float(pb),
-            za=float(za), zb=float(zb), coeff=np.asarray(coeff, dtype=np.float64),
-            fit_error=fit_error, logit_residual=logit_resid,
-            prob_residual=prob_resid, tail_abs=tail_abs,
-            derivative_lower=derivative_lower, depth=int(depth),
+            ra=float(ra),
+            rb=float(rb),
+            pa=float(pa),
+            pb=float(pb),
+            za=float(za),
+            zb=float(zb),
+            coeff=np.asarray(coeff, dtype=np.float64),
+            fit_error=fit_error,
+            logit_residual=logit_resid,
+            prob_residual=prob_resid,
+            tail_abs=tail_abs,
+            derivative_lower=derivative_lower,
+            depth=int(depth),
             source_panel=int(source_j),
         )
 
@@ -955,9 +1015,7 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         """
         last = None
         for degree in self.degree_options:
-            ok, panel = self._fit_panel(
-                source_j, ra, rb, pa, pb, za, zb, depth, degree
-            )
+            ok, panel = self._fit_panel(source_j, ra, rb, pa, pb, za, zb, depth, degree)
             last = panel
             if ok:
                 return True, panel
@@ -977,9 +1035,11 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         float
             Priority, with non-finite or non-monotone attempts ranked first.
         """
-        if (not np.isfinite(panel.prob_residual)
-                or not np.isfinite(panel.derivative_lower)
-                or panel.derivative_lower < -128.0 * _EPS):
+        if (
+            not np.isfinite(panel.prob_residual)
+            or not np.isfinite(panel.derivative_lower)
+            or panel.derivative_lower < -128.0 * _EPS
+        ):
             return math.inf
         return max(float(panel.prob_residual), 0.0)
 
@@ -1016,7 +1076,8 @@ class PythonSpectralPPFBuilder(SpectralPPF):
         while True:
             failed = [
                 (self._refinement_priority(panel), j)
-                for j, (ok, panel) in enumerate(leaves) if not ok
+                for j, (ok, panel) in enumerate(leaves)
+                if not ok
             ]
             if not failed:
                 return [panel for _, panel in leaves]
@@ -1024,8 +1085,9 @@ class PythonSpectralPPFBuilder(SpectralPPF):
             _, j = max(failed, key=lambda item: (item[0], -item[1]))
             _, panel = leaves[j]
 
-            if (panel.depth >= self.max_depth
-                    or not (panel.rb > np.nextafter(panel.ra, np.inf))):
+            if panel.depth >= self.max_depth or not (
+                panel.rb > np.nextafter(panel.ra, np.inf)
+            ):
                 raise RuntimeError(self._failure_message(panel))
 
             if len(leaves) >= self.max_panels:
@@ -1041,11 +1103,9 @@ class PythonSpectralPPFBuilder(SpectralPPF):
             zm = self._exact_z_for_r(panel.source_panel, rm)
             depth = panel.depth + 1
             left = self._fit_best_panel(
-                panel.source_panel, panel.ra, rm, panel.pa, pm,
-                panel.za, zm, depth
+                panel.source_panel, panel.ra, rm, panel.pa, pm, panel.za, zm, depth
             )
             right = self._fit_best_panel(
-                panel.source_panel, rm, panel.rb, pm, panel.pb,
-                zm, panel.zb, depth
+                panel.source_panel, rm, panel.rb, pm, panel.pb, zm, panel.zb, depth
             )
-            leaves[j:j + 1] = [left, right]
+            leaves[j : j + 1] = [left, right]

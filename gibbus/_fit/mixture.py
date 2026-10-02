@@ -14,7 +14,6 @@ Contents
 * **Post-fit utilities**: component ordering and mixture mode finding.
 """
 
-
 import itertools
 import weakref
 
@@ -107,6 +106,7 @@ def _interval_initial_representatives(intervals, support, /):
 # EM helpers
 # ======================================================================
 
+
 def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     """Initial responsibilities from the KDE's modes and the valleys between them.
 
@@ -143,8 +143,11 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     x = np.ascontiguousarray(samples_1d, dtype=np.float64).reshape(-1)
     n = int(x.shape[0])
     k = int(n_components)
-    w = (np.full(n, 1.0 / n, dtype=np.float64) if weights is None
-         else np.ascontiguousarray(weights, dtype=np.float64).reshape(-1))
+    w = (
+        np.full(n, 1.0 / n, dtype=np.float64)
+        if weights is None
+        else np.ascontiguousarray(weights, dtype=np.float64).reshape(-1)
+    )
     if w.sum() <= 0.0:
         return None, None
     w = w / w.sum()
@@ -163,8 +166,9 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
 
     margin = 0.1 * (hi - lo)
     grid = np.linspace(lo - margin, hi + margin, AUTO_KDE_GRID_POINTS)
-    mult = np.logspace(np.log10(AUTO_KDE_BW_LO), np.log10(AUTO_KDE_BW_HI),
-                       AUTO_KDE_BW_STEPS)
+    mult = np.logspace(
+        np.log10(AUTO_KDE_BW_LO), np.log10(AUTO_KDE_BW_HI), AUTO_KDE_BW_STEPS
+    )
     try:
         dens = _binned_kde_sweep(x, grid, bw * mult, weights=w)
     except NUMERIC_FAILURES as exc:
@@ -198,12 +202,15 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     }
     peaks = np.sort(selected)
     local_prominence = np.array(
-        [peak_to_local_prominence[int(p)] for p in peaks], dtype=np.float64)
+        [peak_to_local_prominence[int(p)] for p in peaks], dtype=np.float64
+    )
     chosen = dens[i]
 
     # Split at the density minimum between consecutive peaks.
-    cuts = [float(grid[a + int(np.argmin(chosen[a:b + 1]))])
-            for a, b in itertools.pairwise(peaks)]
+    cuts = [
+        float(grid[a + int(np.argmin(chosen[a : b + 1]))])
+        for a, b in itertools.pairwise(peaks)
+    ]
     edges = np.array([-np.inf, *cuts, np.inf], dtype=np.float64)
 
     cell = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, k - 1)
@@ -225,8 +232,9 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     # height, not merely relative to the tallest peak in the density.  This
     # rejects shallow tail ripples without sacrificing genuinely separated
     # minority components whose absolute density is necessarily small.
-    weak_small = ((mix < AUTO_KDE_WEAK_CELL_MASS)
-                  & (local_prominence < AUTO_KDE_MIN_LOCAL_PROMINENCE))
+    weak_small = (mix < AUTO_KDE_WEAK_CELL_MASS) & (
+        local_prominence < AUTO_KDE_MIN_LOCAL_PROMINENCE
+    )
     if np.any(weak_small):
         return None, None
 
@@ -235,14 +243,13 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     sd = np.maximum(sd, 0.25 * bw)
 
     z = (x[:, None] - mean[None, :]) / sd[None, :]
-    log_p = (np.log(mix)[None, :] - np.log(sd)[None, :] - 0.5 * z * z)
+    log_p = np.log(mix)[None, :] - np.log(sd)[None, :] - 0.5 * z * z
     log_p -= log_p.max(axis=1, keepdims=True)
     resp = np.exp(log_p)
     resp /= resp.sum(axis=1, keepdims=True)
     if not np.all(np.isfinite(resp)):
         return None, None
     return resp, mix
-
 
 
 def _nested_scale_init_responsibilities(samples_1d, n_components, /, *, weights=None):
@@ -287,14 +294,17 @@ def _nested_scale_init_responsibilities(samples_1d, n_components, /, *, weights=
     radius = np.abs(x - center)
     order = np.argsort(radius, kind="mergesort")
     cum = np.cumsum(w[order])
-    shell = np.minimum(np.searchsorted(np.linspace(1.0 / k, 1.0, k), cum,
-                                       side="left"), k - 1)
+    shell = np.minimum(
+        np.searchsorted(np.linspace(1.0 / k, 1.0, k), cum, side="left"), k - 1
+    )
     labels = np.empty(n, dtype=np.intp)
     labels[order] = shell
 
     mix = np.empty(k, dtype=np.float64)
     scales = np.empty(k, dtype=np.float64)
-    scale_floor = np.finfo(np.float64).eps * max(1.0, abs(center), float(np.max(radius)))
+    scale_floor = np.finfo(np.float64).eps * max(
+        1.0, abs(center), float(np.max(radius))
+    )
     for j in range(k):
         sel = labels == j
         mass = float(np.sum(w[sel]))
@@ -306,7 +316,9 @@ def _nested_scale_init_responsibilities(samples_1d, n_components, /, *, weights=
 
     # The radial shells should describe successively broader kernels.  Collapse
     # duplicates rather than passing an ill-conditioned candidate to EM.
-    if np.any(np.diff(scales) <= 8.0 * np.finfo(np.float64).eps * np.maximum(scales[:-1], 1.0)):
+    if np.any(
+        np.diff(scales) <= 8.0 * np.finfo(np.float64).eps * np.maximum(scales[:-1], 1.0)
+    ):
         return None, None
 
     z = (x[:, None] - center) / scales[None, :]
@@ -319,8 +331,9 @@ def _nested_scale_init_responsibilities(samples_1d, n_components, /, *, weights=
     return resp, mix
 
 
-def _initial_responsibility_candidates(samples_1d, n_components, rng, /, *, weights=None,
-                                       include_valley=True):
+def _initial_responsibility_candidates(
+    samples_1d, n_components, rng, /, *, weights=None, include_valley=True
+):
     """Return distinct initialization families for likelihood comparison.
 
     A resolved KDE valley is already strong structural information and is used
@@ -346,7 +359,8 @@ def _initial_responsibility_candidates(samples_1d, n_components, rng, /, *, weig
     """
     if include_valley:
         valley_resp, valley_mix = _valley_init_responsibilities(
-            samples_1d, n_components, weights=weights)
+            samples_1d, n_components, weights=weights
+        )
         if valley_resp is not None:
             return [("valley", valley_resp, valley_mix)]
 
@@ -358,12 +372,14 @@ def _initial_responsibility_candidates(samples_1d, n_components, rng, /, *, weig
         _reraise_if_debug(exc, "GMM mixture initialization", routine=True)
 
     resp, mix = _nested_scale_init_responsibilities(
-        samples_1d, n_components, weights=weights)
+        samples_1d, n_components, weights=weights
+    )
     if resp is not None:
         candidates.append(("nested-scale", resp, mix))
     if not candidates:
         raise RuntimeError("could not construct mixture initial responsibilities")
     return candidates
+
 
 def _init_responsibilities(samples_1d, n_components, rng, /, *, weights=None):
     """Initial responsibilities: valleys where they exist, GMM otherwise.
@@ -400,7 +416,8 @@ def _init_responsibilities(samples_1d, n_components, rng, /, *, weights=None):
     # This helper returns the first available seed.  EM callers that compare
     # converged candidates use ``_initial_responsibility_candidates`` directly.
     _, resp, mix = _initial_responsibility_candidates(
-        samples_1d, n_components, rng, weights=weights)[0]
+        samples_1d, n_components, rng, weights=weights
+    )[0]
     return resp, mix
 
 
@@ -487,7 +504,9 @@ def _kmeans_plusplus_1d(x, k, rng, /):
         cumulative = np.cumsum(closest)
         picks = np.searchsorted(cumulative, rng.random(trials) * total)
         picks = np.minimum(picks, x.size - 1)
-        candidate_distances = np.minimum(closest[None, :], (x[None, :] - x[picks, None]) ** 2)
+        candidate_distances = np.minimum(
+            closest[None, :], (x[None, :] - x[picks, None]) ** 2
+        )
         chosen = int(np.argmin(np.sum(candidate_distances, axis=1)))
         centers.append(float(x[picks[chosen]]))
         closest = candidate_distances[chosen]
@@ -549,7 +568,9 @@ def _gaussian_mixture_em_1d(x, centers, /, *, tol=1e-3, max_iter=100, reg=1e-6):
         if np.any(mass <= 10.0 * np.finfo(np.float64).eps):
             return params
         means = (resp.T @ x) / mass
-        variances = np.sum(resp * (x[:, None] - means[None, :]) ** 2, axis=0) / mass + reg
+        variances = (
+            np.sum(resp * (x[:, None] - means[None, :]) ** 2, axis=0) / mass + reg
+        )
         weights = mass / np.sum(mass)
         log_resp, average = _gaussian_log_posterior_1d(x, means, variances, weights)
         params = (means, variances, weights, average)
@@ -563,6 +584,7 @@ def _gaussian_mixture_em_1d(x, centers, /, *, tol=1e-3, max_iter=100, reg=1e-6):
 # ======================================================================
 # KDE mode counting
 # ======================================================================
+
 
 def _silverman_bandwidth(samples_1d, /, *, n_effective=None, weights=None):
     """Silverman's rule-of-thumb kernel width, matching ``gaussian_kde``.
@@ -674,14 +696,18 @@ def _binned_kde_sweep(samples_1d, grid, bandwidths, /, *, weights=None):
     t = (samples_1d - lo) / dx
     keep = (t >= 0.0) & (t <= g_n - 1)
     t = t[keep]
-    w = (np.ones(t.shape[0], dtype=np.float64) if weights is None
-         else np.ascontiguousarray(weights, dtype=np.float64).reshape(-1)[keep])
+    w = (
+        np.ones(t.shape[0], dtype=np.float64)
+        if weights is None
+        else np.ascontiguousarray(weights, dtype=np.float64).reshape(-1)[keep]
+    )
     i0 = np.floor(t).astype(np.intp)
     np.clip(i0, 0, g_n - 2, out=i0)
     frac = t - i0
 
-    counts = (np.bincount(i0, weights=w * (1.0 - frac), minlength=g_n)
-              + np.bincount(i0 + 1, weights=w * frac, minlength=g_n))
+    counts = np.bincount(i0, weights=w * (1.0 - frac), minlength=g_n) + np.bincount(
+        i0 + 1, weights=w * frac, minlength=g_n
+    )
     total = float(counts.sum())
     if total > 0.0:
         counts = counts / total
@@ -691,8 +717,10 @@ def _binned_kde_sweep(samples_1d, grid, bandwidths, /, *, weights=None):
     freq = rfftfreq(m, d=dx)
 
     # Fourier transform of a Gaussian of width h, evaluated per bandwidth.
-    decay = np.exp(-2.0 * (np.pi * freq[np.newaxis, :]
-                           * np.asarray(bandwidths)[:, np.newaxis]) ** 2)
+    decay = np.exp(
+        -2.0
+        * (np.pi * freq[np.newaxis, :] * np.asarray(bandwidths)[:, np.newaxis]) ** 2
+    )
     dens = irfft(spec[np.newaxis, :] * decay, n=m, axis=-1)[:, :g_n]
     return dens / dx
 
@@ -737,8 +765,10 @@ def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
         idx = _stratified_subsample(samples_1d, AUTO_KDE_SUBSAMPLE_N, gen)
         samples_1d = np.ascontiguousarray(samples_1d[idx])
         if verbose >= 1:
-            print(f"  KDE mode counting on {AUTO_KDE_SUBSAMPLE_N}/{R} "
-                  f"stratified subsample")
+            print(
+                f"  KDE mode counting on {AUTO_KDE_SUBSAMPLE_N}/{R} "
+                f"stratified subsample"
+            )
 
     silverman_bw = _silverman_bandwidth(samples_1d)
     if not (np.isfinite(silverman_bw) and silverman_bw > 0):
@@ -753,13 +783,16 @@ def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
     grid = np.linspace(lo - margin, hi + margin, AUTO_KDE_GRID_POINTS)
 
     multipliers = np.logspace(
-        np.log10(AUTO_KDE_BW_LO), np.log10(AUTO_KDE_BW_HI),
+        np.log10(AUTO_KDE_BW_LO),
+        np.log10(AUTO_KDE_BW_HI),
         AUTO_KDE_BW_STEPS,
     )
 
     try:
         densities = _binned_kde_sweep(
-            samples_1d, grid, silverman_bw * multipliers,
+            samples_1d,
+            grid,
+            silverman_bw * multipliers,
         )
     except NUMERIC_FAILURES as exc:
         # A degenerate grid or transform is a reason to call the data
@@ -780,7 +813,8 @@ def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
             n_modes = 1
         else:
             found, _ = find_peaks(
-                density, prominence=AUTO_KDE_MIN_PROMINENCE * peak,
+                density,
+                prominence=AUTO_KDE_MIN_PROMINENCE * peak,
             )
             n_modes = max(int(found.size), 1)
         counts.append(n_modes)
@@ -794,9 +828,11 @@ def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
     k_modes = max(k_modes, 1)
 
     if verbose >= 1:
-        print(f"  KDE mode count: K_modes={k_modes}  "
-              f"(counts across {AUTO_KDE_BW_STEPS} bandwidths: "
-              f"{sorted(counts)})")
+        print(
+            f"  KDE mode count: K_modes={k_modes}  "
+            f"(counts across {AUTO_KDE_BW_STEPS} bandwidths: "
+            f"{sorted(counts)})"
+        )
 
     return k_modes
 
@@ -968,9 +1004,7 @@ def _component_interval_masses(intervals, component, /):
     exact = lo == hi
     mass_unique = np.empty(unique.shape[0], dtype=np.float64)
     if np.any(exact):
-        mass_unique[exact] = np.asarray(
-            component.base.pdf(lo[exact]), dtype=np.float64
-        )
+        mass_unique[exact] = np.asarray(component.base.pdf(lo[exact]), dtype=np.float64)
     positive = ~exact
     if np.any(positive):
         c_hi = np.asarray(component.base.cdf(hi[positive]), dtype=np.float64)
@@ -1009,8 +1043,8 @@ def _e_step_intervals(intervals, components, weights, /, obs_weights=None):
     K = len(components)
     weighted_mass = np.empty((R, K), dtype=np.float64)
     for k in range(K):
-        weighted_mass[:, k] = (
-            float(weights[k]) * _component_interval_masses(intervals, components[k])
+        weighted_mass[:, k] = float(weights[k]) * _component_interval_masses(
+            intervals, components[k]
         )
 
     row_sums = np.clip(weighted_mass.sum(axis=1), TINY_FLOAT, None)
@@ -1154,9 +1188,9 @@ def _aggregate_interval_weights(intervals, obs_weights=None, /):
         if not (total > 0.0 and np.isfinite(total)):
             raise ValueError("obs_weights must have positive finite total")
         row_w = row_w / total
-    weights = np.bincount(
-        inverse, weights=row_w, minlength=unique.shape[0]
-    ).astype(np.float64)
+    weights = np.bincount(inverse, weights=row_w, minlength=unique.shape[0]).astype(
+        np.float64
+    )
     return unique, weights
 
 
@@ -1189,9 +1223,9 @@ def _interval_observable_dimension(intervals, support, /):
     first, _, _ = _row_grouping(x)
     unique = x[first]
     lo_s, hi_s = map(float, support)
-    endpoints = np.unique(np.concatenate((
-        np.asarray([lo_s, hi_s], dtype=np.float64), unique.reshape(-1)
-    )))
+    endpoints = np.unique(
+        np.concatenate((np.asarray([lo_s, hi_s], dtype=np.float64), unique.reshape(-1)))
+    )
     n = int(endpoints.size)
     if n <= 1:
         return 0
@@ -1232,10 +1266,9 @@ def _interval_observable_dimension(intervals, support, /):
     return max(0, int(incidence_rank - 1))
 
 
-def _interval_nonparametric_loglik_bound(intervals, support, /,
-                                          obs_weights=None,
-                                          max_iter=5000,
-                                          tol=1e-13):
+def _interval_nonparametric_loglik_bound(
+    intervals, support, /, obs_weights=None, max_iter=5000, tol=1e-13
+):
     """Compute the nonparametric maximum interval log-likelihood.
 
     The censoring endpoints partition the support into atomic intervals.  The
@@ -1265,9 +1298,9 @@ def _interval_nonparametric_loglik_bound(intervals, support, /,
     """
     unique, row_w = _aggregate_interval_weights(intervals, obs_weights)
     lo_s, hi_s = map(float, support)
-    endpoints = np.unique(np.concatenate((
-        np.asarray([lo_s, hi_s], dtype=np.float64), unique.reshape(-1)
-    )))
+    endpoints = np.unique(
+        np.concatenate((np.asarray([lo_s, hi_s], dtype=np.float64), unique.reshape(-1)))
+    )
     starts = np.searchsorted(endpoints, unique[:, 0]).astype(np.int64)
     ends = np.searchsorted(endpoints, unique[:, 1]).astype(np.int64)
     n_atoms = int(endpoints.size - 1)
@@ -1305,8 +1338,9 @@ def _interval_nonparametric_loglik_bound(intervals, support, /,
     return float(ll)
 
 
-def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
-                                           obs_weights=None):
+def _interval_identifiability_diagnostic(
+    intervals, components, ll, support, /, obs_weights=None
+):
     """Detect an exactly saturated censored likelihood with excess parameters.
 
     The fitted mixture is compared with the nonparametric maximum likelihood
@@ -1351,7 +1385,12 @@ def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
         if state is None:
             return None
         names = getattr(getattr(state, "dtype", None), "names", None)
-        if names is not None and "optimizer_params" in names or isinstance(state, dict) and "optimizer_params" in state:
+        if (
+            names is not None
+            and "optimizer_params" in names
+            or isinstance(state, dict)
+            and "optimizer_params" in state
+        ):
             n_params += int(np.asarray(state["optimizer_params"]).size)
         else:
             return None
@@ -1360,9 +1399,7 @@ def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
     if n_params <= observable_dim:
         return None
 
-    bound = _interval_nonparametric_loglik_bound(
-        x, support, obs_weights=obs_weights
-    )
+    bound = _interval_nonparametric_loglik_bound(x, support, obs_weights=obs_weights)
     if not np.isfinite(bound):
         return None
 
@@ -1379,8 +1416,7 @@ def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
     # _row_grouping is lexicographic with the lower endpoint primary.
     ordered = unique
     has_overlap = bool(
-        ordered.shape[0] > 1
-        and np.any(ordered[:-1, 1] > ordered[1:, 0])
+        ordered.shape[0] > 1 and np.any(ordered[:-1, 1] > ordered[1:, 0])
     )
     return {
         "n_intervals": int(unique.shape[0]),
@@ -1397,8 +1433,8 @@ def _interval_identifiability_diagnostic(intervals, components, ll, support, /,
 # Structured-scalar serialization helpers
 # ======================================================================
 
-def _pack_mixture_struct(weights, default_space, comp_states, /,
-                         base_modes=None):
+
+def _pack_mixture_struct(weights, default_space, comp_states, /, base_modes=None):
     """Pack mixture metadata and per-component states into one scalar.
 
     Any component field whose one-dimensional shape differs across components
@@ -1452,7 +1488,7 @@ def _pack_mixture_struct(weights, default_space, comp_states, /,
         lengths = np.empty(K, dtype=np.int64)
         for j, a in enumerate(arrs):
             lengths[j] = a.size
-            padded[j, :a.size] = a
+            padded[j, : a.size] = a
         fields[f"comp_{name}"] = padded
         fields[f"comp_{name}_len"] = lengths
 
@@ -1501,7 +1537,13 @@ def _unpack_mixture_struct(struct):
     names = list(struct.dtype.names or ())
     missing = [
         name
-        for name in ("n_components", "weights", "default_space", "base_modes", "n_modes")
+        for name in (
+            "n_components",
+            "weights",
+            "default_space",
+            "base_modes",
+            "n_modes",
+        )
         if name not in names
     ]
     if missing:
@@ -1513,8 +1555,7 @@ def _unpack_mixture_struct(struct):
     default_space = str(struct["default_space"])
 
     comp_field_names = [
-        fn[5:] for fn in names
-        if fn.startswith("comp_") and not fn.endswith("_len")
+        fn[5:] for fn in names if fn.startswith("comp_") and not fn.endswith("_len")
     ]
 
     comp_states = []
@@ -1524,13 +1565,15 @@ def _unpack_mixture_struct(struct):
             raw = np.asarray(struct[f"comp_{name}"])[j]
             len_field = f"comp_{name}_len"
             if len_field in names:
-                raw = raw[:int(struct[len_field][j])]
+                raw = raw[: int(struct[len_field][j])]
             comp_dict[name] = raw
 
         dt = []
         for name in comp_field_names:
             arr = np.asarray(comp_dict[name])
-            dt.append((name, arr.dtype) if arr.ndim == 0 else (name, arr.dtype, arr.shape))
+            dt.append(
+                (name, arr.dtype) if arr.ndim == 0 else (name, arr.dtype, arr.shape)
+            )
         cs = np.zeros((), dtype=dt)
         for name in comp_field_names:
             cs[name] = comp_dict[name]
@@ -1542,6 +1585,7 @@ def _unpack_mixture_struct(struct):
 # ======================================================================
 # Component ordering helper
 # ======================================================================
+
 
 def _sort_components_by_mode(components, weights, /):
     """Re-order *components* and *weights* by ascending base-space mode.
@@ -1569,8 +1613,8 @@ def _sort_components_by_mode(components, weights, /):
 # Mixture mode finding
 # ======================================================================
 
-def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *,
-                        space):
+
+def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *, space):
     """Find all modes of a mixture PDF, in base or exp coordinates.
 
     A base-space mode is a local maximum of the PDF: a point where
@@ -1615,7 +1659,7 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *,
     if space not in ("base", "exp"):
         raise ValueError(f"space must be 'base' or 'exp', got {space!r}.")
 
-    is_exp = (space == "exp")
+    is_exp = space == "exp"
     # Root target: q'(x) in base space, q'(x) + 1 in exp space.
     offset = 1.0 if is_exp else 0.0
 
@@ -1623,7 +1667,9 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *,
         return float(neg_log_base_func(x, 1)) + offset
 
     def g_many(x):
-        return np.asarray(neg_log_base_func(x, 1), dtype=np.float64).reshape(-1) + offset
+        return (
+            np.asarray(neg_log_base_func(x, 1), dtype=np.float64).reshape(-1) + offset
+        )
 
     def height(x):
         """Value to minimize when breaking ties between near-duplicate roots.
@@ -1676,11 +1722,14 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *,
 
     # ---- collect all critical-point candidates ----
     candidates = list(modes_sorted)
-    brackets = ([search_lo] + modes_sorted + [search_hi] if is_exp
-                else modes_sorted)
+    brackets = [search_lo] + modes_sorted + [search_hi] if is_exp else modes_sorted
     for i in range(len(brackets) - 1):
         _collect_roots_bisection_func(
-            g, brackets[i], brackets[i + 1], candidates, g_many,
+            g,
+            brackets[i],
+            brackets[i + 1],
+            candidates,
+            g_many,
         )
 
     # ---- refine each candidate with brentq ----
@@ -1714,8 +1763,7 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *,
             refined.append(float(c))
 
     # ---- classify: keep only local minima of the potential ----
-    kept = [r for r in refined
-            if float(neg_log_base_func(r, 2)) > -MODE_DERIV_TOL]
+    kept = [r for r in refined if float(neg_log_base_func(r, 2)) > -MODE_DERIV_TOL]
 
     # ---- deduplicate within tolerance, keeping the taller peak ----
     kept.sort()
@@ -1758,8 +1806,7 @@ def _find_mixture_modes_base(neg_log_func, component_base_modes, /):
     tuple of float
         Sorted base-space mode locations.
     """
-    return _find_mixture_modes(neg_log_func, component_base_modes,
-                               space="base")
+    return _find_mixture_modes(neg_log_func, component_base_modes, space="base")
 
 
 def _find_mixture_modes_exp(neg_log_base_func, component_log_modes, /):
@@ -1781,9 +1828,7 @@ def _find_mixture_modes_exp(neg_log_base_func, component_log_modes, /):
     tuple of float
         Sorted exp-space mode locations.
     """
-    return _find_mixture_modes(neg_log_base_func, component_log_modes,
-                               space="exp")
-
+    return _find_mixture_modes(neg_log_base_func, component_log_modes, space="exp")
 
 
 def _collect_roots_bisection_func(g_func, a, b, candidates, g_many=None, /):

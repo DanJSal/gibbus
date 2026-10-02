@@ -79,8 +79,7 @@ MODULES = {
 # ---------------------------------------------------------------------
 
 missing = [
-    src for src in MODULES.values()
-    if not os.path.exists(os.path.join("gibbus", src))
+    src for src in MODULES.values() if not os.path.exists(os.path.join("gibbus", src))
 ]
 if missing:
     raise RuntimeError(
@@ -128,7 +127,6 @@ extensions = cythonize(
 )
 
 
-
 def _accepts_flag(compiler, flag):
     """Return whether ``compiler`` compiles a trivial file with ``flag``."""
     import tempfile
@@ -149,7 +147,9 @@ class BuildExt(build_ext):
 
     def build_extensions(self):
         """Probe ``OPTIONAL_COMPILE_ARGS`` once, then build every extension."""
-        accepted = [flag for flag in OPTIONAL_COMPILE_ARGS if _accepts_flag(self.compiler, flag)]
+        accepted = [
+            flag for flag in OPTIONAL_COMPILE_ARGS if _accepts_flag(self.compiler, flag)
+        ]
         for extension in self.extensions:
             extension.extra_compile_args = [*extension.extra_compile_args, *accepted]
         super().build_extensions()

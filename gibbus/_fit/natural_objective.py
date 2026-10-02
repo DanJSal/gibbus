@@ -76,15 +76,29 @@ _POINT_STATS_ERRORS = {
     1: (ValueError, "weights must be finite and non-negative"),
     2: (ValueError, "total observation weight must be positive"),
     3: (FloatingPointError, "empirical power moment is non-finite"),
-    4: (ValueError, "active lower log-boundary term requires every positive-weight point above L"),
-    5: (ValueError, "active upper log-boundary term requires every positive-weight point below U"),
+    4: (
+        ValueError,
+        "active lower log-boundary term requires every positive-weight point above L",
+    ),
+    5: (
+        ValueError,
+        "active upper log-boundary term requires every positive-weight point below U",
+    ),
     6: (FloatingPointError, "boundary-log empirical statistic is non-finite"),
 }
 
 
 def _natural_point_stats(
-    points, weights, max_order, support, has_lower, has_upper, /,
-    *, lower_distance=None, upper_distance=None,
+    points,
+    weights,
+    max_order,
+    support,
+    has_lower,
+    has_upper,
+    /,
+    *,
+    lower_distance=None,
+    upper_distance=None,
 ):
     """Build the point-data sufficient statistics.
 
@@ -119,7 +133,9 @@ def _natural_point_stats(
     lower, upper = map(float, support)
     if not lower < upper:
         raise ValueError("support must satisfy lower < upper")
-    if (np.isfinite(lower) and np.any(z < lower)) or (np.isfinite(upper) and np.any(z > upper)):
+    if (np.isfinite(lower) and np.any(z < lower)) or (
+        np.isfinite(upper) and np.any(z > upper)
+    ):
         raise ValueError("point observations must lie within the support")
     if has_lower and not np.isfinite(lower):
         raise ValueError("active lower log-boundary term requires finite L")
@@ -132,7 +148,11 @@ def _natural_point_stats(
     use_preserved_lower = bool(has_lower and lower_distance is not None)
     use_preserved_upper = bool(has_upper and upper_distance is not None)
     status, moments, participation, boundary, total, n_eff = empirical_point_stats(
-        z, weights, int(max_order), lower, upper,
+        z,
+        weights,
+        int(max_order),
+        lower,
+        upper,
         bool(has_lower and not use_preserved_lower),
         bool(has_upper and not use_preserved_upper),
     )
@@ -146,14 +166,26 @@ def _natural_point_stats(
         else:
             wn = _normalized_nonnegative_weights(weights, z.size)
             if wn is None:
-                raise ValueError("weights must be finite and non-negative with positive total")
+                raise ValueError(
+                    "weights must be finite and non-negative with positive total"
+                )
 
         boundary = np.asarray(boundary, dtype=np.float64).copy()
         for slot, enabled, distances, fallback, message in (
-            (0, use_preserved_lower, lower_distance, z - lower,
-             _POINT_STATS_ERRORS[4][1]),
-            (1, use_preserved_upper, upper_distance, upper - z,
-             _POINT_STATS_ERRORS[5][1]),
+            (
+                0,
+                use_preserved_lower,
+                lower_distance,
+                z - lower,
+                _POINT_STATS_ERRORS[4][1],
+            ),
+            (
+                1,
+                use_preserved_upper,
+                upper_distance,
+                upper - z,
+                _POINT_STATS_ERRORS[5][1],
+            ),
         ):
             if not enabled:
                 continue
@@ -324,7 +356,11 @@ class _NaturalPointObjectiveFunction:
         # q = theta . h exactly (the potential is linear with no constant),
         # so E_hat[q] is the parameter/statistic contraction; the compiled
         # Fisher matrix is exactly symmetric.
-        nll = float(self._empirical_means @ state.p) + state.log_Z + self._coordinate_constant
+        nll = (
+            float(self._empirical_means @ state.p)
+            + state.log_Z
+            + self._coordinate_constant
+        )
         return _ObjectiveEvaluation(
             nll=nll,
             gradient=self._empirical_means - means,
@@ -333,8 +369,6 @@ class _NaturalPointObjectiveFunction:
             missing_information=self._zero_missing,
             model_partial_means=means,
         )
-
-
 
 
 def _preserved_point_boundary_distances(coordinate, points, /):
@@ -371,6 +405,7 @@ def _preserved_point_boundary_distances(coordinate, points, /):
         endpoint = physical[1] if direction > 0.0 else physical[0]
         upper_distance = -direction * _safe_scaled_difference(x, endpoint, scale)
     return lower_distance, upper_distance
+
 
 def _prepare_natural_point_objective(
     support,
@@ -432,9 +467,7 @@ def _prepare_natural_point_objective(
     order = default_order if moment_order is None else int(moment_order)
     if order < spec.effective_poly_degree:
         raise ValueError("moment_order must cover the effective polynomial degree")
-    lower_distance, upper_distance = _preserved_point_boundary_distances(
-        coordinate, x
-    )
+    lower_distance, upper_distance = _preserved_point_boundary_distances(coordinate, x)
     stats = _natural_point_stats(
         z,
         weights,
@@ -548,7 +581,8 @@ def _fit_natural_conic_points_auto(
     x = np.asarray(point_samples, dtype=np.float64).reshape(-1)
     cfg = _DegreeSelectionConfig() if degree_config is None else degree_config
     degrees = [
-        int(d) for d in _admissible_degrees(support, AUTO_POLY_DEGREE_MAX)
+        int(d)
+        for d in _admissible_degrees(support, AUTO_POLY_DEGREE_MAX)
         if int(d) >= int(AUTO_POLY_DEGREE_MIN)
     ]
     if not degrees:
@@ -562,18 +596,24 @@ def _fit_natural_conic_points_auto(
         )
         moment_order = (
             max(2 * int(probe_orders[-1]), 2 * int(degree))
-            if probe_orders else 2 * int(degree)
+            if probe_orders
+            else 2 * int(degree)
         )
         try:
             candidate = _fit_natural_conic_points(
-                support, x, degree,
-                allow_lower_boundary, allow_upper_boundary, weights,
+                support,
+                x,
+                degree,
+                allow_lower_boundary,
+                allow_upper_boundary,
+                weights,
                 moment_order=moment_order,
                 **options,
             )
         except NUMERIC_FAILURES as exc:
             _reraise_if_debug(
-                exc, f"natural auto-degree point candidate degree={degree}",
+                exc,
+                f"natural auto-degree point candidate degree={degree}",
                 routine=True,
             )
             continue
@@ -674,7 +714,9 @@ def _safeguarded_metric(fisher, missing, /):
     return 0.5 * (metric + metric.T), smallest
 
 
-def _interval_nll_lower_bound(observations, /, *, max_iterations=20000, tolerance=1e-13):
+def _interval_nll_lower_bound(
+    observations, /, *, max_iterations=20000, tolerance=1e-13
+):
     """Return a rigorous lower bound on every interval NLL for these rows.
 
     The censoring endpoints partition the support into atoms; any
@@ -744,7 +786,9 @@ class _NaturalIntervalObjectiveFunction:
     this bound afterward as a global certificate when an endpoint reaches it.
     """
 
-    def __init__(self, spec, observations, z_data_bounds, /, *, nonparametric_bound=True):
+    def __init__(
+        self, spec, observations, z_data_bounds, /, *, nonparametric_bound=True
+    ):
         """Bind a model spec to fixed interval observations.
 
         Parameters
@@ -831,7 +875,9 @@ class _NaturalIntervalObjectiveFunction:
             numerics.lengths,
             numerics.coefficients,
             _MODE_CONTROLS,
-            np.ascontiguousarray(self.observations.intervals[regular], dtype=np.float64),
+            np.ascontiguousarray(
+                self.observations.intervals[regular], dtype=np.float64
+            ),
             np.ascontiguousarray(self.observations.weights[regular], dtype=np.float64),
             np.ascontiguousarray(
                 self.observations.point_lower_distance[regular], dtype=np.float64
@@ -839,7 +885,9 @@ class _NaturalIntervalObjectiveFunction:
             np.ascontiguousarray(
                 self.observations.point_upper_distance[regular], dtype=np.float64
             ),
-            np.ascontiguousarray(self.observations.intervals[adaptive], dtype=np.float64),
+            np.ascontiguousarray(
+                self.observations.intervals[adaptive], dtype=np.float64
+            ),
             np.ascontiguousarray(self.observations.weights[adaptive], dtype=np.float64),
             self._compiled_interval_whole_weight,
             float(self.spec.coordinate.scale),
@@ -874,7 +922,9 @@ class _NaturalIntervalObjectiveFunction:
         params : numpy.ndarray, shape (n,)
             Natural parameters.
         """
-        evaluation = _evaluate_interval_objective(self.build_state(params), self.observations)
+        evaluation = _evaluate_interval_objective(
+            self.build_state(params), self.observations
+        )
         fisher = evaluation.fisher
         missing = evaluation.missing_information
         metric, smallest = _safeguarded_metric(fisher, missing)
@@ -938,7 +988,9 @@ def _prepare_natural_interval_objective(
     else:
         coordinate = _build_interval_fit_coordinate(support, x, weights)
     observations = _build_interval_observations(
-        x, weights, coordinate=coordinate,
+        x,
+        weights,
+        coordinate=coordinate,
         grouping_cache={"grouping": _row_grouping(x)},
     )
     spec = _build_model_spec(
@@ -1044,6 +1096,7 @@ def _fit_natural_conic_intervals(
         options.setdefault("initial_blocks", blocks)
     return objective, _solve_natural_conic(objective, **options)
 
+
 def _fit_natural_conic_intervals_auto(
     support,
     intervals,
@@ -1096,7 +1149,8 @@ def _fit_natural_conic_intervals_auto(
 
     cfg = _DegreeSelectionConfig() if degree_config is None else degree_config
     degrees = [
-        int(d) for d in _admissible_degrees(support, AUTO_POLY_DEGREE_MAX)
+        int(d)
+        for d in _admissible_degrees(support, AUTO_POLY_DEGREE_MAX)
         if int(d) >= int(AUTO_POLY_DEGREE_MIN)
     ]
     if not degrees:
@@ -1107,13 +1161,18 @@ def _fit_natural_conic_intervals_auto(
     for index, degree in enumerate(degrees):
         try:
             candidate = _fit_natural_conic_intervals(
-                support, x, degree,
-                allow_lower_boundary, allow_upper_boundary, weights,
+                support,
+                x,
+                degree,
+                allow_lower_boundary,
+                allow_upper_boundary,
+                weights,
                 **options,
             )
         except NUMERIC_FAILURES as exc:
             _reraise_if_debug(
-                exc, f"natural auto-degree interval candidate degree={degree}",
+                exc,
+                f"natural auto-degree interval candidate degree={degree}",
                 routine=True,
             )
             continue

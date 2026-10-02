@@ -212,12 +212,13 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         if not self.is_fitted:
             return "Distribution(unfitted)"
         degrees = tuple(
-            int(np.asarray(comp.data["q_poly"]).size - 1)
-            for comp in self._components
+            int(np.asarray(comp.data["q_poly"]).size - 1) for comp in self._components
         )
         support = tuple(map(float, self._components[0].base.support))
-        return (f"Distribution(n_components={self._K}, support={support}, "
-                f"poly_degrees={degrees}, default={self._default!r})")
+        return (
+            f"Distribution(n_components={self._K}, support={support}, "
+            f"poly_degrees={degrees}, default={self._default!r})"
+        )
 
     def __reduce__(self):
         """Serialize fitted state together with in-process diagnostic records."""
@@ -276,7 +277,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return self._components[0].base
         raise AttributeError(
             "Multi-component Distribution has no single .base view. "
-            "Use .pdf(), .cdf() etc. directly, or .components[k].base.")
+            "Use .pdf(), .cdf() etc. directly, or .components[k].base."
+        )
 
     @property
     def exp(self) -> _ExpSpaceView:
@@ -294,7 +296,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return self._components[0].exp
         raise AttributeError(
             "Multi-component Distribution has no single .exp view. "
-            "Use .pdf(), .cdf() etc. directly, or .components[k].exp.")
+            "Use .pdf(), .cdf() etc. directly, or .components[k].exp."
+        )
 
     # ------------------------------------------------------------------
     # Space selection
@@ -499,13 +502,14 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._mode_cache = None
         self._spectral_cache_valid = False
         self._em_diagnostics = (
-            None if result.em_diagnostics is None
-            else dict(result.em_diagnostics)
+            None if result.em_diagnostics is None else dict(result.em_diagnostics)
         )
         self._selection_diagnostics = (
-            None if result.selection_diagnostics is None
+            None
+            if result.selection_diagnostics is None
             else dict(result.selection_diagnostics)
         )
+
     # ------------------------------------------------------------------
     # Evaluation
     # ------------------------------------------------------------------
@@ -526,7 +530,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         if self._K == 1:
             return self._components[0].pdf(x)
         x = np.asarray(x, dtype=np.float64)
-        scalar = (x.ndim == 0)
+        scalar = x.ndim == 0
         out = np.zeros_like(x, dtype=np.float64)
         for k, comp in enumerate(self._components):
             view = comp.base if self._default == "base" else comp.exp
@@ -556,7 +560,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         pot, spectral_cdf, support = self._base_probability_parts()
         if self._default == "base":
             return cdf_hybrid(
-                pot, spectral_cdf, x, float(support[0]),
+                pot,
+                spectral_cdf,
+                x,
+                float(support[0]),
                 upper_endpoint=float(support[1]),
                 log_tail_mass=self._base_log_tail_mass,
                 log_tail_masses=self._base_log_tail_masses,
@@ -565,12 +572,17 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         scalar = arr.ndim == 0
         with np.errstate(divide="ignore", invalid="ignore"):
             lx = np.log(arr)
-            out = np.asarray(cdf_hybrid(
-                pot, spectral_cdf, lx, float(support[0]),
-                upper_endpoint=float(support[1]),
-                log_tail_mass=self._base_log_tail_mass,
-                log_tail_masses=self._base_log_tail_masses,
-            ))
+            out = np.asarray(
+                cdf_hybrid(
+                    pot,
+                    spectral_cdf,
+                    lx,
+                    float(support[0]),
+                    upper_endpoint=float(support[1]),
+                    log_tail_mass=self._base_log_tail_mass,
+                    log_tail_masses=self._base_log_tail_masses,
+                )
+            )
         out = np.where(arr > 0.0, out, np.where(np.isnan(arr), np.nan, 0.0))
         return float(out) if scalar else out
 
@@ -593,22 +605,24 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         """
         self._ensure_fitted()
         p_arr = np.asarray(p, dtype=np.float64)
-        scalar = (p_arr.ndim == 0)
+        scalar = p_arr.ndim == 0
         if np.any(~np.isfinite(p_arr) | (p_arr < 0.0) | (p_arr > 1.0)):
             raise ValueError("ppf is defined for finite p in [0, 1]")
 
         if self._K == 1:
             out = np.atleast_1d(
-                np.asarray(self._components[0].ppf(p_arr), dtype=np.float64))
+                np.asarray(self._components[0].ppf(p_arr), dtype=np.float64)
+            )
             base_out = np.log(out) if self._default == "exp" else out
         else:
             self._ensure_spectral_cache()
             base_out = np.atleast_1d(
-                np.asarray(self._mix_base_ppf(p_arr), dtype=np.float64)).copy()
+                np.asarray(self._mix_base_ppf(p_arr), dtype=np.float64)
+            ).copy()
 
         base_out = self._refine_extreme_quantiles(
-            np.atleast_1d(p_arr).reshape(-1),
-            np.atleast_1d(base_out).reshape(-1))
+            np.atleast_1d(p_arr).reshape(-1), np.atleast_1d(base_out).reshape(-1)
+        )
 
         out = np.exp(base_out) if self._default == "exp" else base_out
         out = out.reshape(p_arr.shape)
@@ -647,11 +661,15 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             potential = self._mix_base_potential
             raw_ppf = self._mix_base_ppf
         tail_mass = (
-            first._exact_tail_log_mass if self._K == 1
-            else self._mix_base_log_tail_mass
+            first._exact_tail_log_mass if self._K == 1 else self._mix_base_log_tail_mass
         )
         return refine_tail_quantiles(
-            potential, raw_ppf, float(supp[0]), float(supp[1]), p, base_out,
+            potential,
+            raw_ppf,
+            float(supp[0]),
+            float(supp[1]),
+            p,
+            base_out,
             log_tail_mass=tail_mass,
         )
 
@@ -671,9 +689,11 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return self._components[0].base.ppf(p_arr)
         self._ensure_spectral_cache()
         base_out = np.atleast_1d(
-            np.asarray(self._mix_base_ppf(p_arr), dtype=np.float64)).copy()
+            np.asarray(self._mix_base_ppf(p_arr), dtype=np.float64)
+        ).copy()
         base_out = self._refine_extreme_quantiles(
-            np.atleast_1d(p_arr).reshape(-1), base_out.reshape(-1))
+            np.atleast_1d(p_arr).reshape(-1), base_out.reshape(-1)
+        )
         out = base_out.reshape(p_arr.shape)
         return float(out) if scalar else out
 
@@ -756,7 +776,11 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         pot, cdf, support = self._base_probability_parts()
         if self._default == "base":
             return log_cdf_hybrid(
-                pot, cdf, x, float(support[0]), upper_endpoint=float(support[1]),
+                pot,
+                cdf,
+                x,
+                float(support[0]),
+                upper_endpoint=float(support[1]),
                 log_tail_mass=self._base_log_tail_mass,
                 log_tail_masses=self._base_log_tail_masses,
             )
@@ -764,11 +788,17 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         scalar = arr.ndim == 0
         with np.errstate(divide="ignore", invalid="ignore"):
             lx = np.log(arr)
-            out = np.asarray(log_cdf_hybrid(
-                pot, cdf, lx, float(support[0]), upper_endpoint=float(support[1]),
-                log_tail_mass=self._base_log_tail_mass,
-                log_tail_masses=self._base_log_tail_masses,
-            ))
+            out = np.asarray(
+                log_cdf_hybrid(
+                    pot,
+                    cdf,
+                    lx,
+                    float(support[0]),
+                    upper_endpoint=float(support[1]),
+                    log_tail_mass=self._base_log_tail_mass,
+                    log_tail_masses=self._base_log_tail_masses,
+                )
+            )
         out = np.where(arr > 0.0, out, np.where(np.isnan(arr), np.nan, -np.inf))
         return float(out) if scalar else out
 
@@ -800,7 +830,11 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         pot, cdf, support = self._base_probability_parts()
         if self._default == "base":
             return log_sf_hybrid(
-                pot, cdf, x, float(support[1]), lower_endpoint=float(support[0]),
+                pot,
+                cdf,
+                x,
+                float(support[1]),
+                lower_endpoint=float(support[0]),
                 log_tail_mass=self._base_log_tail_mass,
                 log_tail_masses=self._base_log_tail_masses,
             )
@@ -808,11 +842,17 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         scalar = arr.ndim == 0
         with np.errstate(divide="ignore", invalid="ignore"):
             lx = np.log(arr)
-            out = np.asarray(log_sf_hybrid(
-                pot, cdf, lx, float(support[1]), lower_endpoint=float(support[0]),
-                log_tail_mass=self._base_log_tail_mass,
-                log_tail_masses=self._base_log_tail_masses,
-            ))
+            out = np.asarray(
+                log_sf_hybrid(
+                    pot,
+                    cdf,
+                    lx,
+                    float(support[1]),
+                    lower_endpoint=float(support[0]),
+                    log_tail_mass=self._base_log_tail_mass,
+                    log_tail_masses=self._base_log_tail_masses,
+                )
+            )
         out = np.where(arr > 0.0, out, np.where(np.isnan(arr), np.nan, 0.0))
         return float(out) if scalar else out
 
@@ -829,7 +869,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return self._components[0].isf(p)
         pot, _cdf, support = self._base_probability_parts()
         base = _isf(
-            pot, self._base_ppf_for_extensions, support, p,
+            pot,
+            self._base_ppf_for_extensions,
+            support,
+            p,
             log_tail_mass=self._base_log_tail_mass,
         )
         if self._default == "base":
@@ -852,7 +895,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return self._components[0].logppf(log_p)
         pot, _cdf, support = self._base_probability_parts()
         base = _logppf(
-            pot, self._base_ppf_for_extensions, support, log_p,
+            pot,
+            self._base_ppf_for_extensions,
+            support,
+            log_p,
             log_tail_mass=self._base_log_tail_mass,
         )
         if self._default == "base":
@@ -875,7 +921,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return self._components[0].logisf(log_p)
         pot, _cdf, support = self._base_probability_parts()
         base = _logisf(
-            pot, self._base_ppf_for_extensions, support, log_p,
+            pot,
+            self._base_ppf_for_extensions,
+            support,
+            log_p,
             log_tail_mass=self._base_log_tail_mass,
         )
         if self._default == "base":
@@ -923,7 +972,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         scalar = np.asarray(x).ndim == 0
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
             h = np.asarray(np.exp(self.log_hazard(x)), dtype=np.float64)
-        out = h if n == 0 else h * (h - np.asarray(self.neg_log(x, 1), dtype=np.float64))
+        out = (
+            h if n == 0 else h * (h - np.asarray(self.neg_log(x, 1), dtype=np.float64))
+        )
         return float(out) if scalar else out
 
     def cumulative_hazard(self, x) -> float | np.ndarray:
@@ -988,8 +1039,14 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         """
         self._ensure_fitted()
         return _hpd(
-            self.logpdf, self.logcdf, self.logsf, self.ppf, self.isf,
-            self.support, level, modes=self.modes,
+            self.logpdf,
+            self.logcdf,
+            self.logsf,
+            self.ppf,
+            self.isf,
+            self.support,
+            level,
+            modes=self.modes,
         )
 
     def _base_expect(self, func):
@@ -1040,10 +1097,12 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._ensure_fitted()
         if self._default == "base":
             return self._base_expect(func)
+
         def transformed(x):
             with np.errstate(over="ignore"):
                 y = float(np.exp(x))
             return func(y)
+
         return self._base_expect(transformed)
 
     def _expect_between(self, func, lower, upper):
@@ -1074,8 +1133,16 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return _expect(pot, (lo, hi), func, points=points)
 
         with np.errstate(divide="ignore", invalid="ignore"):
-            lo = float(base_support[0]) if a <= 0.0 else max(float(base_support[0]), float(np.log(a)))
-            hi = float(base_support[1]) if np.isposinf(b) else min(float(base_support[1]), float(np.log(b)))
+            lo = (
+                float(base_support[0])
+                if a <= 0.0
+                else max(float(base_support[0]), float(np.log(a)))
+            )
+            hi = (
+                float(base_support[1])
+                if np.isposinf(b)
+                else min(float(base_support[1]), float(np.log(b)))
+            )
         if not lo < hi:
             return 0.0
 
@@ -1094,12 +1161,17 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             points = (self._components[0].base.mode,)
         else:
             points = self._ensure_modes().get("base", ())
-        base_entropy = _expect_vectorized(pot, support, lambda x: pot(x, 0), points=points)
+        base_entropy = _expect_vectorized(
+            pot, support, lambda x: pot(x, 0), points=points
+        )
         if self._default == "base":
             return float(base_entropy)
-        base_mean = float(sum(
-            w * comp.base.mean for w, comp in zip(self._weights, self._components, strict=True)
-        ))
+        base_mean = float(
+            sum(
+                w * comp.base.mean
+                for w, comp in zip(self._weights, self._components, strict=True)
+            )
+        )
         return float(base_entropy + base_mean)
 
     def cross_entropy(self, other) -> float:
@@ -1147,9 +1219,11 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         lo, hi : float
             Interval endpoints in the active coordinate space.
         """
-        return float(log_mass_between(
-            self.logcdf(lo), self.logcdf(hi), self.logsf(lo), self.logsf(hi)
-        ))
+        return float(
+            log_mass_between(
+                self.logcdf(lo), self.logcdf(hi), self.logsf(lo), self.logsf(hi)
+            )
+        )
 
     def loglik(self, x, sample_weight=None) -> float:
         """Return total held-out log likelihood.
@@ -1171,10 +1245,16 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return float(np.sum(weights[positive] * terms[positive], dtype=np.float64))
         return _interval_loglik(rows, weights, self.logpdf, self.logcdf, self.logsf)
 
-    def goodness_of_fit(self, x, *, statistic: str = "cvm",
-                        calibration: str = "asymptotic",
-                        n_resamples: int = BOOTSTRAP_DEFAULT_RESAMPLES,
-                        rng=None, fit_kwargs=None) -> dict[str, Any]:
+    def goodness_of_fit(
+        self,
+        x,
+        *,
+        statistic: str = "cvm",
+        calibration: str = "asymptotic",
+        n_resamples: int = BOOTSTRAP_DEFAULT_RESAMPLES,
+        rng=None,
+        fit_kwargs=None,
+    ) -> dict[str, Any]:
         """Test the fitted distribution against observations.
 
         Transforms *x* through the fitted CDF and measures how far the
@@ -1240,8 +1320,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         mode = str(calibration).strip().lower()
         if mode not in ("asymptotic", "montecarlo"):
             raise ValueError(
-                "calibration must be 'asymptotic' or 'montecarlo', "
-                f"got {calibration!r}"
+                f"calibration must be 'asymptotic' or 'montecarlo', got {calibration!r}"
             )
         rows = _canonical_scoring_rows(x)
         if rows.shape[1] != 1:
@@ -1285,10 +1364,17 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             "pvalue_valid_for": "the sample the model was fitted to",
         }
 
-    def bootstrap_bands(self, samples, x, *, quantity: str = "pdf",
-                        n_resamples: int = BOOTSTRAP_DEFAULT_RESAMPLES,
-                        level: float = 0.95, rng=None,
-                        fit_kwargs=None) -> dict[str, Any]:
+    def bootstrap_bands(
+        self,
+        samples,
+        x,
+        *,
+        quantity: str = "pdf",
+        n_resamples: int = BOOTSTRAP_DEFAULT_RESAMPLES,
+        level: float = 0.95,
+        rng=None,
+        fit_kwargs=None,
+    ) -> dict[str, Any]:
         """Estimate pointwise uncertainty bands by nonparametric resampling.
 
         Resamples observation rows with replacement, refits, and reports
@@ -1343,9 +1429,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._ensure_fitted()
         name = str(quantity).strip().lower()
         if name not in ("pdf", "cdf", "sf"):
-            raise ValueError(
-                f"quantity must be 'pdf', 'cdf' or 'sf', got {quantity!r}"
-            )
+            raise ValueError(f"quantity must be 'pdf', 'cdf' or 'sf', got {quantity!r}")
         grid = np.asarray(x, dtype=np.float64).reshape(-1)
         if grid.size == 0:
             raise ValueError("bootstrap_bands requires at least one abscissa")
@@ -1363,8 +1447,12 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return np.asarray(getattr(replica, name)(grid), dtype=np.float64)
 
         result = _bootstrap_curves(
-            evaluate, rows.shape[0], grid.size,
-            n_resamples=n_resamples, level=level, rng=gen,
+            evaluate,
+            rows.shape[0],
+            grid.size,
+            n_resamples=n_resamples,
+            level=level,
+            rng=gen,
         )
         return {
             "x": grid,
@@ -1440,7 +1528,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             if weight > 0.0
         ]
         if not rates:
-            raise RuntimeError("tail_rate requires at least one positive-weight component")
+            raise RuntimeError(
+                "tail_rate requires at least one positive-weight component"
+            )
         finite = [rate for rate in rates if np.isfinite(rate)]
         return float(min(finite)) if finite else np.inf
 
@@ -1507,10 +1597,14 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
 
         log_masses = np.empty(self._K, dtype=np.float64)
         for j, comp in enumerate(self._components):
-            log_masses[j] = float(log_mass_between(
-                comp.base.logcdf(base_lo), comp.base.logcdf(base_hi),
-                comp.base.logsf(base_lo), comp.base.logsf(base_hi),
-            ))
+            log_masses[j] = float(
+                log_mass_between(
+                    comp.base.logcdf(base_lo),
+                    comp.base.logcdf(base_hi),
+                    comp.base.logsf(base_lo),
+                    comp.base.logsf(base_hi),
+                )
+            )
 
         with np.errstate(divide="ignore"):
             log_weights = np.where(self._weights > 0.0, np.log(self._weights), -np.inf)
@@ -1525,7 +1619,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
 
         kept_components = []
         kept_log_terms = []
-        for comp, log_mass, log_term in zip(self._components, log_masses, log_terms, strict=True):
+        for comp, log_mass, log_term in zip(
+            self._components, log_masses, log_terms, strict=True
+        ):
             if not np.isfinite(log_term) or log_mass < log_tiny:
                 continue
             kept_components.append(comp._truncate_base(base_lo, base_hi))
@@ -1628,7 +1724,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
                 out[mask] = self._view(self._components[j]).ppf(u[mask])
         return out
 
-    def moment(self, k: int, central: bool = False, standardized: bool = False) -> float:
+    def moment(
+        self, k: int, central: bool = False, standardized: bool = False
+    ) -> float:
         """Compute the *k*-th moment in the currently active space.
 
         Parameters
@@ -1646,7 +1744,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         """
         self._ensure_fitted()
         if self._K == 1:
-            return self._components[0].moment(k, central=central, standardized=standardized)
+            return self._components[0].moment(
+                k, central=central, standardized=standardized
+            )
         if isinstance(k, bool) or int(k) != k or k < 0:
             raise ValueError(f"k must be a non-negative integer, got {k!r}")
         k = int(k)
@@ -1664,7 +1764,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         std = float(stats["std"])
         if not (std > 0.0):
             raise RuntimeError("Standardized moment is undefined because std <= 0.")
-        return float(cm / (std ** k))
+        return float(cm / (std**k))
 
     def cumulant(self, k: int) -> float:
         """Return the *k*-th cumulant in the currently active space.
@@ -1819,9 +1919,14 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
     # Transform / copy / serialization
     # ------------------------------------------------------------------
 
-    def transform(self, *, mu: float | None = None, sigma: float | None = None,
-                  pullback: bool,
-                  inplace: bool = True) -> "Distribution":
+    def transform(
+        self,
+        *,
+        mu: float | None = None,
+        sigma: float | None = None,
+        pullback: bool,
+        inplace: bool = True,
+    ) -> "Distribution":
         """Apply an affine location-scale transformation to every component.
 
         An exact change of variables, not a refit: the PDF, CDF, PPF and
@@ -1871,7 +1976,6 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             target._spectral_cache_valid = True
         return target
 
-
     @property
     def data(self):
         """A deep copy of the structured fitted state.
@@ -1887,8 +1991,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         bm = None
         if self._mode_cache is not None and "base" in self._mode_cache:
             bm = self._mode_cache["base"]
-        return _pack_mixture_struct(self._weights, self._default, comp_states,
-                                    base_modes=bm)
+        return _pack_mixture_struct(
+            self._weights, self._default, comp_states, base_modes=bm
+        )
 
     def load(self, state) -> "Distribution":
         """Load a previously saved fitted state.
@@ -1925,9 +2030,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
                     "finite non-negative weight per component, summing to one"
                 )
             if str(default_space) not in ("base", "exp"):
-                raise ValueError(
-                    "mixture state default space must be 'base' or 'exp'"
-                )
+                raise ValueError("mixture state default space must be 'base' or 'exp'")
             components = [_Component(cs) for cs in comp_states]
             components, weights = _sort_components_by_mode(components, weights)
             target._components = components
@@ -1999,8 +2102,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         """
         return comp.base if self._default == "base" else comp.exp
 
-
     def _ensure_fitted(self):
         """Raise ``RuntimeError`` if the instance has no fitted data."""
         if not self.is_fitted:
-            raise RuntimeError("Distribution is not fitted; call .fit(...) or .load(...).")
+            raise RuntimeError(
+                "Distribution is not fitted; call .fit(...) or .load(...)."
+            )

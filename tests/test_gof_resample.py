@@ -175,14 +175,20 @@ def test_bootstrap_curves_resamples_rows_with_replacement():
         return np.array([float(indices.mean())])
 
     result = bootstrap_curves(
-        evaluate, 40, 1, n_resamples=25, level=0.9,
+        evaluate,
+        40,
+        1,
+        n_resamples=25,
+        level=0.9,
         rng=np.random.default_rng(18),
     )
     assert result["n_resamples"] == 25
     assert result["n_failed"] == 0
     assert all(idx.size == 40 for idx in seen)
     assert all(idx.min() >= 0 and idx.max() < 40 for idx in seen)
-    assert any(np.unique(idx).size < 40 for idx in seen), "draws must be with replacement"
+    assert any(np.unique(idx).size < 40 for idx in seen), (
+        "draws must be with replacement"
+    )
     assert result["lower"] <= result["upper"]
 
 
@@ -209,7 +215,11 @@ def test_bootstrap_curves_counts_declined_and_non_finite_replicates():
         return np.array([1.0])
 
     result = bootstrap_curves(
-        evaluate, 10, 1, n_resamples=20, level=0.9,
+        evaluate,
+        10,
+        1,
+        n_resamples=20,
+        level=0.9,
         rng=np.random.default_rng(20),
     )
     assert result["n_failed"] == 2
@@ -222,7 +232,11 @@ def test_bootstrap_curves_rejects_wrong_width_replicates():
 
     with pytest.raises(RuntimeError, match="every bootstrap replicate failed"):
         bootstrap_curves(
-            evaluate, 10, 2, n_resamples=4, level=0.9,
+            evaluate,
+            10,
+            2,
+            n_resamples=4,
+            level=0.9,
             rng=np.random.default_rng(21),
         )
 
@@ -240,7 +254,11 @@ def test_bootstrap_curves_enforces_the_failure_budget():
     assert allowed < (1.0 - BOOTSTRAP_MAX_FAILURE_FRACTION) * n_resamples
     with pytest.raises(RuntimeError, match="above the tolerated fraction"):
         bootstrap_curves(
-            evaluate, 10, 1, n_resamples=n_resamples, level=0.9,
+            evaluate,
+            10,
+            1,
+            n_resamples=n_resamples,
+            level=0.9,
             rng=np.random.default_rng(22),
         )
 
@@ -248,7 +266,11 @@ def test_bootstrap_curves_enforces_the_failure_budget():
 def test_bootstrap_curves_raises_when_every_replicate_fails():
     with pytest.raises(RuntimeError, match="too fragile under resampling"):
         bootstrap_curves(
-            lambda indices: None, 10, 1, n_resamples=6, level=0.9,
+            lambda indices: None,
+            10,
+            1,
+            n_resamples=6,
+            level=0.9,
             rng=np.random.default_rng(23),
         )
 
@@ -257,8 +279,12 @@ def test_bootstrap_curves_raises_when_every_replicate_fails():
 def test_bootstrap_curves_rejects_degenerate_shapes(rows, points):
     with pytest.raises(ValueError):
         bootstrap_curves(
-            lambda indices: np.array([1.0]), rows, points,
-            n_resamples=2, level=0.9, rng=np.random.default_rng(24),
+            lambda indices: np.array([1.0]),
+            rows,
+            points,
+            n_resamples=2,
+            level=0.9,
+            rng=np.random.default_rng(24),
         )
 
 
@@ -268,7 +294,9 @@ def test_simulated_statistics_returns_flat_finite_draws():
     assert draws.ndim == 1
     assert n_failed == 2
     assert n_failed <= BOOTSTRAP_MAX_FAILURE_FRACTION * 12
-    np.testing.assert_allclose(draws, [1.0, 2.0, 4.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0])
+    np.testing.assert_allclose(
+        draws, [1.0, 2.0, 4.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+    )
 
 
 def test_simulated_statistics_propagates_the_failure_budget():

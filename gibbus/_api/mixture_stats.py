@@ -78,11 +78,14 @@ class _MixtureAnalyticsMixin:
         kk = int(k)
         if kk == 0:
             return 0.0
-        logs = np.array([
-            np.log(float(w)) + comp.exp._log_raw_moment(kk)
-            for w, comp in zip(self._weights, self._components, strict=True)
-            if w > 0.0
-        ], dtype=np.float64)
+        logs = np.array(
+            [
+                np.log(float(w)) + comp.exp._log_raw_moment(kk)
+                for w, comp in zip(self._weights, self._components, strict=True)
+                if w > 0.0
+            ],
+            dtype=np.float64,
+        )
         if logs.size == 0:
             raise RuntimeError("mixture has no positive-weight components")
         m = float(np.max(logs))
@@ -110,11 +113,25 @@ class _MixtureAnalyticsMixin:
                 continue
             view = comp.exp
             view._ensure_q_cache()
-            (base_support, q_poly, boundary_amplitudes, window,
-             mu_eff, sigma_eff, _terms) = view._q_cache
+            (
+                base_support,
+                q_poly,
+                boundary_amplitudes,
+                window,
+                mu_eff,
+                sigma_eff,
+                _terms,
+            ) = view._q_cache
             total += float(weight) * _pf._relative_centered_moment_exp(
-                base_support, q_poly, boundary_amplitudes, window,
-                mu_eff, sigma_eff, float(log_mean), int(k))
+                base_support,
+                q_poly,
+                boundary_amplitudes,
+                window,
+                mu_eff,
+                sigma_eff,
+                float(log_mean),
+                int(k),
+            )
         return float(total)
 
     def _ensure_exp_mixture_stats(self):
@@ -236,7 +253,7 @@ class _MixtureAnalyticsMixin:
         float or numpy.ndarray
         """
         x_arr = np.asarray(x, dtype=np.float64)
-        scalar = (x_arr.ndim == 0)
+        scalar = x_arr.ndim == 0
         x_arr = np.atleast_1d(x_arr)
         K = self._K
         R = x_arr.shape[0]
@@ -260,7 +277,8 @@ class _MixtureAnalyticsMixin:
         for j in range(K):
             for m in range(1, n + 1):
                 ell_jets[j, m, :] = -np.asarray(
-                    self._components[j].base.neg_log(x_arr, m), dtype=np.float64)
+                    self._components[j].base.neg_log(x_arr, m), dtype=np.float64
+                )
         all_derivs = _neg_log_mix_derivs_batch(np.ascontiguousarray(ell_jets), n)
         out = all_derivs[n]
         return out.item() if scalar else out
@@ -306,7 +324,9 @@ class _MixtureAnalyticsMixin:
             logs[j] = log_w[j] + comp.base._exact_tail_log_masses(
                 xs, float(endpoint), upper=bool(upper)
             )
-        return -np.asarray(_neg_logsumexp_batch(np.ascontiguousarray(logs)), dtype=np.float64)
+        return -np.asarray(
+            _neg_logsumexp_batch(np.ascontiguousarray(logs)), dtype=np.float64
+        )
 
     def _mix_exp_potential(self, y, n):
         """Evaluate the mixture exp-space potential or its *n*-th derivative.
@@ -381,13 +401,27 @@ class _MixtureAnalyticsMixin:
             mu_eff, sigma_eff = comp._mu_sigma_eff()
             z_support, kernel_amps = comp._internal_model_geometry()
             lo, hi = map(float, comp.base.support)
-            parts.append((
-                comp._data["q_poly"], float(z_support[0]), float(z_support[1]),
-                float(kernel_amps[0]), float(kernel_amps[1]), 0.0, float(mu_eff),
-                float(sigma_eff), abs(float(sigma_eff)), float(w), lo, hi,
-            ))
+            parts.append(
+                (
+                    comp._data["q_poly"],
+                    float(z_support[0]),
+                    float(z_support[1]),
+                    float(kernel_amps[0]),
+                    float(kernel_amps[1]),
+                    0.0,
+                    float(mu_eff),
+                    float(sigma_eff),
+                    abs(float(sigma_eff)),
+                    float(w),
+                    lo,
+                    hi,
+                )
+            )
         cdf_rep = SpectralCDF(
-            support, density=density_spec(parts, view=True), mode=mode, std=std,
+            support,
+            density=density_spec(parts, view=True),
+            mode=mode,
+            std=std,
         )
         try:
             ppf_rep = SpectralPPF(cdf_rep)
@@ -396,8 +430,7 @@ class _MixtureAnalyticsMixin:
             # an inverse that will not certify monotone must not take the
             # mixture density with it.  Fall back to exact bisection of the
             # spectral CDF, which is slower per query but correct.
-            _reraise_if_debug(exc, "mixture spectral PPF construction",
-                              routine=True)
+            _reraise_if_debug(exc, "mixture spectral PPF construction", routine=True)
             ppf_rep = None
 
         self._mix_spectral_cdf_rep = cdf_rep
@@ -406,6 +439,7 @@ class _MixtureAnalyticsMixin:
         if ppf_rep is not None:
             self._mix_base_ppf = ppf_rep.ppf_cython
         else:
+
             def _bisect_ppf(p, _cdf=cdf_rep):
                 """Quantiles by monotone bisection of the spectral CDF.
 
@@ -431,8 +465,7 @@ class _MixtureAnalyticsMixin:
                     below = np.asarray(_cdf.cdf_z(mid), dtype=np.float64) < flat[active]
                     lo[active] = np.where(below, mid, lo[active])
                     hi[active] = np.where(below, hi[active], mid)
-                    active = active[
-                        (hi[active] - lo[active]) > PPF_BISECT_Z_TOL]
+                    active = active[(hi[active] - lo[active]) > PPF_BISECT_Z_TOL]
                 z = 0.5 * (lo + hi)
                 z = np.where(flat <= 0.0, -1.0, np.where(flat >= 1.0, 1.0, z))
                 out = np.asarray(_cdf.map.x_from_z(z), dtype=np.float64)

@@ -30,10 +30,14 @@ def test_single_component_centered_moments_are_translation_invariant():
 
 def test_mixture_centered_moments_keep_common_translation_separate():
     rng = np.random.default_rng(1)
-    data = np.ascontiguousarray(np.concatenate([
-        rng.normal(-3.0, 1.0, 1500),
-        rng.normal(3.0, 1.0, 1500),
-    ]))
+    data = np.ascontiguousarray(
+        np.concatenate(
+            [
+                rng.normal(-3.0, 1.0, 1500),
+                rng.normal(3.0, 1.0, 1500),
+            ]
+        )
+    )
     base = Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
     moved = base.transform(mu=1e12, sigma=1.0, pullback=False, inplace=False)
 
@@ -57,22 +61,21 @@ def test_narrow_exp_space_uses_direct_centered_relative_moments():
     assert narrow.exp.moment(4, standardized=True) == narrow.exp.kurt
 
 
-
 def test_narrow_exp_mixture_uses_direct_centered_relative_moments():
     rng = np.random.default_rng(7)
-    data = np.ascontiguousarray(np.concatenate([
-        rng.normal(-2.0, 0.7, 1800),
-        rng.normal(2.5, 1.0, 1200),
-    ]))
-    base = Distribution().fit(
-        data, n_components=2, support=(-np.inf, np.inf), rng=0
+    data = np.ascontiguousarray(
+        np.concatenate(
+            [
+                rng.normal(-2.0, 0.7, 1800),
+                rng.normal(2.5, 1.0, 1200),
+            ]
+        )
     )
+    base = Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
     base_skew = base.skew
     base_kurt = base.kurt
 
-    narrow = base.transform(
-        mu=30.0, sigma=9e-8, pullback=False, inplace=False
-    )
+    narrow = base.transform(mu=30.0, sigma=9e-8, pullback=False, inplace=False)
     narrow.set_default("exp")
 
     # exp(mu + sigma X) is affine in X to first order as sigma -> 0, so
@@ -82,12 +85,17 @@ def test_narrow_exp_mixture_uses_direct_centered_relative_moments():
     assert narrow.moment(3, standardized=True) == narrow.skew
     assert narrow.moment(4, standardized=True) == narrow.kurt
 
+
 def test_exp_mixture_shape_survives_dimensional_overflow():
     rng = np.random.default_rng(2)
-    data = np.ascontiguousarray(np.concatenate([
-        rng.normal(-1.0, 0.6, 1200),
-        rng.normal(1.0, 0.9, 800),
-    ]))
+    data = np.ascontiguousarray(
+        np.concatenate(
+            [
+                rng.normal(-1.0, 0.6, 1200),
+                rng.normal(1.0, 0.9, 800),
+            ]
+        )
+    )
     base = Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
     base.set_default("exp")
     base_skew = base.skew

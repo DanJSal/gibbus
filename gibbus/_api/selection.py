@@ -43,9 +43,9 @@ from .._fit.natural_objective import (
 )
 
 
-def select_n_components(*, S, samples_1d, supp, k_modes,
-                                effective_k_max, gen, obs_w, verb,
-                                subsample="auto"):
+def select_n_components(
+    *, S, samples_1d, supp, k_modes, effective_k_max, gen, obs_w, verb, subsample="auto"
+):
     """Choose the component count by BIC.
 
     The sweep searches a KDE-centered range of candidate counts over validation
@@ -92,9 +92,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
     """
     lc_k_lo = max(int(k_modes) - 2, 1)
     n_val = int(S.shape[0])
-    lc_k_hi = min(
-        int(effective_k_max), 2 * int(k_modes), AUTO_LC_SWEEP_MAX_K
-    )
+    lc_k_hi = min(int(effective_k_max), 2 * int(k_modes), AUTO_LC_SWEEP_MAX_K)
     lc_k_hi = min(lc_k_hi, max(n_val // 50, 2))
     lc_k_hi = max(lc_k_hi, lc_k_lo)
     # The KDE proposal only centers the range.  When the best score sits on
@@ -108,8 +106,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
 
     log_n_val = float(np.log(n_val))
     val_degrees = tuple(
-        d for d in AUTO_LC_VALIDATION_DEGREES
-        if _is_poly_degree_admissible(d, supp)
+        d for d in AUTO_LC_VALIDATION_DEGREES if _is_poly_degree_admissible(d, supp)
     ) or (AUTO_LC_VALIDATION_DEGREES[0],)
 
     if subsample is False or subsample == 0:
@@ -121,7 +118,8 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
             )
         sub_m = (
             max(AUTO_LC_SUBSAMPLE_SIZE, lc_k_hi * AUTO_LC_SUBSAMPLE_PER_K)
-            if n_val > AUTO_LC_SUBSAMPLE_MIN_N else n_val
+            if n_val > AUTO_LC_SUBSAMPLE_MIN_N
+            else n_val
         )
     else:
         sub_m = int(subsample)
@@ -150,7 +148,8 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
     if verb >= 1:
         scope = (
             f"on {sub_m}/{n_val} stratified subsample"
-            if sub_idx is not None else f"on all {n_val} samples"
+            if sub_idx is not None
+            else f"on all {n_val} samples"
         )
         print(
             f"  natural LC BIC sweep: K={lc_k_lo}..{lc_k_hi} "
@@ -197,17 +196,20 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
                         lc_degree = int(degree)
                 if lc_degree is None:
                     raise (
-                        degree_exc if degree_exc is not None
+                        degree_exc
+                        if degree_exc is not None
                         else RuntimeError("natural LC BIC sweep K=1 failed")
                     )
 
-                lc_scores.append({
-                    "n_components": 1,
-                    "degree": lc_degree,
-                    "initializer": None,
-                    "bic": float(lc_bic),
-                    "status": "ok",
-                })
+                lc_scores.append(
+                    {
+                        "n_components": 1,
+                        "degree": lc_degree,
+                        "initializer": None,
+                        "bic": float(lc_bic),
+                        "status": "ok",
+                    }
+                )
                 if verb >= 1:
                     print(f"    natural LC(K=1,d={lc_degree})  BIC={lc_bic:.2f}")
                 if lc_bic < best_lc_bic:
@@ -219,9 +221,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
                 else:
                     lc_rising += 1
             else:
-                with _maybe_suppress(
-                    True, SUPPRESSED_WARNINGS
-                ):
+                with _maybe_suppress(True, SUPPRESSED_WARNINGS):
                     candidates = _initial_responsibility_candidates(
                         samples_1d, ck, gen, weights=obs_w
                     )
@@ -237,9 +237,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
                     if sub_idx is None:
                         init_resp_fit = np.asarray(init_resp, dtype=np.float64)
                     else:
-                        init_resp_fit = np.asarray(
-                            init_resp[sub_idx], dtype=np.float64
-                        )
+                        init_resp_fit = np.asarray(init_resp[sub_idx], dtype=np.float64)
                         init_resp_fit = init_resp_fit / init_resp_fit.sum(
                             axis=1, keepdims=True
                         )
@@ -278,10 +276,17 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
                         ):
                             degenerate = True
                             continue
-                        if is_interval and _interval_identifiability_diagnostic(
-                            fit_S, fitted.components, fitted.log_likelihood, supp,
-                            obs_weights=natural_w,
-                        ) is not None:
+                        if (
+                            is_interval
+                            and _interval_identifiability_diagnostic(
+                                fit_S,
+                                fitted.components,
+                                fitted.log_likelihood,
+                                supp,
+                                obs_weights=natural_w,
+                            )
+                            is not None
+                        ):
                             # A saturated richer censored candidate has no
                             # identified component decomposition and is not a
                             # valid BIC competitor.
@@ -303,13 +308,15 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
 
                 if lc_degree is None:
                     if degenerate:
-                        lc_scores.append({
-                            "n_components": int(ck),
-                            "degree": None,
-                            "initializer": None,
-                            "bic": None,
-                            "status": "degenerate_component",
-                        })
+                        lc_scores.append(
+                            {
+                                "n_components": int(ck),
+                                "degree": None,
+                                "initializer": None,
+                                "bic": None,
+                                "status": "degenerate_component",
+                            }
+                        )
                         if verb >= 1:
                             print(
                                 f"    natural LC(K={ck}) rejected: component "
@@ -317,17 +324,20 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
                             )
                         continue
                     raise (
-                        degree_exc if degree_exc is not None
+                        degree_exc
+                        if degree_exc is not None
                         else RuntimeError(f"natural LC BIC sweep K={ck} failed")
                     )
 
-                lc_scores.append({
-                    "n_components": int(ck),
-                    "degree": lc_degree,
-                    "initializer": lc_initializer,
-                    "bic": float(lc_bic),
-                    "status": "ok",
-                })
+                lc_scores.append(
+                    {
+                        "n_components": int(ck),
+                        "degree": lc_degree,
+                        "initializer": lc_initializer,
+                        "bic": float(lc_bic),
+                        "status": "ok",
+                    }
+                )
                 if verb >= 1:
                     print(
                         f"    natural LC(K={ck},d={lc_degree},"
@@ -345,13 +355,15 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
             _reraise_if_debug(
                 exc, f"natural LC BIC sweep candidate K={ck}", routine=True
             )
-            lc_scores.append({
-                "n_components": int(ck),
-                "degree": None,
-                "initializer": None,
-                "bic": None,
-                "status": f"failed:{type(exc).__name__}",
-            })
+            lc_scores.append(
+                {
+                    "n_components": int(ck),
+                    "degree": None,
+                    "initializer": None,
+                    "bic": None,
+                    "status": f"failed:{type(exc).__name__}",
+                }
+            )
             if verb >= 1:
                 print(f"    natural LC(K={ck}) failed -- skipping")
             lc_rising += 1
@@ -376,9 +388,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
         }
         if k_modes <= 1:
             return 1, None, None, diagnostics
-        with _maybe_suppress(
-            True, SUPPRESSED_WARNINGS
-        ):
+        with _maybe_suppress(True, SUPPRESSED_WARNINGS):
             fb_resp, fb_wts = _init_responsibilities(
                 samples_1d, k_modes, gen, weights=obs_w
             )
@@ -395,10 +405,7 @@ def select_n_components(*, S, samples_1d, supp, k_modes,
         "scores": tuple(lc_scores),
     }
     if verb >= 1:
-        print(
-            f"  -> natural LC sweep selected K={best_lc_k} "
-            f"(BIC={best_lc_bic:.2f})"
-        )
+        print(f"  -> natural LC sweep selected K={best_lc_k} (BIC={best_lc_bic:.2f})")
     if best_lc_k == 1:
         return 1, None, None, diagnostics
     return best_lc_k, best_lc_resp, best_lc_wts, diagnostics

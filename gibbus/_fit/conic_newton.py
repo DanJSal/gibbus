@@ -128,8 +128,12 @@ def _certify(layout, params, /):
     lower, upper = layout.support
     amplitudes = candidate.boundary_amplitudes
     code = _curvature_certificate.certify_full_curvature(
-        candidate.q_d2, float(lower), float(upper), float(amplitudes[0]),
-        float(amplitudes[1]), 1e-12,
+        candidate.q_d2,
+        float(lower),
+        float(upper),
+        float(amplitudes[0]),
+        float(amplitudes[1]),
+        1e-12,
     )
     if code in _CERTIFICATE_STATUS:
         return _SeparationResult(
@@ -232,7 +236,9 @@ def _infeasible_start_metric(objective, representation, params, blocks, /):
         if blocks is not None and [np.shape(q) for q in blocks] == shapes:
             image = representation.b_matrix @ params
             residual = representation.residual(params, blocks)
-            if residual <= 1e-10 * max(1.0, float(np.max(np.abs(image), initial=0.0))) and all(
+            if residual <= 1e-10 * max(
+                1.0, float(np.max(np.abs(image), initial=0.0))
+            ) and all(
                 float(np.linalg.eigvalsh(0.5 * (q + q.T))[0]) >= 0.0 for q in blocks
             ):
                 return None
@@ -573,11 +579,17 @@ def _newton_on_representation(
                 # initialized statistics; do not restart Newton in Python.
                 initialized = objective(params)
                 return _newton_on_representation(
-                    objective, representation, params, blocks, initialized,
-                    options, min_steps,
+                    objective,
+                    representation,
+                    params,
+                    blocks,
+                    initialized,
+                    options,
+                    min_steps,
                 )
             if evaluation is None:
                 from .natural_objective import _NaturalIntervalEvaluation
+
                 evaluation_type = _NaturalIntervalEvaluation
             else:
                 evaluation_type = type(evaluation)
@@ -723,8 +735,15 @@ def _newton_on_representation(
         min_steps,
     )
     (
-        status, theta, packed_blocks, dual, final, iterations, evaluations,
-        sub_iterations, bound,
+        status,
+        theta,
+        packed_blocks,
+        dual,
+        final,
+        iterations,
+        evaluations,
+        sub_iterations,
+        bound,
     ) = compiled
     return _NewtonRun(
         status=status,
@@ -737,6 +756,7 @@ def _newton_on_representation(
         subproblem_iterations=int(sub_iterations),
         decrease_bound=float(bound),
     )
+
 
 def _amplitude_release_gain(layout, params, gradient, side, free_indices, /):
     """Reduced gradient of a boundary amplitude fixed at zero, from contacts.
@@ -816,7 +836,8 @@ def _amplitude_release_gain(layout, params, gradient, side, free_indices, /):
         weights, residual = np.zeros(0), float(np.linalg.norm(target))
     index = layout.lower_a_index if side == "lower" else layout.upper_a_index
     gain = float(g[index]) - sum(
-        weight * derivative(z, index) for weight, z in zip(weights, contacts, strict=True)
+        weight * derivative(z, index)
+        for weight, z in zip(weights, contacts, strict=True)
     )
     return gain, residual / max(1.0, float(np.linalg.norm(target)))
 
@@ -1058,9 +1079,12 @@ def _solve_natural_conic(
             # Raising a zero amplitude only relaxes the cone: already feasible.
             release_run = solve_face(effective, release_active, start, None, None, 1)
             scale = max(1.0, abs(float(run.evaluation.nll)))
-            if release_run is not None and release_run.status in _CONVERGED and float(
-                release_run.evaluation.nll
-            ) < float(run.evaluation.nll) - options.tolerance * scale:
+            if (
+                release_run is not None
+                and release_run.status in _CONVERGED
+                and float(release_run.evaluation.nll)
+                < float(run.evaluation.nll) - options.tolerance * scale
+            ):
                 run, active, changed = release_run, release_active, True
                 released.add(side)
         curvature = run.params[layout.curvature_slice]
