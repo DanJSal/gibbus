@@ -1,0 +1,24 @@
+# Cython-generated sources and headers — regenerated at build time
+gibbus/**/*.c
+gibbus/**/*.h
+gibbus/*.c
+gibbus/*.h
+
+# Compiled extensions
+*.so
+*.pyd
+*.o
+
+# Build artefacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

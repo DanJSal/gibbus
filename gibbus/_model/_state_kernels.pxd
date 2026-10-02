@@ -1,0 +1,8 @@
+cdef int _state_numerics_c(
+    const double* support, const double* q_poly, Py_ssize_t nq, const double* amplitudes,
+    const double* data_bounds, bint featL, bint featU, int n_power, int n_log, int F,
+    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t n,
+    Py_ssize_t width, const double* controls, double epsabs, double epsrel, int limit,
+    double* work, double* geometry, double* points, int* npts, double* shifted_z,
+    double* moments, double* means, double* fisher,
+) noexcept nogil

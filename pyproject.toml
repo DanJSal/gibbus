@@ -1,0 +1,61 @@
+[build-system]
+requires = [
+    "setuptools>=77",  # PEP 639 `license = "MIT"` / `license-files`
+    "wheel",
+    "Cython>=3.0",
+    "numpy>=1.23",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gibbus"
+version = "0.1.0"
+description = "Flexible maximum-likelihood modeling of smooth univariate log-concave distributions"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Daniel Salib"},
+]
+maintainers = [
+    {name = "Daniel Salib"},
+]
+
+
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Cython",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.9",
+]
+
+[project.urls]
+Homepage = "https://github.com/DanJSal/gibbus"
+Repository = "https://github.com/DanJSal/gibbus"
+Issues = "https://github.com/DanJSal/gibbus/issues"
+Documentation = "https://github.com/DanJSal/gibbus#readme"
+
+
+[project.optional-dependencies]
+test = ["pytest>=7.0", "pytest-cov"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["gibbus*"]
+
+[tool.setuptools.package-data]
+"gibbus" = ["py.typed"]
+"*" = ["*.pyx"]

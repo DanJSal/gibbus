@@ -1,0 +1,11 @@
+include README.md
+include SECURITY.md
+include LICENSE
+recursive-include gibbus *.py
+recursive-include gibbus *.pyx
+recursive-include gibbus *.pxd
+include gibbus/py.typed
+recursive-exclude gibbus *.c
+recursive-exclude gibbus *.h
+
+recursive-include tests *.py *.npz
