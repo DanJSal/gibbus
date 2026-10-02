@@ -131,7 +131,9 @@ cdef inline double _q2(_QCtx* ctx, double x) noexcept nogil:
     return out
 
 
-cdef inline double _safe(double x, double L, double U, bint finL, bint finU, double eps) noexcept nogil:
+cdef inline double _safe(
+    double x, double L, double U, bint finL, bint finU, double eps
+) noexcept nogil:
     if finL:
         if x < L + eps:
             x = L + eps
@@ -391,7 +393,9 @@ cdef double _valley_solve(
             elif (gn < gx) or (fabs(xn - x) < newt_tol):
                 break
             lmbda *= backtrack_reduce
-            xn = _safe(x - lmbda * step, L, U, finL, finU, epsL if epsL > epsU else epsU)
+            xn = _safe(
+                x - lmbda * step, L, U, finL, finU, epsL if epsL > epsU else epsU
+            )
             gn = fabs(_f(ctx, xn, kind, param))
 
         x = xn
@@ -405,7 +409,9 @@ cdef double _valley_solve(
         return x
 
     eps = newt_tol
-    s = boundary_eps_mult * (1.0 + (0.0 if not finL else fabs(L)) + (0.0 if not finU else fabs(U)))
+    s = boundary_eps_mult * (
+        1.0 + (0.0 if not finL else fabs(L)) + (0.0 if not finU else fabs(U))
+    )
     if s > eps:
         eps = s
 
@@ -490,10 +496,18 @@ cpdef double _valley_q1_shift(
     ValueError
         If *q_poly* is empty.
     """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] bnd = np.ascontiguousarray(bounds, dtype=np.float64).reshape(2)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] sup = np.ascontiguousarray(support, dtype=np.float64).reshape(2)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] qp = np.ascontiguousarray(q_poly, dtype=np.float64).ravel()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] qb = np.ascontiguousarray(boundary_amplitudes, dtype=np.float64).reshape(2)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] bnd = np.ascontiguousarray(
+        bounds, dtype=np.float64
+    ).reshape(2)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] sup = np.ascontiguousarray(
+        support, dtype=np.float64
+    ).reshape(2)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] qp = np.ascontiguousarray(
+        q_poly, dtype=np.float64
+    ).ravel()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] qb = np.ascontiguousarray(
+        boundary_amplitudes, dtype=np.float64
+    ).reshape(2)
     if qp.size < 1:
         raise ValueError("q_poly must be non-empty")
     cdef double c_shift = float(shift)
@@ -508,8 +522,12 @@ cpdef double _valley_q1_shift(
     cdef int c_backtrack_max_iters = int(backtrack_max_iters)
     cdef double c_backtrack_reduce = float(backtrack_reduce)
     cdef Py_ssize_t nq = qp.shape[0]
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] d1 = np.empty(max(nq - 1, 0), dtype=np.float64)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] d2 = np.empty(max(nq - 2, 0), dtype=np.float64)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] d1 = np.empty(
+        max(nq - 1, 0), dtype=np.float64
+    )
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] d2 = np.empty(
+        max(nq - 2, 0), dtype=np.float64
+    )
     cdef Py_ssize_t i
     for i in range(nq - 1):
         d1[i] = (i + 1) * qp[i + 1]
@@ -547,8 +565,17 @@ cpdef double _valley_q1_shift(
             c_backtrack_max_iters, c_backtrack_reduce,
         )
     return out
-cdef void _ctx_setup(_QCtx* ctx, double L, double U, double aL, double aU,
-                     const double* q, Py_ssize_t nq, double* d1, double* d2) noexcept nogil:
+cdef void _ctx_setup(
+    _QCtx* ctx,
+    double L,
+    double U,
+    double aL,
+    double aU,
+    const double* q,
+    Py_ssize_t nq,
+    double* d1,
+    double* d2,
+) noexcept nogil:
     """Fill a potential context; ``d1``/``d2`` receive the derivative coefficients."""
     cdef Py_ssize_t i
     for i in range(nq - 1):
@@ -731,10 +758,18 @@ cpdef tuple _q_window_and_mode(
     ValueError
         If *q_poly* is empty.
     """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] sup = np.ascontiguousarray(support, dtype=np.float64).reshape(2)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] qp = np.ascontiguousarray(q_poly, dtype=np.float64).ravel()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] qb = np.ascontiguousarray(boundary_amplitudes, dtype=np.float64).reshape(2)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] xb = np.ascontiguousarray(x_data_bounds, dtype=np.float64).reshape(2)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] sup = np.ascontiguousarray(
+        support, dtype=np.float64
+    ).reshape(2)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] qp = np.ascontiguousarray(
+        q_poly, dtype=np.float64
+    ).ravel()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] qb = np.ascontiguousarray(
+        boundary_amplitudes, dtype=np.float64
+    ).reshape(2)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] xb = np.ascontiguousarray(
+        x_data_bounds, dtype=np.float64
+    ).reshape(2)
     if qp.size < 1:
         raise ValueError("q_poly must be non-empty")
     cdef double ctl[11]
@@ -790,9 +825,15 @@ cpdef cnp.ndarray _pdf_vec(
     Horner polynomial evaluation, boundary log terms, exponentiation,
     and support masking.  Avoids all intermediate array allocations.
     """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] x = np.ascontiguousarray(x_arr, dtype=np.float64).ravel()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] poly = np.ascontiguousarray(q_poly_arr, dtype=np.float64).ravel()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] qb = np.ascontiguousarray(boundary_amplitudes_arr, dtype=np.float64).ravel()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] x = np.ascontiguousarray(
+        x_arr, dtype=np.float64
+    ).ravel()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] poly = np.ascontiguousarray(
+        q_poly_arr, dtype=np.float64
+    ).ravel()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] qb = np.ascontiguousarray(
+        boundary_amplitudes_arr, dtype=np.float64
+    ).ravel()
     cdef Py_ssize_t N = x.shape[0]
     cdef Py_ssize_t npoly = poly.shape[0]
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out = np.empty(N, dtype=np.float64)
@@ -862,8 +903,12 @@ cpdef cnp.ndarray _polyval_vec(
     Replacement for numpy.polynomial.polynomial.polyval when called
     on a 1-D array with a small coefficient vector.
     """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] x = np.ascontiguousarray(x_arr, dtype=np.float64).ravel()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] poly = np.ascontiguousarray(poly_arr, dtype=np.float64).ravel()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] x = np.ascontiguousarray(
+        x_arr, dtype=np.float64
+    ).ravel()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] poly = np.ascontiguousarray(
+        poly_arr, dtype=np.float64
+    ).ravel()
     cdef Py_ssize_t N = x.shape[0]
     cdef Py_ssize_t npoly = poly.shape[0]
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out = np.empty(N, dtype=np.float64)
@@ -948,8 +993,16 @@ cdef extern from * nogil:
         for (int i = 0; i < n; ++i) out[i] = a[i] * b[i];
     }
     """
-    void gibbus_sn_feature(const double* wk, const double* wg, double* v, const double* z,
-                           int n, int advance, double* out_k, double* out_g)
+    void gibbus_sn_feature(
+        const double* wk,
+        const double* wg,
+        double* v,
+        const double* z,
+        int n,
+        int advance,
+        double* out_k,
+        double* out_g,
+    )
     void gibbus_sn_product(const double* a, const double* b, double* out, int n)
 
 
@@ -1307,9 +1360,19 @@ def state_numerics(
     cdef Py_ssize_t nq = q_poly.shape[0]
     cdef Py_ssize_t n = kinds.shape[0]
     cdef Py_ssize_t width = coefficients.shape[1] if n > 0 else 1
-    if nq < 1 or support.shape[0] != 2 or amplitudes.shape[0] != 2 or data_bounds.shape[0] != 2:
+    if (
+        nq < 1
+        or support.shape[0] != 2
+        or amplitudes.shape[0] != 2
+        or data_bounds.shape[0] != 2
+    ):
         raise ValueError("invalid state geometry")
-    if controls.shape[0] != 11 or limit < 1 or n != lengths.shape[0] or n != coefficients.shape[0]:
+    if (
+        controls.shape[0] != 11
+        or limit < 1
+        or n != lengths.shape[0]
+        or n != coefficients.shape[0]
+    ):
         raise ValueError("invalid state numerics controls")
     cdef int n_power = <int>(2 * width - 1)
     cdef int n_log = <int>width
@@ -1322,7 +1385,9 @@ def state_numerics(
     cdef cnp.ndarray[cnp.float64_t, ndim=1] moments = np.zeros(F, dtype=np.float64)
     cdef cnp.ndarray[cnp.float64_t, ndim=1] means = np.zeros(n, dtype=np.float64)
     cdef cnp.ndarray[cnp.float64_t, ndim=2] fisher = np.zeros((n, n), dtype=np.float64)
-    cdef double* work = <double*>malloc((3 * nq + 2 * limit * F + 2 * limit + 8 * F) * sizeof(double))
+    cdef double* work = <double*>malloc(
+        (3 * nq + 2 * limit * F + 2 * limit + 8 * F) * sizeof(double)
+    )
     if work == NULL:
         raise MemoryError("state numerics allocation failed")
     cdef int status = 0, npts = 0
@@ -1345,12 +1410,33 @@ def state_numerics(
 
 
 cdef int _state_numerics_c(
-    const double* support, const double* q_poly, Py_ssize_t nq, const double* amplitudes,
-    const double* data_bounds, bint featL, bint featU, int n_power, int n_log, int F,
-    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t n,
-    Py_ssize_t width, const double* controls, double epsabs, double epsrel, int limit,
-    double* work, double* geometry, double* points, int* npts, double* shifted_z,
-    double* moments, double* means, double* fisher,
+    const double* support,
+    const double* q_poly,
+    Py_ssize_t nq,
+    const double* amplitudes,
+    const double* data_bounds,
+    bint featL,
+    bint featU,
+    int n_power,
+    int n_log,
+    int F,
+    const int* kinds,
+    const int* lengths,
+    const double* coefficients,
+    Py_ssize_t n,
+    Py_ssize_t width,
+    const double* controls,
+    double epsabs,
+    double epsrel,
+    int limit,
+    double* work,
+    double* geometry,
+    double* points,
+    int* npts,
+    double* shifted_z,
+    double* moments,
+    double* means,
+    double* fisher,
 ) noexcept nogil:
     cdef double L = support[0]
     cdef double U = support[1]
@@ -1391,7 +1477,9 @@ cdef int _state_numerics_c(
         &ctx, data_bounds[0], data_bounds[1], controls,
         &lower, &upper, &mode, &q_min, &q2_mode, &core_lower, &core_upper,
     )
-    if (not _finite(q_min)) and ((_finite(aL) and aL > 0.0) or (_finite(aU) and aU > 0.0)):
+    if (not _finite(q_min)) and (
+        (_finite(aL) and aL > 0.0) or (_finite(aU) and aU > 0.0)
+    ):
         span = fabs(mode)
         if span < 1.0:
             span = 1.0

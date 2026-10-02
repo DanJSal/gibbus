@@ -152,7 +152,11 @@ def chebyshev_lower_bound(object coeff, object matrix, int max_subdivide):
     if max_subdivide < 0:
         raise ValueError("max_subdivide must be >= 0")
     ncoeff = arr.size
-    if matrix_arr.ndim != 2 or matrix_arr.shape[0] != ncoeff or matrix_arr.shape[1] != ncoeff:
+    if (
+        matrix_arr.ndim != 2
+        or matrix_arr.shape[0] != ncoeff
+        or matrix_arr.shape[1] != ncoeff
+    ):
         raise ValueError("matrix must be a square matrix matching coeff")
     work = np.empty((4 + max_subdivide) * ncoeff, dtype=np.float64)
     depths = np.empty(max_subdivide + 1, dtype=np.intc)

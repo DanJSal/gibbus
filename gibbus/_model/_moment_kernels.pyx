@@ -91,9 +91,13 @@ cdef inline int _pm_node(
         jac = hi - lo
 
     if isfinite(support_lower) and z <= support_lower:
-        z = nextafter(support_lower, support_upper if isfinite(support_upper) else INFINITY)
+        z = nextafter(
+            support_lower, support_upper if isfinite(support_upper) else INFINITY
+        )
     if isfinite(support_upper) and z >= support_upper:
-        z = nextafter(support_upper, support_lower if isfinite(support_lower) else -INFINITY)
+        z = nextafter(
+            support_upper, support_lower if isfinite(support_lower) else -INFINITY
+        )
 
     qz = _pm_polyval(q, nq, z)
     if isfinite(support_lower) and isfinite(a_lower) and a_lower > 0.0:
@@ -161,7 +165,11 @@ cdef int _pm_gk15(
         return status
     for i in range(7):
         dt = half * _PM_XGK[i]
-        wg = _PM_WG[0] if i == 1 else (_PM_WG[1] if i == 3 else (_PM_WG[2] if i == 5 else 0.0))
+        wg = (
+            _PM_WG[0]
+            if i == 1
+            else (_PM_WG[1] if i == 3 else (_PM_WG[2] if i == 5 else 0.0))
+        )
         status = _pm_node(
             mid - dt, _PM_WGK[i], wg, transform, lo, hi,
             support_lower, support_upper, q, nq, a_lower, a_upper,
@@ -188,17 +196,28 @@ cdef inline void _pm_cleanup(
     double* total, double* total_err, double* left, double* right,
     double* err_left, double* err_right, double* tmp_g,
 ) noexcept nogil:
-    if vals != NULL: free(vals)
-    if errs != NULL: free(errs)
-    if bounds_a != NULL: free(bounds_a)
-    if bounds_b != NULL: free(bounds_b)
-    if total != NULL: free(total)
-    if total_err != NULL: free(total_err)
-    if left != NULL: free(left)
-    if right != NULL: free(right)
-    if err_left != NULL: free(err_left)
-    if err_right != NULL: free(err_right)
-    if tmp_g != NULL: free(tmp_g)
+    if vals != NULL:
+        free(vals)
+    if errs != NULL:
+        free(errs)
+    if bounds_a != NULL:
+        free(bounds_a)
+    if bounds_b != NULL:
+        free(bounds_b)
+    if total != NULL:
+        free(total)
+    if total_err != NULL:
+        free(total_err)
+    if left != NULL:
+        free(left)
+    if right != NULL:
+        free(right)
+    if err_left != NULL:
+        free(err_left)
+    if err_right != NULL:
+        free(err_right)
+    if tmp_g != NULL:
+        free(tmp_g)
 
 cdef int _pm_segment(
     double lo,
@@ -344,7 +363,12 @@ def power_moments(
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out
     cdef cnp.ndarray[cnp.float64_t, ndim=1] seg
     cdef cnp.ndarray[cnp.float64_t, ndim=1] edges
-    if q_poly.shape[0] < 1 or support.shape[0] != 2 or boundary_amplitudes.shape[0] != 2 or window.shape[0] != 2:
+    if (
+        q_poly.shape[0] < 1
+        or support.shape[0] != 2
+        or boundary_amplitudes.shape[0] != 2
+        or window.shape[0] != 2
+    ):
         raise ValueError("invalid power-moment geometry")
     if max_order < 0 or limit < 1 or epsabs < 0.0 or epsrel < 0.0:
         raise ValueError("invalid power-moment controls")

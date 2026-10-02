@@ -411,7 +411,12 @@ cdef class SpectralEvaluator:
 
             if deriv > 0.0 and not isinf(deriv) and not isnan(deriv):
                 candidate = u - f / deriv
-                if candidate <= lo or candidate >= hi or isinf(candidate) or isnan(candidate):
+                if (
+                    candidate <= lo
+                    or candidate >= hi
+                    or isinf(candidate)
+                    or isnan(candidate)
+                ):
                     candidate = 0.5 * (lo + hi)
             else:
                 candidate = 0.5 * (lo + hi)
@@ -456,7 +461,9 @@ cdef class SpectralEvaluator:
             return 1.0
 
         j = self._panel_index(z)
-        u = (2.0 * z - (self.breaks[j] + self.breaks[j + 1])) / (self.breaks[j + 1] - self.breaks[j])
+        u = (2.0 * z - (self.breaks[j] + self.breaks[j + 1])) / (
+            self.breaks[j + 1] - self.breaks[j]
+        )
         c = self.coeff + j * self.stride
         nc = self.ncoeff[j]
         if nc == 18:
@@ -504,13 +511,17 @@ cdef class SpectralEvaluator:
         z = self._z_from_x(x)
         return self._eval_z_one(z)
 
-    cdef void _eval_many(self, const double* x, double* out, Py_ssize_t n) noexcept nogil:
+    cdef void _eval_many(
+        self, const double* x, double* out, Py_ssize_t n
+    ) noexcept nogil:
         """Scalar-per-observation loop; the fallback for small arrays."""
         cdef Py_ssize_t i
         for i in range(n):
             out[i] = self._eval_one(x[i])
 
-    cdef inline bint _is_nondecreasing(self, const double* x, Py_ssize_t n) noexcept nogil:
+    cdef inline bint _is_nondecreasing(
+        self, const double* x, Py_ssize_t n
+    ) noexcept nogil:
         """Whether *x* is sorted ascending and NaN-free, so runs are contiguous."""
         cdef Py_ssize_t i
         cdef double prev, cur
@@ -526,7 +537,9 @@ cdef class SpectralEvaluator:
             prev = cur
         return True
 
-    cdef void _eval_many_runs(self, const double* x, double* out, Py_ssize_t n) noexcept nogil:
+    cdef void _eval_many_runs(
+        self, const double* x, double* out, Py_ssize_t n
+    ) noexcept nogil:
         """SIMD-oriented evaluator for one-panel or sorted inputs; no scatter."""
         cdef Py_ssize_t cap = 16384
         cdef double* u_buf = NULL
@@ -547,32 +560,65 @@ cdef class SpectralEvaluator:
         work1 = <double*> malloc(cap * sizeof(double))
         work2 = <double*> malloc(cap * sizeof(double))
         if u_buf == NULL or work0 == NULL or work1 == NULL or work2 == NULL:
-            if u_buf != NULL: free(u_buf)
-            if work0 != NULL: free(work0)
-            if work1 != NULL: free(work1)
-            if work2 != NULL: free(work2)
+            if u_buf != NULL:
+                free(u_buf)
+            if work0 != NULL:
+                free(work0)
+            if work1 != NULL:
+                free(work1)
+            if work2 != NULL:
+                free(work2)
             self._eval_many(x, out, n)
             return
 
         while i < n:
             xx = x[i]
             if isnan(xx):
-                out[i] = xx; i += 1; continue
+                out[i] = xx
+                i += 1
+                continue
             if self.kind == 0:
-                if xx <= self.L: out[i] = 0.0; i += 1; continue
-                if xx >= self.U: out[i] = 1.0; i += 1; continue
+                if xx <= self.L:
+                    out[i] = 0.0
+                    i += 1
+                    continue
+                if xx >= self.U:
+                    out[i] = 1.0
+                    i += 1
+                    continue
             elif self.kind == 1 or self.kind == 4:
-                if xx <= self.L: out[i] = 0.0; i += 1; continue
-                if isinf(xx) and xx > 0.0: out[i] = 1.0; i += 1; continue
+                if xx <= self.L:
+                    out[i] = 0.0
+                    i += 1
+                    continue
+                if isinf(xx) and xx > 0.0:
+                    out[i] = 1.0
+                    i += 1
+                    continue
             elif self.kind == 2 or self.kind == 5:
-                if xx >= self.U: out[i] = 1.0; i += 1; continue
-                if isinf(xx) and xx < 0.0: out[i] = 0.0; i += 1; continue
+                if xx >= self.U:
+                    out[i] = 1.0
+                    i += 1
+                    continue
+                if isinf(xx) and xx < 0.0:
+                    out[i] = 0.0
+                    i += 1
+                    continue
             else:
-                if isinf(xx): out[i] = 1.0 if xx > 0.0 else 0.0; i += 1; continue
+                if isinf(xx):
+                    out[i] = 1.0 if xx > 0.0 else 0.0
+                    i += 1
+                    continue
 
             z = self._z_from_x(xx)
-            if z <= -1.0: out[i] = 0.0; i += 1; continue
-            if z >= 1.0: out[i] = 1.0; i += 1; continue
+            if z <= -1.0:
+                out[i] = 0.0
+                i += 1
+                continue
+            if z >= 1.0:
+                out[i] = 1.0
+                i += 1
+                continue
             j = self._panel_index(z)
             start = i
             m = 0
@@ -584,19 +630,25 @@ cdef class SpectralEvaluator:
                 if isnan(xx):
                     break
                 if self.kind == 0:
-                    if xx <= self.L or xx >= self.U: break
+                    if xx <= self.L or xx >= self.U:
+                        break
                 elif self.kind == 1 or self.kind == 4:
-                    if xx <= self.L or (isinf(xx) and xx > 0.0): break
+                    if xx <= self.L or (isinf(xx) and xx > 0.0):
+                        break
                 elif self.kind == 2 or self.kind == 5:
-                    if xx >= self.U or (isinf(xx) and xx < 0.0): break
+                    if xx >= self.U or (isinf(xx) and xx < 0.0):
+                        break
                 else:
-                    if isinf(xx): break
+                    if isinf(xx):
+                        break
                 z = self._z_from_x(xx)
                 if z <= -1.0 or z >= 1.0:
                     break
                 if self.npanels > 1 and (z < self.breaks[j] or z >= self.breaks[j + 1]):
                     break
-                u_buf[m] = (2.0 * z - (self.breaks[j] + self.breaks[j + 1])) / (self.breaks[j + 1] - self.breaks[j])
+                u_buf[m] = (2.0 * z - (self.breaks[j] + self.breaks[j + 1])) / (
+                    self.breaks[j + 1] - self.breaks[j]
+                )
                 m += 1
                 i += 1
 
@@ -615,9 +667,14 @@ cdef class SpectralEvaluator:
                 out[i] = self._eval_one(x[i])
                 i += 1
 
-        free(u_buf); free(work0); free(work1); free(work2)
+        free(u_buf)
+        free(work0)
+        free(work1)
+        free(work2)
 
-    cdef void _eval_many_simd(self, const double* x, double* out, Py_ssize_t n) noexcept nogil:
+    cdef void _eval_many_simd(
+        self, const double* x, double* out, Py_ssize_t n
+    ) noexcept nogil:
         """Cache-blocked panel-bucketed evaluator with transposed Clenshaw."""
         cdef Py_ssize_t block_cap = 16384
         cdef int32_t* panel_of = NULL
@@ -653,16 +710,26 @@ cdef class SpectralEvaluator:
         if (panel_of == NULL or u_orig == NULL or u_bucket == NULL or
                 index_bucket == NULL or counts == NULL or starts == NULL or
                 pos == NULL or work0 == NULL or work1 == NULL or work2 == NULL):
-            if panel_of != NULL: free(panel_of)
-            if u_orig != NULL: free(u_orig)
-            if u_bucket != NULL: free(u_bucket)
-            if index_bucket != NULL: free(index_bucket)
-            if counts != NULL: free(counts)
-            if starts != NULL: free(starts)
-            if pos != NULL: free(pos)
-            if work0 != NULL: free(work0)
-            if work1 != NULL: free(work1)
-            if work2 != NULL: free(work2)
+            if panel_of != NULL:
+                free(panel_of)
+            if u_orig != NULL:
+                free(u_orig)
+            if u_bucket != NULL:
+                free(u_bucket)
+            if index_bucket != NULL:
+                free(index_bucket)
+            if counts != NULL:
+                free(counts)
+            if starts != NULL:
+                free(starts)
+            if pos != NULL:
+                free(pos)
+            if work0 != NULL:
+                free(work0)
+            if work1 != NULL:
+                free(work1)
+            if work2 != NULL:
+                free(work2)
             self._eval_many(x, out, n)
             return
 
@@ -715,7 +782,9 @@ cdef class SpectralEvaluator:
                     out[base + i] = 1.0
                     continue
                 j = self._panel_index(z)
-                u = (2.0 * z - (self.breaks[j] + self.breaks[j + 1])) / (self.breaks[j + 1] - self.breaks[j])
+                u = (2.0 * z - (self.breaks[j] + self.breaks[j + 1])) / (
+                    self.breaks[j + 1] - self.breaks[j]
+                )
                 panel_of[i] = <int32_t> j
                 u_orig[i] = u
                 counts[j] += 1
@@ -746,9 +815,16 @@ cdef class SpectralEvaluator:
                 )
             base += m
 
-        free(panel_of); free(u_orig); free(u_bucket); free(index_bucket)
-        free(counts); free(starts); free(pos)
-        free(work0); free(work1); free(work2)
+        free(panel_of)
+        free(u_orig)
+        free(u_bucket)
+        free(index_bucket)
+        free(counts)
+        free(starts)
+        free(pos)
+        free(work0)
+        free(work1)
+        free(work2)
 
     cdef object _call_mode(self, object x, bint use_simd):
         """Dispatch to the vectorized or scalar loop and restore *x*'s shape."""

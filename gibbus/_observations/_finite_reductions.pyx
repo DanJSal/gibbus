@@ -262,8 +262,12 @@ cdef int _finite_rows(
                 else:
                     for i in range(P):
                         mean_i = _partial_value(
-                            partial_kinds[i], &partial_coeffs[i * W], partial_lengths[i],
-                            support_lower, support_upper, z,
+                            partial_kinds[i],
+                            &partial_coeffs[i * W],
+                            partial_lengths[i],
+                            support_lower,
+                            support_upper,
+                            z,
                         )
                         if not isfinite(mean_i):
                             return _BAD_PARTIAL
@@ -477,7 +481,9 @@ def evaluate_finite_log_probabilities_real_line(
     cdef Py_ssize_t G = gl_nodes.shape[0]
     cdef Py_ssize_t nq = q_poly.shape[0]
     cdef int status
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] log_probability = np.empty(R, dtype=np.float64)
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] log_probability = np.empty(
+        R, dtype=np.float64
+    )
     cdef double[::1] lp_view = log_probability
     if intervals.shape[1] != 2:
         raise ValueError("intervals must have shape (R, 2)")
@@ -589,7 +595,11 @@ def evaluate_finite_objective(
 
     if intervals.shape[1] != 2:
         raise ValueError("intervals must have shape (R, 2)")
-    if row_weights.shape[0] != R or point_lower_distance.shape[0] != R or point_upper_distance.shape[0] != R:
+    if (
+        row_weights.shape[0] != R
+        or point_lower_distance.shape[0] != R
+        or point_upper_distance.shape[0] != R
+    ):
         raise ValueError("row arrays must match intervals")
     if q_poly.shape[0] < 1 or boundary_amplitudes.shape[0] != 2:
         raise ValueError("potential descriptors are invalid")
@@ -610,7 +620,9 @@ def evaluate_finite_objective(
     lp_view = log_probability
     h_view = obs_h
     cov_view = obs_cov
-    natural_real_line = (not isfinite(support_lower)) and (not isfinite(support_upper)) and nq == P + 1
+    natural_real_line = (
+        (not isfinite(support_lower)) and (not isfinite(support_upper)) and nq == P + 1
+    )
     work = <double*>malloc((3 * P + P * P) * sizeof(double))
     if work == NULL:
         raise MemoryError("finite interval objective allocation failed")
@@ -620,14 +632,38 @@ def evaluate_finite_objective(
             work[2 * P + P * P + i] = 1.0 / (i * (i + 1.0))
     with nogil:
         status = _finite_rows(
-            R, P, G, W, nq, &intervals[0, 0], &row_weights[0],
-            &point_lower_distance[0], &point_upper_distance[0], &q_poly[0],
-            boundary_amplitudes[0], boundary_amplitudes[1], q_shift, shifted_log_Z,
-            mode, log(coordinate_scale), <const int*>&partial_kinds[0], <const int*>&partial_lengths[0],
-            &partial_coeffs[0, 0], support_lower, support_upper, &gl_nodes[0],
-            &gl_log_weights[0], width_eps_mult, &lp_view[0], &h_view[0],
-            &cov_view[0, 0], work, work + P, work + P + P * P,
-            natural_real_line, work + 2 * P + P * P,
+            R,
+            P,
+            G,
+            W,
+            nq,
+            &intervals[0, 0],
+            &row_weights[0],
+            &point_lower_distance[0],
+            &point_upper_distance[0],
+            &q_poly[0],
+            boundary_amplitudes[0],
+            boundary_amplitudes[1],
+            q_shift,
+            shifted_log_Z,
+            mode,
+            log(coordinate_scale),
+            <const int*>&partial_kinds[0],
+            <const int*>&partial_lengths[0],
+            &partial_coeffs[0, 0],
+            support_lower,
+            support_upper,
+            &gl_nodes[0],
+            &gl_log_weights[0],
+            width_eps_mult,
+            &lp_view[0],
+            &h_view[0],
+            &cov_view[0, 0],
+            work,
+            work + P,
+            work + P + P * P,
+            natural_real_line,
+            work + 2 * P + P * P,
         )
     free(work)
     if status == _BAD_ROW:

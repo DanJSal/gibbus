@@ -99,7 +99,9 @@ cdef extern from * nogil:
     }
     """
     double c_dot "gibbus_conic_dot"(const double* a, const double* b, Py_ssize_t n)
-    void c_axpy "gibbus_conic_axpy"(double alpha, const double* x, double* y, Py_ssize_t n)
+    void c_axpy "gibbus_conic_axpy"(
+        double alpha, const double* x, double* y, Py_ssize_t n
+    )
     void c_scale "gibbus_conic_scale"(double alpha, double* x, Py_ssize_t n)
     double c_absmax "gibbus_conic_absmax"(const double* x, Py_ssize_t n)
 
@@ -121,7 +123,9 @@ cdef inline void _symmetrize(double* a, int k) noexcept nogil:
             a[j * k + i] = v
 
 
-cdef inline void _matmul(const double* a, const double* b, double* out, int k) noexcept nogil:
+cdef inline void _matmul(
+    const double* a, const double* b, double* out, int k
+) noexcept nogil:
     """``out = a @ b`` for k x k row-major matrices (out must not alias)."""
     cdef int i, p
     memset(out, 0, k * k * sizeof(double))
@@ -148,7 +152,9 @@ cdef inline int _cholesky(double* a, int k) noexcept nogil:
     return 0
 
 
-cdef inline void _lower_solve_rows(const double* l, const double* d, double* y, int k) noexcept nogil:
+cdef inline void _lower_solve_rows(
+    const double* l, const double* d, double* y, int k
+) noexcept nogil:
     """``y = L^-1 d`` for a lower-triangular ``L`` and a k x k right side."""
     cdef int i, p
     for i in range(k):
@@ -165,7 +171,9 @@ cdef inline void _transpose(const double* a, double* out, int k) noexcept nogil:
             out[j * k + i] = a[i * k + j]
 
 
-cdef int _jacobi(double* a, int n, double* d, double* v, double* b, double* z, bint vectors) noexcept nogil:
+cdef int _jacobi(
+    double* a, int n, double* d, double* v, double* b, double* z, bint vectors
+) noexcept nogil:
     """Cyclic Jacobi eigen-decomposition of a symmetric matrix (upper triangle used).
 
     ``a`` is destroyed.  ``d`` receives the eigenvalues; with ``vectors`` the
@@ -193,7 +201,11 @@ cdef int _jacobi(double* a, int n, double* d, double* v, double* b, double* z, b
         for ip in range(n - 1):
             for iq in range(ip + 1, n):
                 g = 100.0 * fabs(a[ip * n + iq])
-                if sweep > 4 and fabs(d[ip]) + g == fabs(d[ip]) and fabs(d[iq]) + g == fabs(d[iq]):
+                if (
+                    sweep > 4
+                    and fabs(d[ip]) + g == fabs(d[ip])
+                    and fabs(d[iq]) + g == fabs(d[iq])
+                ):
                     a[ip * n + iq] = 0.0
                 elif fabs(a[ip * n + iq]) > tresh:
                     h = d[iq] - d[ip]
@@ -302,7 +314,9 @@ cdef void _lu_solve(const double* lu, int n, const int* piv, double* x) noexcept
         x[i] = v / lu[i * n + i]
 
 
-cdef void _svd_rows(const double* bmat, int r, int n, double* x, double* u, double* sigma) noexcept nogil:
+cdef void _svd_rows(
+    const double* bmat, int r, int n, double* x, double* u, double* sigma
+) noexcept nogil:
     """One-sided Jacobi SVD of ``B`` (r x n) through its rows.
 
     On return ``x`` (r rows of length n) holds ``sigma_j * v_j`` and ``u``
@@ -400,7 +414,9 @@ cdef void _slacks(const Rep* rep, const double* y, double* s) noexcept nogil:
                 c_axpy(-y[i], ab + i * kk * kk, s + rep.qoff[bb], kk * kk)
 
 
-cdef double _residual(const Rep* rep, const double* theta, const double* q, double* work) noexcept nogil:
+cdef double _residual(
+    const Rep* rep, const double* theta, const double* q, double* work
+) noexcept nogil:
     """``max |B theta - sum_b L_b(Q_b)|`` (``work``: 2 r)."""
     cdef int i
     cdef double m = 0.0, v
@@ -412,7 +428,9 @@ cdef double _residual(const Rep* rep, const double* theta, const double* q, doub
     return m
 
 
-cdef void _reconstruct(const Rep* rep, double* theta, const double* q, double* work) noexcept nogil:
+cdef void _reconstruct(
+    const Rep* rep, double* theta, const double* q, double* work
+) noexcept nogil:
     """Move ``theta`` onto ``B theta = L(Q)``: minimum-norm, then exact coordinates."""
     cdef int i, j
     cdef double* target = work
@@ -423,7 +441,9 @@ cdef void _reconstruct(const Rep* rep, double* theta, const double* q, double* w
     for j in range(rep.n):
         theta[j] += c_dot(rep.pinv + j * rep.r, diff, rep.r)
     for i in range(rep.n_exact):
-        theta[rep.exact_col[i]] = target[rep.exact_row[i]] / rep.b[rep.exact_row[i] * rep.n + rep.exact_col[i]]
+        theta[rep.exact_col[i]] = target[rep.exact_row[i]] / rep.b[
+            rep.exact_row[i] * rep.n + rep.exact_col[i]
+        ]
 
 
 cdef int _prepare(Rep* rep, bint need_complement, double* work) noexcept nogil:
@@ -471,7 +491,12 @@ cdef int _prepare(Rep* rep, bint need_complement, double* work) noexcept nogil:
                     g[i * r + j] += v
                     if j != i:
                         g[j * r + i] += v
-        if _jacobi(g, r, rep.gg_val, scratch, scratch + r * r, scratch + r * r + r, True) != 0:
+        if (
+            _jacobi(
+                g, r, rep.gg_val, scratch, scratch + r * r, scratch + r * r + r, True
+            )
+            != 0
+        ):
             return 1
         # Store eigenvectors transposed: row j = vector j.
         _transpose(scratch, rep.gg_vec, r)
@@ -542,7 +567,12 @@ cdef int _hessian_eigen(Hessian* hs, double* work) noexcept nogil:
     cdef int n = hs.n, j
     cdef double smax = 0.0
     memcpy(work, hs.h, n * n * sizeof(double))
-    if _jacobi(work, n, hs.val, work + n * n, work + 2 * n * n, work + 2 * n * n + n, True) != 0:
+    if (
+        _jacobi(
+            work, n, hs.val, work + n * n, work + 2 * n * n, work + 2 * n * n + n, True
+        )
+        != 0
+    ):
         return 1
     _transpose(work + n * n, hs.vec, n)
     for j in range(n):
@@ -552,8 +582,14 @@ cdef int _hessian_eigen(Hessian* hs, double* work) noexcept nogil:
     return 0
 
 
-cdef double _dual_value(const Rep* rep, const Hessian* hs, const double* g, const double* theta0,
-                        const double* y, double* work) noexcept nogil:
+cdef double _dual_value(
+    const Rep* rep,
+    const Hessian* hs,
+    const double* g,
+    const double* theta0,
+    const double* y,
+    double* work,
+) noexcept nogil:
     """Lagrangian dual ``D(y)``; ``-inf`` when the stationary system is inconsistent.
 
     ``work``: 4 n.  The stationary point is the least-squares (pseudo-inverse)
@@ -598,8 +634,13 @@ cdef double _dual_value(const Rep* rep, const Hessian* hs, const double* g, cons
     return value
 
 
-cdef double _model(const Hessian* hs, const double* g, const double* theta0, const double* theta,
-                   double* work) noexcept nogil:
+cdef double _model(
+    const Hessian* hs,
+    const double* g,
+    const double* theta0,
+    const double* theta,
+    double* work,
+) noexcept nogil:
     """Newton model value ``g.d + 1/2 d^T H d`` (``work``: 2 n)."""
     cdef int n = hs.n, i
     for i in range(n):
@@ -609,9 +650,18 @@ cdef double _model(const Hessian* hs, const double* g, const double* theta0, con
     return c_dot(g, work, n) + 0.5 * c_dot(work, work + n, n)
 
 
-cdef double _certified_gap(const Rep* rep, const Hessian* hs, const double* g, const double* theta0,
-                           const double* theta, const double* q, const double* y,
-                           double* endpoint, double* model_value, double* work) noexcept nogil:
+cdef double _certified_gap(
+    const Rep* rep,
+    const Hessian* hs,
+    const double* g,
+    const double* theta0,
+    const double* theta,
+    const double* q,
+    const double* y,
+    double* endpoint,
+    double* model_value,
+    double* work,
+) noexcept nogil:
     """Reconstruct the endpoint and bound its suboptimality (``inf`` if uncertified).
 
     ``work``: 2 r + qtot + max(2 r, 4 n, kmax^2 + 3 kmax).
@@ -655,7 +705,9 @@ cdef double _certified_gap(const Rep* rep, const Hessian* hs, const double* g, c
     return model_value[0] - lower
 
 
-cdef void _spd_inverse(const double* m, int k, double* out, double* work, bint* failed) noexcept nogil:
+cdef void _spd_inverse(
+    const double* m, int k, double* out, double* work, bint* failed
+) noexcept nogil:
     """``out = m^-1`` for a symmetric positive-definite ``m`` (``work``: 3 k^2)."""
     cdef int i
     memcpy(work, m, k * k * sizeof(double))
@@ -715,9 +767,18 @@ cdef struct Kkt:
     double* sinv           # packed S_b^-1
 
 
-cdef int _kkt_build(const Rep* rep, const Hessian* hs, const double* g, const double* theta0,
-                    const double* theta, const double* q, const double* y, const double* s,
-                    Kkt* kkt, double* work) noexcept nogil:
+cdef int _kkt_build(
+    const Rep* rep,
+    const Hessian* hs,
+    const double* g,
+    const double* theta0,
+    const double* theta,
+    const double* q,
+    const double* y,
+    const double* s,
+    Kkt* kkt,
+    double* work,
+) noexcept nogil:
     """Assemble and factor ``[[H, B^T], [B, -M]]``; 1 on a singular system.
 
     ``work``: max((2 r + 1) kmax^2, 3 kmax^2, n + r).
@@ -725,7 +786,9 @@ cdef int _kkt_build(const Rep* rep, const Hessian* hs, const double* g, const do
     cdef int n = rep.n, r = rep.r, nn = n + r, i, j, bb
     cdef bint failed = False
     for bb in range(rep.nb):
-        _spd_inverse(s + rep.qoff[bb], rep.k[bb], kkt.sinv + rep.qoff[bb], work, &failed)
+        _spd_inverse(
+            s + rep.qoff[bb], rep.k[bb], kkt.sinv + rep.qoff[bb], work, &failed
+        )
         if failed:
             return 1
     _schur(rep, q, kkt.sinv, kkt.schur, work)
@@ -749,9 +812,18 @@ cdef int _kkt_build(const Rep* rep, const Hessian* hs, const double* g, const do
     return _lu_factor(kkt.mat, nn, kkt.piv)
 
 
-cdef void _direction(const Rep* rep, const Hessian* hs, const Kkt* kkt,
-                     const double* q, const double* targets,
-                     double* d_theta, double* d_dual, double* d_q, double* d_s, double* work) noexcept nogil:
+cdef void _direction(
+    const Rep* rep,
+    const Hessian* hs,
+    const Kkt* kkt,
+    const double* q,
+    const double* targets,
+    double* d_theta,
+    double* d_dual,
+    double* d_q,
+    double* d_s,
+    double* work,
+) noexcept nogil:
     """One search direction for complementarity ``targets`` (packed k x k per block).
 
     ``work``: 3 nn + 4 r + 2 kmax^2.
@@ -791,7 +863,11 @@ cdef void _direction(const Rep* rep, const Hessian* hs, const Kkt* kkt,
         for j in range(r):
             res[i] -= rep.b[j * n + i] * sol[n + j]
     for i in range(r):
-        res[n + i] = rhs[n + i] - c_dot(rep.b + i * n, sol, n) - c_dot(kkt.schur + i * r, sol + n, r)
+        res[n + i] = (
+            rhs[n + i]
+            - c_dot(rep.b + i * n, sol, n)
+            - c_dot(kkt.schur + i * r, sol + n, r)
+        )
     _lu_solve(kkt.mat, nn, kkt.piv, res)
     for i in range(nn):
         sol[i] += res[i]
@@ -824,7 +900,12 @@ cdef void _direction(const Rep* rep, const Hessian* hs, const Kkt* kkt,
     memset(coef, 0, r * sizeof(double))
     for i in range(r):
         if fabs(rep.gg_val[i]) > rep.gg_cut:
-            c_axpy(c_dot(rep.gg_vec + i * r, mismatch, r) / rep.gg_val[i], rep.gg_vec + i * r, coef, r)
+            c_axpy(
+                c_dot(rep.gg_vec + i * r, mismatch, r) / rep.gg_val[i],
+                rep.gg_vec + i * r,
+                coef,
+                r,
+            )
     for bb in range(rep.nb):
         kk = rep.k[bb]
         k2 = kk * kk
@@ -834,7 +915,9 @@ cdef void _direction(const Rep* rep, const Hessian* hs, const Kkt* kkt,
                 c_axpy(coef[i], ab + i * k2, d_q + rep.qoff[bb], k2)
 
 
-cdef double _max_step(const double* m, const double* d, int k, double* work, bint* failed) noexcept nogil:
+cdef double _max_step(
+    const double* m, const double* d, int k, double* work, bint* failed
+) noexcept nogil:
     """Largest ``alpha`` keeping ``m + alpha d`` PSD (``work``: 5 k^2 + 3 k)."""
     cdef double* chol = work
     cdef double* y = chol + k * k
@@ -856,8 +939,15 @@ cdef double _max_step(const double* m, const double* d, int k, double* work, bin
     return -1.0 / smallest
 
 
-cdef double _step_limit(const Rep* rep, const double* q, const double* dq, const double* s,
-                        const double* ds, double* work, bint* failed) noexcept nogil:
+cdef double _step_limit(
+    const Rep* rep,
+    const double* q,
+    const double* dq,
+    const double* s,
+    const double* ds,
+    double* work,
+    bint* failed,
+) noexcept nogil:
     cdef int bb, kk
     cdef double limit = INFINITY, v
     for bb in range(rep.nb):
@@ -889,25 +979,36 @@ cdef Py_ssize_t _ipm_work(int n, int r, Py_ssize_t qtot, int kmax) noexcept nogi
     """Scratch doubles for any helper called from the interior-point loop."""
     cdef Py_ssize_t nn = n + r
     cdef Py_ssize_t km2 = kmax * kmax
-    cdef Py_ssize_t need = 3 * nn + 4 * r + 2 * km2                          # _direction
+    cdef Py_ssize_t need = 3 * nn + 4 * r + 2 * km2  # _direction
     cdef Py_ssize_t other
-    other = 2 * r + qtot + 4 * n + 2 * r + km2 + 3 * kmax                     # _certified_gap
+    other = 2 * r + qtot + 4 * n + 2 * r + km2 + 3 * kmax  # _certified_gap
     if other > need:
         need = other
-    other = (2 * r + 1) * km2 + 3 * km2 + nn                                 # _kkt_build
+    other = (2 * r + 1) * km2 + 3 * km2 + nn  # _kkt_build
     if other > need:
         need = other
-    other = 5 * km2 + 3 * kmax                                                # _step_limit
+    other = 5 * km2 + 3 * kmax  # _step_limit
     if other > need:
         need = other
     return need + 16
 
 
-cdef int _solve_ipm(const Rep* rep, const Hessian* hs, const double* g, const double* theta0,
-                    const double* start, double gap_tolerance, int max_iterations,
-                    double step_fraction,
-                    double* out_params, double* out_blocks, double* out_dual,
-                    double* out_model, double* out_gap, int* out_iterations) noexcept nogil:
+cdef int _solve_ipm(
+    const Rep* rep,
+    const Hessian* hs,
+    const double* g,
+    const double* theta0,
+    const double* start,
+    double gap_tolerance,
+    int max_iterations,
+    double step_fraction,
+    double* out_params,
+    double* out_blocks,
+    double* out_dual,
+    double* out_model,
+    double* out_gap,
+    int* out_iterations,
+) noexcept nogil:
     """The interior-point loop; 0 on success, -1 allocation failure, -2 start not PD."""
     cdef int n = rep.n, r = rep.r, nn = n + r, nb = rep.nb
     cdef Py_ssize_t qtot = rep.qtot
@@ -938,7 +1039,8 @@ cdef int _solve_ipm(const Rep* rep, const Hessian* hs, const double* g, const do
     cdef Kkt kkt
     cdef int iterations = 0, n_history = 0, bb, kk, i, off
     cdef double nu = 0.0, pairing, target_mu, mu, mu_aff, sigma, alpha_aff, alpha, v
-    cdef double gap, model_value = 0.0, residual, best_gap = INFINITY, best_residual = INFINITY
+    cdef double gap, model_value = 0.0, residual
+    cdef double best_gap = INFINITY, best_residual = INFINITY
     cdef double best_model = 0.0, scale
     cdef bint have_best = False, failed
 
@@ -953,31 +1055,55 @@ cdef int _solve_ipm(const Rep* rep, const Hessian* hs, const double* g, const do
         free(piv)
         return -1
     p = arena
-    theta = p; p += n
-    endpoint = p; p += n
-    best_endpoint = p; p += n
-    d_theta = p; p += n
-    dual = p; p += r
-    best_dual = p; p += r
-    d_dual = p; p += r
-    new_dual = p; p += r
-    q = p; p += qtot
-    s = p; p += qtot
-    best_q = p; p += qtot
-    dq_aff = p; p += qtot
-    ds_aff = p; p += qtot
-    dq = p; p += qtot
-    ds = p; p += qtot
-    targets = p; p += qtot
-    new_q = p; p += qtot
-    new_s = p; p += qtot
-    kkt.sinv = p; p += qtot
+    theta = p
+    p += n
+    endpoint = p
+    p += n
+    best_endpoint = p
+    p += n
+    d_theta = p
+    p += n
+    dual = p
+    p += r
+    best_dual = p
+    p += r
+    d_dual = p
+    p += r
+    new_dual = p
+    p += r
+    q = p
+    p += qtot
+    s = p
+    p += qtot
+    best_q = p
+    p += qtot
+    dq_aff = p
+    p += qtot
+    ds_aff = p
+    p += qtot
+    dq = p
+    p += qtot
+    ds = p
+    p += qtot
+    targets = p
+    p += qtot
+    new_q = p
+    p += qtot
+    new_s = p
+    p += qtot
+    kkt.sinv = p
+    p += qtot
     p += 2 * qtot                          # spare, keeps offsets stable
-    history = p; p += max_iterations
-    kkt.mat = p; p += nn * nn
-    kkt.schur = p; p += r * r
-    kkt.dual_res = p; p += n
-    kkt.primal_res = p; p += r
+    history = p
+    p += max_iterations
+    kkt.mat = p
+    p += nn * nn
+    kkt.schur = p
+    p += r * r
+    kkt.dual_res = p
+    p += n
+    kkt.primal_res = p
+    p += r
     work = p
     kkt.nn = nn
     kkt.piv = piv
@@ -1001,11 +1127,17 @@ cdef int _solve_ipm(const Rep* rep, const Hessian* hs, const double* g, const do
 
     while iterations < max_iterations:
         iterations += 1
-        gap = _certified_gap(rep, hs, g, theta0, theta, q, dual, endpoint, &model_value, work)
+        gap = _certified_gap(
+            rep, hs, g, theta0, theta, q, dual, endpoint, &model_value, work
+        )
         residual = _residual(rep, endpoint, q, work)
         # Rank by certified gap; among uncertified iterates prefer the one
         # closest to primal feasibility, never the starting guess.
-        if (not have_best) or gap < best_gap or (gap == best_gap and residual < best_residual):
+        if (
+            (not have_best)
+            or gap < best_gap
+            or (gap == best_gap and residual < best_residual)
+        ):
             have_best = True
             best_gap = gap
             best_residual = residual
@@ -1107,9 +1239,21 @@ cdef struct OwnedRep:
     int* ints
 
 
-cdef int _own(OwnedRep* own, int n, int r, int nb, int kmax, const int* k, const Py_ssize_t* aoff,
-              const Py_ssize_t* qoff, Py_ssize_t qtot, const double* b, const double* a,
-              const double* ref, bint need_complement) noexcept nogil:
+cdef int _own(
+    OwnedRep* own,
+    int n,
+    int r,
+    int nb,
+    int kmax,
+    const int* k,
+    const Py_ssize_t* aoff,
+    const Py_ssize_t* qoff,
+    Py_ssize_t qtot,
+    const double* b,
+    const double* a,
+    const double* ref,
+    bint need_complement,
+) noexcept nogil:
     """Prepare a description (allocating its derived storage); 0 on success."""
     cdef Py_ssize_t storage = _rep_storage(n, r) + _prepare_size(n, r, qtot, kmax)
     own.storage = <double*> malloc(storage * sizeof(double))
@@ -1185,7 +1329,9 @@ def solve_conic_qp(
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out_params = np.empty(n)
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out_blocks = np.empty(qtot)
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out_dual = np.empty(r)
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] hsym = np.ascontiguousarray(0.5 * (np.asarray(h) + np.asarray(h).T))
+    cdef cnp.ndarray[cnp.float64_t, ndim=2] hsym = np.ascontiguousarray(
+        0.5 * (np.asarray(h) + np.asarray(h).T)
+    )
     cdef double[:, ::1] hv = hsym
     cdef double model_value = 0.0, gap = INFINITY
     cdef int iterations = 0, status = 0
@@ -1197,8 +1343,21 @@ def solve_conic_qp(
         if k[i] > kmax:
             kmax = k[i]
     with nogil:
-        status = _own(&own, n, r, nb, kmax, &k[0], &aoff[0], &qoff[0], qtot, &b[0, 0], &a[0],
-                      &ref[0], True)
+        status = _own(
+            &own,
+            n,
+            r,
+            nb,
+            kmax,
+            &k[0],
+            &aoff[0],
+            &qoff[0],
+            qtot,
+            &b[0, 0],
+            &a[0],
+            &ref[0],
+            True,
+        )
         if status == 0:
             hbuf = <double*> malloc((n * n + n) * sizeof(double))
             hwork = <double*> malloc((2 * n * n + 2 * n + 8) * sizeof(double))
@@ -1212,9 +1371,22 @@ def solve_conic_qp(
                 if _hessian_eigen(&hs, hwork) != 0:
                     status = -3
         if status == 0:
-            status = _solve_ipm(&own.rep, &hs, &g[0], &theta0[0], &start[0], gap_tolerance,
-                                max_iterations, step_fraction, &out_params[0], &out_blocks[0],
-                                &out_dual[0], &model_value, &gap, &iterations)
+            status = _solve_ipm(
+                &own.rep,
+                &hs,
+                &g[0],
+                &theta0[0],
+                &start[0],
+                gap_tolerance,
+                max_iterations,
+                step_fraction,
+                &out_params[0],
+                &out_blocks[0],
+                &out_dual[0],
+                &model_value,
+                &gap,
+                &iterations,
+            )
         _disown(&own)
         free(hbuf)
         free(hwork)
@@ -1268,11 +1440,34 @@ def solve_preconditioned(
     cdef double model_value = 0.0, gap = INFINITY, scaled_model = 0.0
     cdef int iterations = 0, status = 0
     with nogil:
-        status = _preconditioned(n, r, nb, &k[0], &aoff[0], &qoff[0], qtot, na, &h[0, 0], &g[0],
-                                 &theta[0], &b[0, 0], &a[0], &ref[0], &deg[0], &blocks[0],
-                                 gap_tolerance, max_iterations, step_fraction,
-                                 &endpoint[0], &out_blocks[0], &out_dual[0], &model_value,
-                                 &gap, &iterations, &scaled_model)
+        status = _preconditioned(
+            n,
+            r,
+            nb,
+            &k[0],
+            &aoff[0],
+            &qoff[0],
+            qtot,
+            na,
+            &h[0, 0],
+            &g[0],
+            &theta[0],
+            &b[0, 0],
+            &a[0],
+            &ref[0],
+            &deg[0],
+            &blocks[0],
+            gap_tolerance,
+            max_iterations,
+            step_fraction,
+            &endpoint[0],
+            &out_blocks[0],
+            &out_dual[0],
+            &model_value,
+            &gap,
+            &iterations,
+            &scaled_model,
+        )
     if status == -2:
         raise np.linalg.LinAlgError("starting Gram block is not positive definite")
     if status == -1:
@@ -1327,20 +1522,34 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
     if arena == NULL:
         return -1
     p = arena
-    column = p; p += n
-    magnitude = p; p += r
-    row_scale = p; p += r
-    gscale = p; p += gscale_len
-    bs = p; p += r * n
-    as_ = p; p += na
-    refs = p; p += r
-    hs_mat = p; p += n * n
-    gs = p; p += n
-    phi = p; p += n
-    start = p; p += qtot
-    sol = p; p += n
-    hbuf = p; p += n * n + n
-    hwork = p; p += 2 * n * n + 2 * n + 16
+    column = p
+    p += n
+    magnitude = p
+    p += r
+    row_scale = p
+    p += r
+    gscale = p
+    p += gscale_len
+    bs = p
+    p += r * n
+    as_ = p
+    p += na
+    refs = p
+    p += r
+    hs_mat = p
+    p += n * n
+    gs = p
+    p += n
+    phi = p
+    p += n
+    start = p
+    p += qtot
+    sol = p
+    p += n
+    hbuf = p
+    p += n * n + n
+    hwork = p
+    p += 2 * n * n + 2 * n + 16
     work = p
     # Jacobi column scaling.
     for j in range(n):
@@ -1404,7 +1613,9 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
         for aa in range(kk):
             for cc in range(kk):
                 start[qoff[bb] + aa * kk + cc] = (
-                    blocks[qoff[bb] + aa * kk + cc] * gscale[off + aa] * gscale[off + cc]
+                    blocks[qoff[bb] + aa * kk + cc]
+                    * gscale[off + aa]
+                    * gscale[off + cc]
                 )
             tr += start[qoff[bb] + aa * kk + aa]
         shift = tr / kk
@@ -1415,7 +1626,9 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
         off += kk
     for i in range(n):
         for j in range(n):
-            hs_mat[i * n + j] = column[i] * 0.5 * (h[i * n + j] + h[j * n + i]) * column[j]
+            hs_mat[i * n + j] = (
+                column[i] * 0.5 * (h[i * n + j] + h[j * n + i]) * column[j]
+            )
         gs[i] = column[i] * g[i]
         phi[i] = theta[i] / column[i]
     status = _own(&scaled, n, r, nb, kmax, k, aoff, qoff, qtot, bs, as_, refs, True)
@@ -1431,8 +1644,22 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
         _disown(&scaled)
         free(arena)
         return -3
-    status = _solve_ipm(&scaled.rep, &hs, gs, phi, start, gap_tolerance, max_iterations,
-                        step_fraction, sol, out_blocks, out_dual, scaled_model, gap, iterations)
+    status = _solve_ipm(
+        &scaled.rep,
+        &hs,
+        gs,
+        phi,
+        start,
+        gap_tolerance,
+        max_iterations,
+        step_fraction,
+        sol,
+        out_blocks,
+        out_dual,
+        scaled_model,
+        gap,
+        iterations,
+    )
     _disown(&scaled)
     if status != 0:
         free(arena)
@@ -1443,7 +1670,9 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
         kk = k[bb]
         for aa in range(kk):
             for cc in range(kk):
-                out_blocks[qoff[bb] + aa * kk + cc] /= gscale[off + aa] * gscale[off + cc]
+                out_blocks[qoff[bb] + aa * kk + cc] /= gscale[off + aa] * gscale[
+                    off + cc
+                ]
         off += kk
     for j in range(n):
         endpoint[j] = column[j] * sol[j]
@@ -1626,12 +1855,37 @@ cdef int _in_evaluate(
             )
         else:
             status = finite_natural_objective_c(
-                Rf, n, G, width, nq,
-                finite_intervals, finite_weights, point_lower_distance, point_upper_distance,
-                q_poly, amplitudes[0], amplitudes[1], geometry[3], log(shifted_z),
-                geometry[2], log_coordinate_scale, kinds, lengths, coefficients,
-                support[0], support[1], gl_nodes, gl_log_weights, width_eps_mult,
-                log_probability, obs_h, obs_cov, sum_h, sum_second, hbuf, nll,
+                Rf,
+                n,
+                G,
+                width,
+                nq,
+                finite_intervals,
+                finite_weights,
+                point_lower_distance,
+                point_upper_distance,
+                q_poly,
+                amplitudes[0],
+                amplitudes[1],
+                geometry[3],
+                log(shifted_z),
+                geometry[2],
+                log_coordinate_scale,
+                kinds,
+                lengths,
+                coefficients,
+                support[0],
+                support[1],
+                gl_nodes,
+                gl_log_weights,
+                width_eps_mult,
+                log_probability,
+                obs_h,
+                obs_cov,
+                sum_h,
+                sum_second,
+                hbuf,
+                nll,
             )
         if status != 0 or not _pn_finite(nll[0]):
             return 30 + status
@@ -1702,7 +1956,9 @@ cdef int _pn_evaluate(
     )
     if status != 0:
         return status
-    nll[0] = c_dot(empirical, theta, n) - geometry[3] + log(shifted_z) + coordinate_constant
+    nll[0] = (
+        c_dot(empirical, theta, n) - geometry[3] + log(shifted_z) + coordinate_constant
+    )
     if not _pn_finite(nll[0]):
         return 1
     for k in range(n):
@@ -1767,29 +2023,47 @@ cdef int _point_newton_loop(
     cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
     cdef int first_solve, accepted, any_step
     cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
-    cdef double model_value = 0.0, candidate_model = 0.0, gap = INFINITY, scaled_model = 0.0
+    cdef double model_value = 0.0, candidate_model = 0.0
+    cdef double gap = INFINITY, scaled_model = 0.0
     cdef double directional, alpha, trial_nll, decrease, cert
 
     if arena == NULL:
         return -1
     p = arena
-    q_poly = p; p += nq
-    amplitudes = p; p += 2
-    state_work = p; p += state_size
-    geometry = p; p += 6
-    points = p; p += 16
-    moments = p; p += F
-    endpoint = p; p += n
-    endpoint_blocks = p; p += qtot
-    endpoint_dual = p; p += r
-    chosen = p; p += n
-    chosen_blocks = p; p += qtot
-    chosen_dual = p; p += r
-    trial_theta = p; p += n
-    trial_blocks = p; p += qtot
-    trial_gradient = p; p += n
-    trial_hessian = p; p += n * n
-    trial_means = p; p += n
+    q_poly = p
+    p += nq
+    amplitudes = p
+    p += 2
+    state_work = p
+    p += state_size
+    geometry = p
+    p += 6
+    points = p
+    p += 16
+    moments = p
+    p += F
+    endpoint = p
+    p += n
+    endpoint_blocks = p
+    p += qtot
+    endpoint_dual = p
+    p += r
+    chosen = p
+    p += n
+    chosen_blocks = p
+    p += qtot
+    chosen_dual = p
+    p += r
+    trial_theta = p
+    p += n
+    trial_blocks = p
+    p += qtot
+    trial_gradient = p
+    p += n
+    trial_hessian = p
+    p += n * n
+    trial_means = p
+    p += n
     cold_blocks = p
 
     memset(cold_blocks, 0, qtot * sizeof(double))
@@ -1841,7 +2115,9 @@ cdef int _point_newton_loop(
             first_solve = 0
 
         memcpy(dual, chosen_dual, r * sizeof(double))
-        if bound <= tolerance * scale and (iteration >= min_steps or model_value >= 0.0):
+        if bound <= tolerance * scale and (
+            iteration >= min_steps or model_value >= 0.0
+        ):
             iterations_out[0] = iteration
             evaluations_out[0] = evaluations
             subproblem_iterations_out[0] = sub_iterations
@@ -2027,38 +2303,65 @@ cdef int _interval_newton_loop(
     cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
     cdef int first_solve, accepted, any_step
     cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
-    cdef double model_value = 0.0, candidate_model = 0.0, gap = INFINITY, scaled_model = 0.0
+    cdef double model_value = 0.0, candidate_model = 0.0
+    cdef double gap = INFINITY, scaled_model = 0.0
     cdef double directional, alpha, trial_nll, trial_smallest, decrease, cert
 
     if arena == NULL:
         return -1
     p = arena
-    q_poly = p; p += nq
-    amplitudes = p; p += 2
-    state_work = p; p += state_size
-    geometry = p; p += 6
-    points = p; p += 16
-    moments = p; p += F
-    model_means = p; p += n
-    model_fisher = p; p += n2
-    natural_scale = p; p += n
-    log_probability = p; p += Rwork
-    obs_h = p; p += n
-    obs_cov = p; p += n2
-    sum_h = p; p += n
-    sum_second = p; p += n2
-    hbuf = p; p += n
-    metric_work = p; p += metric_work_size
-    endpoint = p; p += n
-    endpoint_blocks = p; p += qtot
-    endpoint_dual = p; p += r
-    chosen = p; p += n
-    chosen_blocks = p; p += qtot
-    chosen_dual = p; p += r
-    trial_theta = p; p += n
-    trial_blocks = p; p += qtot
-    trial_gradient = p; p += n
-    trial_hessian = p; p += n2
+    q_poly = p
+    p += nq
+    amplitudes = p
+    p += 2
+    state_work = p
+    p += state_size
+    geometry = p
+    p += 6
+    points = p
+    p += 16
+    moments = p
+    p += F
+    model_means = p
+    p += n
+    model_fisher = p
+    p += n2
+    natural_scale = p
+    p += n
+    log_probability = p
+    p += Rwork
+    obs_h = p
+    p += n
+    obs_cov = p
+    p += n2
+    sum_h = p
+    p += n
+    sum_second = p
+    p += n2
+    hbuf = p
+    p += n
+    metric_work = p
+    p += metric_work_size
+    endpoint = p
+    p += n
+    endpoint_blocks = p
+    p += qtot
+    endpoint_dual = p
+    p += r
+    chosen = p
+    p += n
+    chosen_blocks = p
+    p += qtot
+    chosen_dual = p
+    p += r
+    trial_theta = p
+    p += n
+    trial_blocks = p
+    p += qtot
+    trial_gradient = p
+    p += n
+    trial_hessian = p
+    p += n2
     cold_blocks = p
 
     memset(cold_blocks, 0, qtot * sizeof(double))
@@ -2069,16 +2372,55 @@ cdef int _interval_newton_loop(
 
     if initialize:
         status = _in_evaluate(
-            n, curvature_degree, theta,
-            Rf, finite_intervals, finite_weights, point_lower_distance, point_upper_distance,
-            Ra, adaptive_intervals, adaptive_weights, whole_weight, log_coordinate_scale,
-            support, data_bounds, kinds, lengths, coefficients, width,
-            controls, epsabs, epsrel, limit,
-            G, gl_nodes, gl_log_weights, width_eps_mult, lower_index, upper_index,
-            q_poly, amplitudes, state_work, geometry, points, moments,
-            model_means, model_fisher, natural_scale, log_probability,
-            obs_h, obs_cov, sum_h, sum_second, hbuf, metric_work,
-            current_nll, gradient, hessian, current_smallest,
+            n,
+            curvature_degree,
+            theta,
+            Rf,
+            finite_intervals,
+            finite_weights,
+            point_lower_distance,
+            point_upper_distance,
+            Ra,
+            adaptive_intervals,
+            adaptive_weights,
+            whole_weight,
+            log_coordinate_scale,
+            support,
+            data_bounds,
+            kinds,
+            lengths,
+            coefficients,
+            width,
+            controls,
+            epsabs,
+            epsrel,
+            limit,
+            G,
+            gl_nodes,
+            gl_log_weights,
+            width_eps_mult,
+            lower_index,
+            upper_index,
+            q_poly,
+            amplitudes,
+            state_work,
+            geometry,
+            points,
+            moments,
+            model_means,
+            model_fisher,
+            natural_scale,
+            log_probability,
+            obs_h,
+            obs_cov,
+            sum_h,
+            sum_second,
+            hbuf,
+            metric_work,
+            current_nll,
+            gradient,
+            hessian,
+            current_smallest,
         )
         if status != 0:
             free(arena)
@@ -2129,7 +2471,9 @@ cdef int _interval_newton_loop(
             first_solve = 0
 
         memcpy(dual, chosen_dual, r * sizeof(double))
-        if bound <= tolerance * scale and (iteration >= min_steps or model_value >= 0.0):
+        if bound <= tolerance * scale and (
+            iteration >= min_steps or model_value >= 0.0
+        ):
             iterations_out[0] = iteration
             evaluations_out[0] = evaluations
             subproblem_iterations_out[0] = sub_iterations
@@ -2160,16 +2504,55 @@ cdef int _interval_newton_loop(
                 trial_blocks[i] = (1.0 - alpha) * blocks[i] + alpha * chosen_blocks[i]
             evaluations += 1
             status = _in_evaluate(
-                n, curvature_degree, trial_theta,
-                Rf, finite_intervals, finite_weights, point_lower_distance, point_upper_distance,
-                Ra, adaptive_intervals, adaptive_weights, whole_weight, log_coordinate_scale,
-                support, data_bounds, kinds, lengths, coefficients, width,
-                controls, epsabs, epsrel, limit,
-                G, gl_nodes, gl_log_weights, width_eps_mult, lower_index, upper_index,
-                q_poly, amplitudes, state_work, geometry, points, moments,
-                model_means, model_fisher, natural_scale, log_probability,
-                obs_h, obs_cov, sum_h, sum_second, hbuf, metric_work,
-                &trial_nll, trial_gradient, trial_hessian, &trial_smallest,
+                n,
+                curvature_degree,
+                trial_theta,
+                Rf,
+                finite_intervals,
+                finite_weights,
+                point_lower_distance,
+                point_upper_distance,
+                Ra,
+                adaptive_intervals,
+                adaptive_weights,
+                whole_weight,
+                log_coordinate_scale,
+                support,
+                data_bounds,
+                kinds,
+                lengths,
+                coefficients,
+                width,
+                controls,
+                epsabs,
+                epsrel,
+                limit,
+                G,
+                gl_nodes,
+                gl_log_weights,
+                width_eps_mult,
+                lower_index,
+                upper_index,
+                q_poly,
+                amplitudes,
+                state_work,
+                geometry,
+                points,
+                moments,
+                model_means,
+                model_fisher,
+                natural_scale,
+                log_probability,
+                obs_h,
+                obs_cov,
+                sum_h,
+                sum_second,
+                hbuf,
+                metric_work,
+                &trial_nll,
+                trial_gradient,
+                trial_hessian,
+                &trial_smallest,
             )
             if status != 0:
                 # Use the standard line-search rule: a non-normalizable or
@@ -2267,8 +2650,12 @@ def solve_interval_newton(
     and one-/two-sided censored rows use the adaptive Gauss--Kronrod reducer.
     Whole-support rows are represented by their aggregate weight.
     """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(params, dtype=np.float64).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] blocks = np.ascontiguousarray(blocks_packed, dtype=np.float64).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(
+        params, dtype=np.float64
+    ).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] blocks = np.ascontiguousarray(
+        blocks_packed, dtype=np.float64
+    ).copy()
     cdef const double[:, ::1] b = _as_c(b_matrix)
     cdef const double[::1] a = _as_c(a_packed)
     cdef const int[::1] k = _as_c(sizes, np.intc)
@@ -2290,10 +2677,18 @@ def solve_interval_newton(
     cdef const double[::1] adaptive_row_weights = _as_c(adaptive_weights)
     cdef const double[::1] gx = _as_c(gl_nodes)
     cdef const double[::1] gw = _as_c(gl_log_weights)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient = np.ascontiguousarray(current_gradient, dtype=np.float64).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian = np.ascontiguousarray(current_hessian, dtype=np.float64).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] fisher = np.ascontiguousarray(current_fisher, dtype=np.float64).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] missing = np.ascontiguousarray(current_missing, dtype=np.float64).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient = np.ascontiguousarray(
+        current_gradient, dtype=np.float64
+    ).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian = np.ascontiguousarray(
+        current_hessian, dtype=np.float64
+    ).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=2] fisher = np.ascontiguousarray(
+        current_fisher, dtype=np.float64
+    ).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=2] missing = np.ascontiguousarray(
+        current_missing, dtype=np.float64
+    ).copy()
     cdef int n = theta.shape[0], r = b.shape[0], nb = k.shape[0]
     cdef Py_ssize_t qtot = blocks.shape[0], na = a.shape[0]
     cdef Py_ssize_t Rf = finite_rows.shape[0], Ra = adaptive_rows.shape[0]
@@ -2335,26 +2730,76 @@ def solve_interval_newton(
         adaptive_weights_ptr = &adaptive_row_weights[0]
     with nogil:
         code = _interval_newton_loop(
-            n, r, nb, &k[0], &aoff[0], &qoff[0], qtot, na,
-            &b[0, 0], &a[0], &ref[0], &degrees[0],
-            &supp[0], &db[0], &pkinds[0], &plengths[0], &pcoeff[0, 0], pcoeff.shape[1],
-            &ctl[0], epsabs, epsrel, limit,
-            Rf, finite_rows_ptr, finite_weights_ptr, lower_distance_ptr, upper_distance_ptr,
-            Ra, adaptive_rows_ptr, adaptive_weights_ptr, whole_weight, log(coordinate_scale),
-            gx.shape[0], &gx[0], &gw[0], width_eps_mult, curvature_degree,
-            lower_index, upper_index,
-            &theta[0], &blocks[0], &nll, &gradient[0], &hessian[0, 0],
-            &fisher[0, 0], &missing[0, 0], &smallest, &dual[0],
-            tolerance, certified_tolerance, accuracy_floor,
-            max_iterations, armijo, backtrack, max_line_search, min_steps, initialize,
-            &iterations, &evaluations, &sub_iterations, &bound,
+            n,
+            r,
+            nb,
+            &k[0],
+            &aoff[0],
+            &qoff[0],
+            qtot,
+            na,
+            &b[0, 0],
+            &a[0],
+            &ref[0],
+            &degrees[0],
+            &supp[0],
+            &db[0],
+            &pkinds[0],
+            &plengths[0],
+            &pcoeff[0, 0],
+            pcoeff.shape[1],
+            &ctl[0],
+            epsabs,
+            epsrel,
+            limit,
+            Rf,
+            finite_rows_ptr,
+            finite_weights_ptr,
+            lower_distance_ptr,
+            upper_distance_ptr,
+            Ra,
+            adaptive_rows_ptr,
+            adaptive_weights_ptr,
+            whole_weight,
+            log(coordinate_scale),
+            gx.shape[0],
+            &gx[0],
+            &gw[0],
+            width_eps_mult,
+            curvature_degree,
+            lower_index,
+            upper_index,
+            &theta[0],
+            &blocks[0],
+            &nll,
+            &gradient[0],
+            &hessian[0, 0],
+            &fisher[0, 0],
+            &missing[0, 0],
+            &smallest,
+            &dual[0],
+            tolerance,
+            certified_tolerance,
+            accuracy_floor,
+            max_iterations,
+            armijo,
+            backtrack,
+            max_line_search,
+            min_steps,
+            initialize,
+            &iterations,
+            &evaluations,
+            &sub_iterations,
+            &bound,
         )
     if code == -2:
         raise np.linalg.LinAlgError("starting Gram block is not positive definite")
     if code == -1:
         raise MemoryError("compiled interval Newton workspace")
     if code < 0:
-        raise np.linalg.LinAlgError("compiled interval Newton precomputation did not converge")
+        raise np.linalg.LinAlgError(
+            "compiled interval Newton precomputation did not converge"
+        )
     statuses = {
         1: "converged",
         2: "converged_approximately",
@@ -2387,8 +2832,12 @@ def solve_point_newton(
     by backtracking inside the compiled traversal rather than restarting the
     solve in Python.
     """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(params, dtype=np.float64).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] blocks = np.ascontiguousarray(blocks_packed, dtype=np.float64).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(
+        params, dtype=np.float64
+    ).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] blocks = np.ascontiguousarray(
+        blocks_packed, dtype=np.float64
+    ).copy()
     cdef const double[:, ::1] b = _as_c(b_matrix)
     cdef const double[::1] a = _as_c(a_packed)
     cdef const int[::1] k = _as_c(sizes, np.intc)
@@ -2403,9 +2852,15 @@ def solve_point_newton(
     cdef const double[:, ::1] pcoeff = _as_c(coefficients)
     cdef const double[::1] ctl = _as_c(controls)
     cdef const double[::1] empirical = _as_c(empirical_means)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient = np.ascontiguousarray(current_gradient, dtype=np.float64).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian = np.ascontiguousarray(current_hessian, dtype=np.float64).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] means = np.ascontiguousarray(current_means, dtype=np.float64).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient = np.ascontiguousarray(
+        current_gradient, dtype=np.float64
+    ).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian = np.ascontiguousarray(
+        current_hessian, dtype=np.float64
+    ).copy()
+    cdef cnp.ndarray[cnp.float64_t, ndim=1] means = np.ascontiguousarray(
+        current_means, dtype=np.float64
+    ).copy()
     cdef int n = theta.shape[0], r = b.shape[0], nb = k.shape[0]
     cdef Py_ssize_t qtot = blocks.shape[0], na = a.shape[0]
     cdef cnp.ndarray[cnp.float64_t, ndim=1] dual = np.zeros(r, dtype=np.float64)
@@ -2439,7 +2894,9 @@ def solve_point_newton(
     if code == -1:
         raise MemoryError("compiled point Newton workspace")
     if code < 0:
-        raise np.linalg.LinAlgError("compiled point Newton precomputation did not converge")
+        raise np.linalg.LinAlgError(
+            "compiled point Newton precomputation did not converge"
+        )
     statuses = {
         1: "converged",
         2: "converged_approximately",
@@ -2545,7 +3002,9 @@ def solve_callback_newton(
             start_blocks = default_blocks
             warm = False
 
-        if bound <= tolerance * scale and (iteration >= min_steps or chosen_model >= 0.0):
+        if bound <= tolerance * scale and (
+            iteration >= min_steps or chosen_model >= 0.0
+        ):
             return (
                 "converged", theta, current_blocks, dual, current, iteration,
                 evaluations, sub_iterations, bound,

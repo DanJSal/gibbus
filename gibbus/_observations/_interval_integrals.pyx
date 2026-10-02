@@ -199,7 +199,9 @@ cdef inline void _map_t(
         angle = 0.5 * 3.141592653589793238462643383279502884 * t
         c = sin(angle)
         z[0] = lo + (hi - lo) * c * c
-        jac[0] = (hi - lo) * 0.5 * 3.141592653589793238462643383279502884 * sin(2.0 * angle)
+        jac[0] = (
+            (hi - lo) * 0.5 * 3.141592653589793238462643383279502884 * sin(2.0 * angle)
+        )
     else:
         om = 1.0 - t
         if transform == 1:
@@ -244,9 +246,13 @@ cdef int _node_accumulate(
     # endpoint.  Such a point has zero measure but endpoint-log statistics are
     # singular there, so move to the nearest representable interior point.
     if isfinite(support_lower) and z <= support_lower:
-        z = nextafter(support_lower, support_upper if isfinite(support_upper) else INFINITY)
+        z = nextafter(
+            support_lower, support_upper if isfinite(support_upper) else INFINITY
+        )
     if isfinite(support_upper) and z >= support_upper:
-        z = nextafter(support_upper, support_lower if isfinite(support_lower) else -INFINITY)
+        z = nextafter(
+            support_upper, support_lower if isfinite(support_lower) else -INFINITY
+        )
 
     qz = _q_eval_ptr(q, nq, support_lower, support_upper, a_lower, a_upper, z)
     if not isfinite(qz):
@@ -353,20 +359,60 @@ cdef int _gk15(
     for i in range(7):
         t = half * _XGK[i]
         status = _node_accumulate(
-            mid - t, _WGK[i], _WG[0] if i == 1 else (_WG[1] if i == 3 else (_WG[2] if i == 5 else 0.0)),
-            transform, lo, hi, scale, support_lower, support_upper,
-            q, nq, a_lower, a_upper, q_ref,
-            kinds, orders, coeffs, lengths, coeff_width, n_primary, n_extra,
-            refs, centered, kronrod, gauss,
+            mid - t,
+            _WGK[i],
+            _WG[0] if i == 1 else (_WG[1] if i == 3 else (_WG[2] if i == 5 else 0.0)),
+            transform,
+            lo,
+            hi,
+            scale,
+            support_lower,
+            support_upper,
+            q,
+            nq,
+            a_lower,
+            a_upper,
+            q_ref,
+            kinds,
+            orders,
+            coeffs,
+            lengths,
+            coeff_width,
+            n_primary,
+            n_extra,
+            refs,
+            centered,
+            kronrod,
+            gauss,
         )
         if status != 0:
             return status
         status = _node_accumulate(
-            mid + t, _WGK[i], _WG[0] if i == 1 else (_WG[1] if i == 3 else (_WG[2] if i == 5 else 0.0)),
-            transform, lo, hi, scale, support_lower, support_upper,
-            q, nq, a_lower, a_upper, q_ref,
-            kinds, orders, coeffs, lengths, coeff_width, n_primary, n_extra,
-            refs, centered, kronrod, gauss,
+            mid + t,
+            _WGK[i],
+            _WG[0] if i == 1 else (_WG[1] if i == 3 else (_WG[2] if i == 5 else 0.0)),
+            transform,
+            lo,
+            hi,
+            scale,
+            support_lower,
+            support_upper,
+            q,
+            nq,
+            a_lower,
+            a_upper,
+            q_ref,
+            kinds,
+            orders,
+            coeffs,
+            lengths,
+            coeff_width,
+            n_primary,
+            n_extra,
+            refs,
+            centered,
+            kronrod,
+            gauss,
         )
         if status != 0:
             return status
@@ -457,7 +503,12 @@ cdef int _adaptive_natural_row(
 
     if isfinite(lo) and isfinite(hi):
         center_x = 0.5 * lo + 0.5 * hi
-        if isfinite(support_lower) and lo == support_lower and isfinite(support_upper) and hi == support_upper:
+        if (
+            isfinite(support_lower)
+            and lo == support_lower
+            and isfinite(support_upper)
+            and hi == support_upper
+        ):
             transform = 6
         elif isfinite(support_lower) and lo == support_lower:
             transform = 4
@@ -714,26 +765,43 @@ cdef api int adaptive_natural_objective_c(
     lengths = <cnp.int32_t*>malloc(P * sizeof(cnp.int32_t))
     orders = <cnp.int64_t*>malloc(P * sizeof(cnp.int64_t))
     if arena == NULL or kinds == NULL or lengths == NULL or orders == NULL:
-        if arena != NULL: free(arena)
-        if kinds != NULL: free(kinds)
-        if lengths != NULL: free(lengths)
-        if orders != NULL: free(orders)
+        if arena != NULL:
+            free(arena)
+        if kinds != NULL:
+            free(kinds)
+        if lengths != NULL:
+            free(lengths)
+        if orders != NULL:
+            free(orders)
         return _ADAPT_ALLOC
 
     ptr = arena
-    refs = ptr; ptr += P
-    centered = ptr; ptr += P
-    tmp_k = ptr; ptr += m
-    tmp_g = ptr; ptr += m
-    vals = ptr; ptr += limit * m
-    errors = ptr; ptr += limit
-    bounds_a = ptr; ptr += limit
-    bounds_b = ptr; ptr += limit
-    total = ptr; ptr += m
-    left = ptr; ptr += m
-    right = ptr; ptr += m
-    centered_mean = ptr; ptr += P
-    mean_tmp = ptr; ptr += P
+    refs = ptr
+    ptr += P
+    centered = ptr
+    ptr += P
+    tmp_k = ptr
+    ptr += m
+    tmp_g = ptr
+    ptr += m
+    vals = ptr
+    ptr += limit * m
+    errors = ptr
+    ptr += limit
+    bounds_a = ptr
+    ptr += limit
+    bounds_b = ptr
+    ptr += limit
+    total = ptr
+    ptr += m
+    left = ptr
+    ptr += m
+    right = ptr
+    ptr += m
+    centered_mean = ptr
+    ptr += P
+    mean_tmp = ptr
+    ptr += P
     cov_tmp = ptr
 
     for i in range(P):
@@ -744,7 +812,10 @@ cdef api int adaptive_natural_objective_c(
         elif natural_kinds[i] == 2:
             kinds[i] = _STAT_LOG_UPPER
         else:
-            free(arena); free(kinds); free(lengths); free(orders)
+            free(arena)
+            free(kinds)
+            free(lengths)
+            free(orders)
             return _ADAPT_BAD_KIND
         lengths[i] = <cnp.int32_t>natural_lengths[i]
         orders[i] = 0
@@ -762,7 +833,10 @@ cdef api int adaptive_natural_objective_c(
             &log_probability[r], mean_tmp, cov_tmp,
         )
         if status != 0:
-            free(arena); free(kinds); free(lengths); free(orders)
+            free(arena)
+            free(kinds)
+            free(lengths)
+            free(orders)
             return status
         w = row_weights[r]
         nll_io[0] -= w * log_probability[r]
@@ -873,7 +947,9 @@ cdef class AdaptiveIntervalIntegrator:
         self._a_lower = float(amps[0])
         self._a_upper = float(amps[1])
         self._mode = mode
-        self._local_scale = local_scale if isfinite(local_scale) and local_scale > 0.0 else 1.0
+        self._local_scale = (
+            local_scale if isfinite(local_scale) and local_scale > 0.0 else 1.0
+        )
         self._log_Z = log_Z
         self._epsabs = epsabs
         self._epsrel = epsrel
@@ -928,7 +1004,12 @@ cdef class AdaptiveIntervalIntegrator:
 
         if isfinite(lo) and isfinite(hi):
             center_x = 0.5 * lo + 0.5 * hi
-            if isfinite(self._lower) and lo == self._lower and isfinite(self._upper) and hi == self._upper:
+            if (
+                isfinite(self._lower)
+                and lo == self._lower
+                and isfinite(self._upper)
+                and hi == self._upper
+            ):
                 transform = 6
             elif isfinite(self._lower) and lo == self._lower:
                 transform = 4
@@ -988,21 +1069,44 @@ cdef class AdaptiveIntervalIntegrator:
         centered_mean = <double*>malloc(
             (self._n_primary if self._n_primary > 0 else 1) * sizeof(double)
         )
-        if (refs == NULL or centered == NULL or tmp_k == NULL or tmp_g == NULL or
-                vals == NULL or errors == NULL or bounds_a == NULL or bounds_b == NULL or
-                total == NULL or left == NULL or right == NULL or centered_mean == NULL):
-            if refs != NULL: free(refs)
-            if centered != NULL: free(centered)
-            if tmp_k != NULL: free(tmp_k)
-            if tmp_g != NULL: free(tmp_g)
-            if vals != NULL: free(vals)
-            if errors != NULL: free(errors)
-            if bounds_a != NULL: free(bounds_a)
-            if bounds_b != NULL: free(bounds_b)
-            if total != NULL: free(total)
-            if left != NULL: free(left)
-            if right != NULL: free(right)
-            if centered_mean != NULL: free(centered_mean)
+        if (
+            refs == NULL
+            or centered == NULL
+            or tmp_k == NULL
+            or tmp_g == NULL
+            or vals == NULL
+            or errors == NULL
+            or bounds_a == NULL
+            or bounds_b == NULL
+            or total == NULL
+            or left == NULL
+            or right == NULL
+            or centered_mean == NULL
+        ):
+            if refs != NULL:
+                free(refs)
+            if centered != NULL:
+                free(centered)
+            if tmp_k != NULL:
+                free(tmp_k)
+            if tmp_g != NULL:
+                free(tmp_g)
+            if vals != NULL:
+                free(vals)
+            if errors != NULL:
+                free(errors)
+            if bounds_a != NULL:
+                free(bounds_a)
+            if bounds_b != NULL:
+                free(bounds_b)
+            if total != NULL:
+                free(total)
+            if left != NULL:
+                free(left)
+            if right != NULL:
+                free(right)
+            if centered_mean != NULL:
+                free(centered_mean)
             raise MemoryError("adaptive interval quadrature allocation failed")
 
         try:
@@ -1076,9 +1180,13 @@ cdef class AdaptiveIntervalIntegrator:
                         refs, centered, tmp_k, tmp_g, m, &errors[count],
                     )
                 if status == 1:
-                    raise RuntimeError("adaptive interval shift is not a potential minimum")
+                    raise RuntimeError(
+                        "adaptive interval shift is not a potential minimum"
+                    )
                 if status == 2:
-                    raise RuntimeError("adaptive interval integration produced non-finite weight")
+                    raise RuntimeError(
+                        "adaptive interval integration produced non-finite weight"
+                    )
                 if status == 3:
                     raise RuntimeError("interval statistic is non-finite")
                 for k in range(m):
@@ -1117,9 +1225,13 @@ cdef class AdaptiveIntervalIntegrator:
                         refs, centered, left, tmp_g, m, &e1,
                     )
                 if status == 1:
-                    raise RuntimeError("adaptive interval shift is not a potential minimum")
+                    raise RuntimeError(
+                        "adaptive interval shift is not a potential minimum"
+                    )
                 if status == 2:
-                    raise RuntimeError("adaptive interval integration produced non-finite weight")
+                    raise RuntimeError(
+                        "adaptive interval integration produced non-finite weight"
+                    )
                 if status == 3:
                     raise RuntimeError("interval statistic is non-finite")
 
@@ -1133,9 +1245,13 @@ cdef class AdaptiveIntervalIntegrator:
                         refs, centered, right, tmp_g, m, &e2,
                     )
                 if status == 1:
-                    raise RuntimeError("adaptive interval shift is not a potential minimum")
+                    raise RuntimeError(
+                        "adaptive interval shift is not a potential minimum"
+                    )
                 if status == 2:
-                    raise RuntimeError("adaptive interval integration produced non-finite weight")
+                    raise RuntimeError(
+                        "adaptive interval integration produced non-finite weight"
+                    )
                 if status == 3:
                     raise RuntimeError("interval statistic is non-finite")
 
@@ -1155,7 +1271,9 @@ cdef class AdaptiveIntervalIntegrator:
 
             mass = total[0]
             if not (mass > 0.0 and isfinite(mass)):
-                raise RuntimeError("adaptive interval integration produced invalid mass")
+                raise RuntimeError(
+                    "adaptive interval integration produced invalid mass"
+                )
 
             off = 1
             for j in range(self._n_primary):
@@ -1295,14 +1413,19 @@ cdef class AdaptiveIntervalIntegrator:
         extra_sum = np.zeros(self._n_extra, dtype=np.float64)
         if self._n_primary:
             mean_tmp = <double*>malloc(self._n_primary * sizeof(double))
-            cov_tmp = <double*>malloc(self._n_primary * self._n_primary * sizeof(double))
+            cov_tmp = <double*>malloc(
+                self._n_primary * self._n_primary * sizeof(double)
+            )
         if self._n_extra:
             extra_tmp = <double*>malloc(self._n_extra * sizeof(double))
         if ((self._n_primary and (mean_tmp == NULL or cov_tmp == NULL)) or
                 (self._n_extra and extra_tmp == NULL)):
-            if mean_tmp != NULL: free(mean_tmp)
-            if cov_tmp != NULL: free(cov_tmp)
-            if extra_tmp != NULL: free(extra_tmp)
+            if mean_tmp != NULL:
+                free(mean_tmp)
+            if cov_tmp != NULL:
+                free(cov_tmp)
+            if extra_tmp != NULL:
+                free(extra_tmp)
             raise MemoryError("adaptive interval batch allocation failed")
         try:
             for i in range(n):
@@ -1319,9 +1442,12 @@ cdef class AdaptiveIntervalIntegrator:
                     extra_sum[j] += weight * extra_tmp[j]
             return logp, mean_sum, cov_sum, extra_sum
         finally:
-            if mean_tmp != NULL: free(mean_tmp)
-            if cov_tmp != NULL: free(cov_tmp)
-            if extra_tmp != NULL: free(extra_tmp)
+            if mean_tmp != NULL:
+                free(mean_tmp)
+            if cov_tmp != NULL:
+                free(cov_tmp)
+            if extra_tmp != NULL:
+                free(extra_tmp)
 
 
 def statistic_kinds():

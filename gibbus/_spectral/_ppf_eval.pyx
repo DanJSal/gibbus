@@ -392,7 +392,9 @@ cdef class SpectralPPFEvaluator:
         if z >= 1.0:
             return 1.0
         j = self._cdf_panel_index(z)
-        u = (2.0 * z - (self.cdf_breaks[j] + self.cdf_breaks[j + 1])) / (self.cdf_breaks[j + 1] - self.cdf_breaks[j])
+        u = (2.0 * z - (self.cdf_breaks[j] + self.cdf_breaks[j + 1])) / (
+            self.cdf_breaks[j + 1] - self.cdf_breaks[j]
+        )
         c = self.cdf_coeff + j * self.cdf_stride
         nc = self.cdf_ncoeff[j]
         val = _cheb_generic(c, nc, u) + self.cdf_offsets[j]
@@ -410,7 +412,9 @@ cdef class SpectralPPFEvaluator:
         cdef int nc
         r = log(p) - log1p(-p)
         j = self._panel_index(r)
-        u = (2.0 * r - (self.breaks[j] + self.breaks[j + 1])) / (self.breaks[j + 1] - self.breaks[j])
+        u = (2.0 * r - (self.breaks[j] + self.breaks[j + 1])) / (
+            self.breaks[j + 1] - self.breaks[j]
+        )
         c = self.coeff + j * self.stride
         nc = self.ncoeff[j]
         if nc == 17:
@@ -426,7 +430,10 @@ cdef class SpectralPPFEvaluator:
         elif v >= 1.0:
             z = self.zbreaks[j + 1]
         else:
-            z = 0.5 * ((self.zbreaks[j + 1] - self.zbreaks[j]) * v + (self.zbreaks[j] + self.zbreaks[j + 1]))
+            z = 0.5 * (
+                (self.zbreaks[j + 1] - self.zbreaks[j]) * v
+                + (self.zbreaks[j] + self.zbreaks[j + 1])
+            )
         return z
 
     cdef inline double _invert_tail(self, double p) noexcept nogil:
@@ -508,7 +515,9 @@ cdef class SpectralPPFEvaluator:
         for i in range(n):
             out[i] = self._x_from_z(out[i])
 
-    cdef void _eval_many(self, const double* p, double* out, Py_ssize_t n) noexcept nogil:
+    cdef void _eval_many(
+        self, const double* p, double* out, Py_ssize_t n
+    ) noexcept nogil:
         """Scalar-per-observation loop; the fallback for small arrays."""
         cdef Py_ssize_t i
         for i in range(n):
@@ -530,7 +539,9 @@ cdef class SpectralPPFEvaluator:
             prev = cur
         return True
 
-    cdef void _eval_many_runs(self, const double* p, double* out, Py_ssize_t n) noexcept nogil:
+    cdef void _eval_many_runs(
+        self, const double* p, double* out, Py_ssize_t n
+    ) noexcept nogil:
         """SIMD-oriented evaluator for one-panel or sorted inputs; no scatter."""
         cdef Py_ssize_t cap = 16384
         cdef double* u_buf = NULL
@@ -551,23 +562,35 @@ cdef class SpectralPPFEvaluator:
         work1 = <double*> malloc(cap * sizeof(double))
         work2 = <double*> malloc(cap * sizeof(double))
         if u_buf == NULL or work0 == NULL or work1 == NULL or work2 == NULL:
-            if u_buf != NULL: free(u_buf)
-            if work0 != NULL: free(work0)
-            if work1 != NULL: free(work1)
-            if work2 != NULL: free(work2)
+            if u_buf != NULL:
+                free(u_buf)
+            if work0 != NULL:
+                free(work0)
+            if work1 != NULL:
+                free(work1)
+            if work2 != NULL:
+                free(work2)
             self._eval_many(p, out, n)
             return
 
         while i < n:
             pp = p[i]
             if isnan(pp):
-                out[i] = pp; i += 1; continue
+                out[i] = pp
+                i += 1
+                continue
             if pp == 0.0:
-                out[i] = -1.0; i += 1; continue
+                out[i] = -1.0
+                i += 1
+                continue
             if pp == 1.0:
-                out[i] = 1.0; i += 1; continue
+                out[i] = 1.0
+                i += 1
+                continue
             if pp < self.pmin or pp > self.pmax:
-                out[i] = self._invert_tail(pp); i += 1; continue
+                out[i] = self._invert_tail(pp)
+                i += 1
+                continue
 
             r = log(pp) - log1p(-pp)
             j = self._panel_index(r)
@@ -575,28 +598,51 @@ cdef class SpectralPPFEvaluator:
             m = 0
             while i < n and m < cap:
                 pp = p[i]
-                if isnan(pp) or pp == 0.0 or pp == 1.0 or pp < self.pmin or pp > self.pmax:
+                if (
+                    isnan(pp)
+                    or pp == 0.0
+                    or pp == 1.0
+                    or pp < self.pmin
+                    or pp > self.pmax
+                ):
                     break
                 r = log(pp) - log1p(-pp)
                 if self.npanels > 1 and (
-                        r < self.breaks[j] or (r >= self.breaks[j + 1] and j < self.npanels - 1)):
+                    r < self.breaks[j]
+                    or (r >= self.breaks[j + 1] and j < self.npanels - 1)
+                ):
                     break
-                u_buf[m] = (2.0 * r - (self.breaks[j] + self.breaks[j + 1])) / (self.breaks[j + 1] - self.breaks[j])
+                u_buf[m] = (2.0 * r - (self.breaks[j] + self.breaks[j + 1])) / (
+                    self.breaks[j + 1] - self.breaks[j]
+                )
                 m += 1
                 i += 1
             if m > 0:
                 c = self.coeff + j * self.stride
                 nc = self.ncoeff[j]
                 gibbus_ppf_cheb_batch_contiguous(
-                    u_buf, <size_t> m, c, nc, self.zbreaks[j], self.zbreaks[j + 1], out + start,
-                    work0, work1, work2,
+                    u_buf,
+                    <size_t> m,
+                    c,
+                    nc,
+                    self.zbreaks[j],
+                    self.zbreaks[j + 1],
+                    out + start,
+                    work0,
+                    work1,
+                    work2,
                 )
             else:
                 continue
 
-        free(u_buf); free(work0); free(work1); free(work2)
+        free(u_buf)
+        free(work0)
+        free(work1)
+        free(work2)
 
-    cdef void _eval_many_simd(self, const double* p, double* out, Py_ssize_t n) noexcept nogil:
+    cdef void _eval_many_simd(
+        self, const double* p, double* out, Py_ssize_t n
+    ) noexcept nogil:
         """Cache-blocked panel-bucketed evaluator with transposed Clenshaw."""
         cdef Py_ssize_t block_cap = 16384
         cdef int32_t* panel_of = NULL
@@ -628,19 +674,38 @@ cdef class SpectralPPFEvaluator:
         work0 = <double*> malloc(block_cap * sizeof(double))
         work1 = <double*> malloc(block_cap * sizeof(double))
         work2 = <double*> malloc(block_cap * sizeof(double))
-        if (panel_of == NULL or u_orig == NULL or u_bucket == NULL or index_bucket == NULL or
-                counts == NULL or starts == NULL or pos == NULL or work0 == NULL or
-                work1 == NULL or work2 == NULL):
-            if panel_of != NULL: free(panel_of)
-            if u_orig != NULL: free(u_orig)
-            if u_bucket != NULL: free(u_bucket)
-            if index_bucket != NULL: free(index_bucket)
-            if counts != NULL: free(counts)
-            if starts != NULL: free(starts)
-            if pos != NULL: free(pos)
-            if work0 != NULL: free(work0)
-            if work1 != NULL: free(work1)
-            if work2 != NULL: free(work2)
+        if (
+            panel_of == NULL
+            or u_orig == NULL
+            or u_bucket == NULL
+            or index_bucket == NULL
+            or counts == NULL
+            or starts == NULL
+            or pos == NULL
+            or work0 == NULL
+            or work1 == NULL
+            or work2 == NULL
+        ):
+            if panel_of != NULL:
+                free(panel_of)
+            if u_orig != NULL:
+                free(u_orig)
+            if u_bucket != NULL:
+                free(u_bucket)
+            if index_bucket != NULL:
+                free(index_bucket)
+            if counts != NULL:
+                free(counts)
+            if starts != NULL:
+                free(starts)
+            if pos != NULL:
+                free(pos)
+            if work0 != NULL:
+                free(work0)
+            if work1 != NULL:
+                free(work1)
+            if work2 != NULL:
+                free(work2)
             self._eval_many(p, out, n)
             return
 
@@ -669,7 +734,9 @@ cdef class SpectralPPFEvaluator:
                     continue
                 r = log(pp) - log1p(-pp)
                 j = self._panel_index(r)
-                u = (2.0 * r - (self.breaks[j] + self.breaks[j + 1])) / (self.breaks[j + 1] - self.breaks[j])
+                u = (2.0 * r - (self.breaks[j] + self.breaks[j + 1])) / (
+                    self.breaks[j + 1] - self.breaks[j]
+                )
                 panel_of[i] = <int32_t> j
                 u_orig[i] = u
                 counts[j] += 1
@@ -693,14 +760,30 @@ cdef class SpectralPPFEvaluator:
                 c = self.coeff + j * self.stride
                 nc = self.ncoeff[j]
                 gibbus_ppf_cheb_batch(
-                    u_bucket + starts[j], index_bucket + starts[j], <size_t> counts[j],
-                    c, nc, self.zbreaks[j], self.zbreaks[j + 1], out + base, work0, work1, work2,
+                    u_bucket + starts[j],
+                    index_bucket + starts[j],
+                    <size_t> counts[j],
+                    c,
+                    nc,
+                    self.zbreaks[j],
+                    self.zbreaks[j + 1],
+                    out + base,
+                    work0,
+                    work1,
+                    work2,
                 )
             base += m
 
-        free(panel_of); free(u_orig); free(u_bucket); free(index_bucket)
-        free(counts); free(starts); free(pos)
-        free(work0); free(work1); free(work2)
+        free(panel_of)
+        free(u_orig)
+        free(u_bucket)
+        free(index_bucket)
+        free(counts)
+        free(starts)
+        free(pos)
+        free(work0)
+        free(work1)
+        free(work2)
 
     cdef object _call_mode(self, object p, bint use_simd, bint map_to_x):
         """Dispatch to the vectorized or scalar loop and restore *p*'s shape.

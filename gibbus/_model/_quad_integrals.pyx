@@ -384,7 +384,9 @@ def quad_integral(
     else:
         T = np.asarray(terms, dtype=np.float64)
         if T.ndim != 2 or T.shape[1] != 3:
-            raise ValueError("terms must have shape (n_terms, 3) with columns (endpoint, sign, amplitude)")
+            raise ValueError(
+                "terms must have shape (n_terms, 3) with columns (endpoint, sign, amplitude)"
+            )
         if T.shape[0] > 2:
             raise ValueError("terms must have at most 2 rows")
 
@@ -440,7 +442,9 @@ def quad_integral(
                 b = min(b, U - dmin_log_val, float(np.nextafter(U, -np.inf)))
 
     if not (a < b):
-        raise ValueError("Buffered integration interval is empty; check L/U and boundary parameters")
+        raise ValueError(
+            "Buffered integration interval is empty; check L/U and boundary parameters"
+        )
 
     out = quad(
         f, a, b,

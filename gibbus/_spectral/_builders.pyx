@@ -58,7 +58,9 @@ cdef struct Density:
     const double* par             # per component: Lz Uz aL aU log_norm mu sigma jf weight lo hi
 
 
-cdef inline double _kernel(const double* q, Py_ssize_t nq, double z, const double* p) noexcept nogil:
+cdef inline double _kernel(
+    const double* q, Py_ssize_t nq, double z, const double* p
+) noexcept nogil:
     """``_pdf_vec`` at one point (``p``: Lz, Uz, aL, aU, log_norm)."""
     cdef double Lz = p[0], Uz = p[1], aL = p[2], aU = p[3]
     cdef bint finL = isfinite(Lz)
@@ -229,8 +231,9 @@ cdef inline double _chebval_ev(const double* c, int nc, double u) noexcept nogil
     return u * b1 - b2 + c[0]
 
 
-cdef inline void _cheb_value_derivative(const double* c, int nc, double u, double* value,
-                                        double* derivative) noexcept nogil:
+cdef inline void _cheb_value_derivative(
+    const double* c, int nc, double u, double* value, double* derivative
+) noexcept nogil:
     cdef double b0, b1 = 0.0, b2 = 0.0
     cdef double d0, d1 = 0.0, d2 = 0.0
     cdef int k
@@ -245,7 +248,9 @@ cdef inline void _cheb_value_derivative(const double* c, int nc, double u, doubl
     derivative[0] = b1 + u * d1 - d2
 
 
-cdef inline double _chebint(const double* c, int n, double scl, double* out) noexcept nogil:
+cdef inline double _chebint(
+    const double* c, int n, double scl, double* out
+) noexcept nogil:
     """``_panel_kernels.chebint_scaled`` (``out``: ``n + 1``); returns the mass."""
     cdef int j
     memset(out, 0, (n + 1) * sizeof(double))
@@ -302,7 +307,9 @@ cdef class Tables:
     cdef const double* gl_nodes
     cdef const double* gl_weights
 
-    def __init__(self, lobatto, transforms, midpoints, ratios, gauss_nodes, gauss_weights):
+    def __init__(
+        self, lobatto, transforms, midpoints, ratios, gauss_nodes, gauss_weights
+    ):
         """Bind cached tables.
 
         Parameters
@@ -363,8 +370,14 @@ cdef struct Tab:
     const double* gl_weights
 
 
-cdef inline double _lift(const Tab* t, const double* coeff, int ncoeff, int max_subdivide,
-                         double* work, int* depths) noexcept nogil:
+cdef inline double _lift(
+    const Tab* t,
+    const double* coeff,
+    int ncoeff,
+    int max_subdivide,
+    double* work,
+    int* depths,
+) noexcept nogil:
     """``SpectralCDF._positivity_lift_bernstein``."""
     cdef double lower, scale
     cdef int i
@@ -408,7 +421,9 @@ cdef struct CPanel:
     int ncoeff                  # coeff length (degree + 1); icoeff has ncoeff + 1
 
 
-cdef double _trial_score(const Density* d, const Map* mp, const Tab* t, int degree) noexcept nogil:
+cdef double _trial_score(
+    const Density* d, const Map* mp, const Tab* t, int degree
+) noexcept nogil:
     cdef int n = 20 if degree > 20 else degree
     cdef int m = 2 * n + 3
     cdef double vals[72]
@@ -448,9 +463,21 @@ cdef double _trial_score(const Density* d, const Map* mp, const Tab* t, int degr
     return err / scale + tail / cmax
 
 
-cdef int _fit_cdf_panel(const Density* d, const Map* mp, const Tab* t, const CdfOpts* o,
-                        double a, double b, int depth, int n, CPanel* out, double* coeff,
-                        double* icoeff, double* work, int* depths) noexcept nogil:
+cdef int _fit_cdf_panel(
+    const Density* d,
+    const Map* mp,
+    const Tab* t,
+    const CdfOpts* o,
+    double a,
+    double b,
+    int depth,
+    int n,
+    CPanel* out,
+    double* coeff,
+    double* icoeff,
+    double* work,
+    int* depths,
+) noexcept nogil:
     """``SpectralCDF._fit_panel``; returns whether the panel converged."""
     cdef int m = 2 * n + 3
     cdef double vals[72]
@@ -458,8 +485,10 @@ cdef int _fit_cdf_panel(const Density* d, const Map* mp, const Tab* t, const Cdf
     cdef const double* u = t.lob[n]
     cdef const double* T = t.trans[n]
     cdef const double* uv = t.mid[m]
-    cdef double total, fit_error = 0.0, data_scale = 0.0, tail_abs = 0.0, coeff_scale = 0.0
-    cdef double av, pred, err, scale, width, mass_scale, tol_mass, tail_tol_mass, lift, mass
+    cdef double total, fit_error = 0.0, data_scale = 0.0
+    cdef double tail_abs = 0.0, coeff_scale = 0.0
+    cdef double av, pred, err, scale, width, mass_scale
+    cdef double tol_mass, tail_tol_mass, lift, mass
     cdef int i, j, converged
     for i in range(n + 1):
         vals[i] = _g(d, mp, 0.5 * ((b - a) * u[i] + (a + b)))
@@ -547,21 +576,44 @@ cdef int _fit_best(const Density* d, const Map* mp, const Tab* t, const CdfOpts*
     cdef int r = bd.n_rec, k
     bd.n_rec += 1
     for k in range(o.n_degrees):
-        if _fit_cdf_panel(d, mp, t, o, a, b, depth, o.degrees[k], &bd.rec[r],
-                          bd.coeff + r * bd.S, bd.icoeff + r * (bd.S + 1), work, depths):
+        if _fit_cdf_panel(
+            d,
+            mp,
+            t,
+            o,
+            a,
+            b,
+            depth,
+            o.degrees[k],
+            &bd.rec[r],
+            bd.coeff + r * bd.S,
+            bd.icoeff + r * (bd.S + 1),
+            work,
+            depths,
+        ):
             return r
     return r
 
 
-cdef int _build_partition(const Density* d, const Map* mp, const Tab* t, const CdfOpts* o,
-                          CdfBuild* bd, const double* breaks, int nbreaks, double* work,
-                          int* depths) noexcept nogil:
+cdef int _build_partition(
+    const Density* d,
+    const Map* mp,
+    const Tab* t,
+    const CdfOpts* o,
+    CdfBuild* bd,
+    const double* breaks,
+    int nbreaks,
+    double* work,
+    int* depths,
+) noexcept nogil:
     cdef int i, j, best_j, r, left, right
     cdef double priority, best, mid, min_width = 5e-13
     cdef CPanel* p
     bd.n_leaves = 0
     for i in range(nbreaks - 1):
-        bd.leaf[bd.n_leaves] = _fit_best(d, mp, t, o, bd, breaks[i], breaks[i + 1], 0, work, depths)
+        bd.leaf[bd.n_leaves] = _fit_best(
+            d, mp, t, o, bd, breaks[i], breaks[i + 1], 0, work, depths
+        )
         bd.n_leaves += 1
     bd.exhausted = 0
     while True:
@@ -582,8 +634,12 @@ cdef int _build_partition(const Density* d, const Map* mp, const Tab* t, const C
             break
         r = bd.leaf[best_j]
         mid = 0.5 * (bd.rec[r].a + bd.rec[r].b)
-        left = _fit_best(d, mp, t, o, bd, bd.rec[r].a, mid, bd.rec[r].depth + 1, work, depths)
-        right = _fit_best(d, mp, t, o, bd, mid, bd.rec[r].b, bd.rec[r].depth + 1, work, depths)
+        left = _fit_best(
+            d, mp, t, o, bd, bd.rec[r].a, mid, bd.rec[r].depth + 1, work, depths
+        )
+        right = _fit_best(
+            d, mp, t, o, bd, mid, bd.rec[r].b, bd.rec[r].depth + 1, work, depths
+        )
         memmove(bd.leaf + best_j + 2, bd.leaf + best_j + 1,
                 (bd.n_leaves - best_j - 1) * sizeof(int))
         bd.leaf[best_j] = left
@@ -592,10 +648,13 @@ cdef int _build_partition(const Density* d, const Map* mp, const Tab* t, const C
     return 0
 
 
-cdef int _recertify(const Density* d, const Map* mp, const Tab* t, CdfBuild* bd) noexcept nogil:
+cdef int _recertify(
+    const Density* d, const Map* mp, const Tab* t, CdfBuild* bd
+) noexcept nogil:
     """``SpectralCDF._recertify_panel_masses``; returns the count replaced."""
     cdef int j, r, s, g, fixed = 0, i
-    cdef double half, midp, total, lo, hi, sh, sc, zz, val, acc, true_mass, old, ratio, height
+    cdef double half, midp, total, lo, hi, sh, sc, zz
+    cdef double val, acc, true_mass, old, ratio, height
     cdef CPanel* p
     cdef double* coeff
     cdef double* icoeff
@@ -691,7 +750,9 @@ cdef inline double _eval_compact(const CdfEval* ev, double z) noexcept nogil:
     if z >= 1.0:
         return 1.0
     j = _panel_index(ev, z)
-    u = (2.0 * z - (ev.breaks[j] + ev.breaks[j + 1])) / (ev.breaks[j + 1] - ev.breaks[j])
+    u = (2.0 * z - (ev.breaks[j] + ev.breaks[j + 1])) / (
+        ev.breaks[j + 1] - ev.breaks[j]
+    )
     val = _chebval_ev(ev.coeffs + j * ev.stride, ev.ncoeff[j], u) + ev.offsets[j]
     if val <= 0.0:
         return 0.0
@@ -738,7 +799,12 @@ cdef double _invert_fraction(const CdfEval* ev, int j, double frac) noexcept nog
             break
         if deriv > 0.0 and not isinf(deriv) and not isnan(deriv):
             candidate = u - f / deriv
-            if candidate <= lo or candidate >= hi or isinf(candidate) or isnan(candidate):
+            if (
+                candidate <= lo
+                or candidate >= hi
+                or isinf(candidate)
+                or isnan(candidate)
+            ):
                 candidate = 0.5 * (lo + hi)
         else:
             candidate = 0.5 * (lo + hi)
@@ -751,7 +817,9 @@ cdef double _invert_fraction(const CdfEval* ev, int j, double frac) noexcept nog
         u = lo
     elif fabs(fhi) < fabs(f):
         u = hi
-    return 0.5 * ((ev.breaks[j + 1] - ev.breaks[j]) * u + (ev.breaks[j] + ev.breaks[j + 1]))
+    return 0.5 * (
+        (ev.breaks[j + 1] - ev.breaks[j]) * u + (ev.breaks[j] + ev.breaks[j + 1])
+    )
 
 
 cdef inline double _clip01(double v) noexcept nogil:
@@ -773,7 +841,9 @@ cdef double _invert_source(const CdfEval* ev, int j, double p) noexcept nogil:
     return _invert_fraction(ev, j, _clip01((p - pa) / (pb - pa)))
 
 
-cdef double _invert_global(const CdfEval* ev, double p, bint prefer_left) noexcept nogil:
+cdef double _invert_global(
+    const CdfEval* ev, double p, bint prefer_left
+) noexcept nogil:
     cdef int j, lo, hi, mid, k, found
     if p <= 0.0:
         return -1.0
@@ -862,7 +932,11 @@ cdef struct IPanel:
 
 
 cdef inline double _spacing(double x) noexcept nogil:
-    return fabs(nextafter(x, INFINITY) - x) if x >= 0.0 else fabs(nextafter(x, -INFINITY) - x)
+    return (
+        fabs(nextafter(x, INFINITY) - x)
+        if x >= 0.0
+        else fabs(nextafter(x, -INFINITY) - x)
+    )
 
 
 cdef void _fail_ipanel(IPanel* out, double* coeff) noexcept nogil:
@@ -877,10 +951,26 @@ cdef void _fail_ipanel(IPanel* out, double* coeff) noexcept nogil:
     out.ok = 0
 
 
-cdef int _fit_ppf_panel(const Density* d, const Map* mp, const Tab* t, const PpfOpts* o,
-                        const CdfEval* ev, int src, double ra, double rb, double pa, double pb,
-                        double za, double zb, int depth, int degree, IPanel* out,
-                        double* coeff, double* work, int* depths) noexcept nogil:
+cdef int _fit_ppf_panel(
+    const Density* d,
+    const Map* mp,
+    const Tab* t,
+    const PpfOpts* o,
+    const CdfEval* ev,
+    int src,
+    double ra,
+    double rb,
+    double pa,
+    double pb,
+    double za,
+    double zb,
+    int depth,
+    int degree,
+    IPanel* out,
+    double* coeff,
+    double* work,
+    int* depths,
+) noexcept nogil:
     """``SpectralPPF._fit_panel``; returns whether the panel certified."""
     cdef int n = degree - 1, m = 2 * degree + 5, i, k, nd, ndc, nic
     cdef double r
@@ -974,8 +1064,9 @@ cdef int _fit_ppf_panel(const Density* d, const Map* mp, const Tab* t, const Ppf
         if fabs(coeff[i]) > tail_abs:
             tail_abs = fabs(coeff[i])
     ndc = _chebder(coeff, nic, dcoeff)
-    dlower = _chebyshev_lower_bound_c(dcoeff, ndc, t.ratio[ndc - 1], o.certify_subdivide,
-                                      work, depths)
+    dlower = _chebyshev_lower_bound_c(
+        dcoeff, ndc, t.ratio[ndc - 1], o.certify_subdivide, work, depths
+    )
     out.fit_error = fit_error
     out.logit_residual = logit_resid
     out.prob_residual = prob_resid
@@ -1004,10 +1095,24 @@ cdef struct PpfBuild:
     int fail_rec
 
 
-cdef int _ppf_fit_best(const Density* d, const Map* mp, const Tab* t, const PpfOpts* o,
-                       const CdfEval* ev, PpfBuild* bd, int src, double ra, double rb,
-                       double pa, double pb, double za, double zb, int depth, double* work,
-                       int* depths) noexcept nogil:
+cdef int _ppf_fit_best(
+    const Density* d,
+    const Map* mp,
+    const Tab* t,
+    const PpfOpts* o,
+    const CdfEval* ev,
+    PpfBuild* bd,
+    int src,
+    double ra,
+    double rb,
+    double pa,
+    double pb,
+    double za,
+    double zb,
+    int depth,
+    double* work,
+    int* depths,
+) noexcept nogil:
     cdef int r = bd.n_rec, k
     bd.n_rec += 1
     for k in range(o.n_degrees):
@@ -1017,9 +1122,19 @@ cdef int _ppf_fit_best(const Density* d, const Map* mp, const Tab* t, const PpfO
     return r
 
 
-cdef int _ppf_partition(const Density* d, const Map* mp, const Tab* t, const PpfOpts* o,
-                        const CdfEval* ev, PpfBuild* bd, int n_seed, const int* seed_src,
-                        const double* seed, double* work, int* depths) noexcept nogil:
+cdef int _ppf_partition(
+    const Density* d,
+    const Map* mp,
+    const Tab* t,
+    const PpfOpts* o,
+    const CdfEval* ev,
+    PpfBuild* bd,
+    int n_seed,
+    const int* seed_src,
+    const double* seed,
+    double* work,
+    int* depths,
+) noexcept nogil:
     """``SpectralPPF._build_partition``; sets ``bd.fail`` instead of raising."""
     cdef int i, j, best_j, r, left, right, n_failed
     cdef double best, priority, rm, pm, zm
@@ -1028,8 +1143,23 @@ cdef int _ppf_partition(const Density* d, const Map* mp, const Tab* t, const Ppf
     bd.fail = 0
     for i in range(n_seed):
         bd.leaf[bd.n_leaves] = _ppf_fit_best(
-            d, mp, t, o, ev, bd, seed_src[i], seed[6 * i], seed[6 * i + 1], seed[6 * i + 2],
-            seed[6 * i + 3], seed[6 * i + 4], seed[6 * i + 5], 0, work, depths)
+            d,
+            mp,
+            t,
+            o,
+            ev,
+            bd,
+            seed_src[i],
+            seed[6 * i],
+            seed[6 * i + 1],
+            seed[6 * i + 2],
+            seed[6 * i + 3],
+            seed[6 * i + 4],
+            seed[6 * i + 5],
+            0,
+            work,
+            depths,
+        )
         bd.n_leaves += 1
     while True:
         best_j = -1
@@ -1059,11 +1189,43 @@ cdef int _ppf_partition(const Density* d, const Map* mp, const Tab* t, const Ppf
         rm = 0.5 * (p.ra + p.rb)
         pm = _clip_p(_expit(rm))
         zm = _exact_z_for_r(ev, p.source, rm)
-        left = _ppf_fit_best(d, mp, t, o, ev, bd, p.source, p.ra, rm, p.pa, pm, p.za, zm,
-                             p.depth + 1, work, depths)
+        left = _ppf_fit_best(
+            d,
+            mp,
+            t,
+            o,
+            ev,
+            bd,
+            p.source,
+            p.ra,
+            rm,
+            p.pa,
+            pm,
+            p.za,
+            zm,
+            p.depth + 1,
+            work,
+            depths,
+        )
         p = &bd.rec[r]
-        right = _ppf_fit_best(d, mp, t, o, ev, bd, p.source, rm, p.rb, pm, p.pb, zm, p.zb,
-                              p.depth + 1, work, depths)
+        right = _ppf_fit_best(
+            d,
+            mp,
+            t,
+            o,
+            ev,
+            bd,
+            p.source,
+            rm,
+            p.rb,
+            pm,
+            p.pb,
+            zm,
+            p.zb,
+            p.depth + 1,
+            work,
+            depths,
+        )
         memmove(bd.leaf + best_j + 2, bd.leaf + best_j + 1,
                 (bd.n_leaves - best_j - 1) * sizeof(int))
         bd.leaf[best_j] = left
@@ -1099,7 +1261,9 @@ cdef class DensitySpec:
         k = len(components)
         if k < 1:
             raise ValueError("at least one component is required")
-        polys = [np.ascontiguousarray(c[0], dtype=np.float64).reshape(-1) for c in components]
+        polys = [
+            np.ascontiguousarray(c[0], dtype=np.float64).reshape(-1) for c in components
+        ]
         if any(p.size < 1 or not np.all(np.isfinite(p)) for p in polys):
             raise ValueError("component polynomials must be finite and non-empty")
         q = np.ascontiguousarray(np.concatenate(polys))
@@ -1107,7 +1271,9 @@ cdef class DensitySpec:
         off = np.zeros(k, dtype=np.intp)
         off[1:] = np.cumsum(nq[:k - 1])
         par = np.ascontiguousarray(
-            np.array([[float(v) for v in c[1:]] for c in components], dtype=np.float64).reshape(-1)
+            np.array(
+                [[float(v) for v in c[1:]] for c in components], dtype=np.float64
+            ).reshape(-1)
         )
         if par.size != 11 * k:
             raise ValueError("each component needs eleven scalar parameters")
@@ -1145,10 +1311,24 @@ cdef void _tab_from(Tables tables, Tab* t):
     t.gl_weights = tables.gl_weights
 
 
-def build_cdf(DensitySpec density, Tables tables, int map_kind, double L, double U,
-              double center, double scale, bint choose_scale, double s0,
-              const double[::1] breaks, const int[::1] degrees, double rel_tol, double abs_tol,
-              double coeff_tol, int max_depth, int max_panels):
+def build_cdf(
+    DensitySpec density,
+    Tables tables,
+    int map_kind,
+    double L,
+    double U,
+    double center,
+    double scale,
+    bint choose_scale,
+    double s0,
+    const double[::1] breaks,
+    const int[::1] degrees,
+    double rel_tol,
+    double abs_tol,
+    double coeff_tol,
+    int max_depth,
+    int max_panels,
+):
     """Build the adaptive spectral CDF (``SpectralCDF`` construction).
 
     Parameters
@@ -1205,7 +1385,12 @@ def build_cdf(DensitySpec density, Tables tables, int map_kind, double L, double
     bd.n_rec = 0
     if (bd.leaf == NULL or bd.rec == NULL or bd.coeff == NULL or bd.icoeff == NULL
             or work == NULL or depths == NULL):
-        free(bd.leaf); free(bd.rec); free(bd.coeff); free(bd.icoeff); free(work); free(depths)
+        free(bd.leaf)
+        free(bd.rec)
+        free(bd.coeff)
+        free(bd.icoeff)
+        free(work)
+        free(depths)
         raise MemoryError("spectral CDF workspace")
     o.degrees = &degrees[0]
     o.n_degrees = degrees.shape[0]
@@ -1231,7 +1416,9 @@ def build_cdf(DensitySpec density, Tables tables, int map_kind, double L, double
                     best_score = trial
                     best_s = sc
             mp.scale = best_s
-        _build_partition(&density.d, &mp, &t, &o, &bd, &breaks[0], breaks.shape[0], work, depths)
+        _build_partition(
+            &density.d, &mp, &t, &o, &bd, &breaks[0], breaks.shape[0], work, depths
+        )
         fixed = _recertify(&density.d, &mp, &t, &bd)
     m = bd.n_leaves
     panels = np.empty((m, 7), dtype=np.float64)
@@ -1261,17 +1448,41 @@ def build_cdf(DensitySpec density, Tables tables, int map_kind, double L, double
         for i in range(p.ncoeff + 1):
             icv[j, i] = bd.icoeff[r * (bd.S + 1) + i]
     exhausted = bd.exhausted
-    free(bd.leaf); free(bd.rec); free(bd.coeff); free(bd.icoeff); free(work); free(depths)
+    free(bd.leaf)
+    free(bd.rec)
+    free(bd.coeff)
+    free(bd.icoeff)
+    free(work)
+    free(depths)
     return mp.scale, panels, ints, coeff, icoeff, bool(exhausted), fixed
 
 
-def build_ppf(DensitySpec density, Tables tables, int map_kind, double L, double U,
-              double center, double scale, const double[::1] breaks,
-              const double[::1] offsets, const double[::1] cum, const double[:, ::1] ev_coeffs,
-              const int[::1] ev_ncoeff, const double[::1] a, const double[::1] b,
-              const double[:, ::1] icoeff, const int[::1] nicoeff, double total,
-              const int[::1] seed_src, const double[:, ::1] seed, const int[::1] degrees,
-              double prob_tol, int max_depth, int max_panels, int certify_subdivide):
+def build_ppf(
+    DensitySpec density,
+    Tables tables,
+    int map_kind,
+    double L,
+    double U,
+    double center,
+    double scale,
+    const double[::1] breaks,
+    const double[::1] offsets,
+    const double[::1] cum,
+    const double[:, ::1] ev_coeffs,
+    const int[::1] ev_ncoeff,
+    const double[::1] a,
+    const double[::1] b,
+    const double[:, ::1] icoeff,
+    const int[::1] nicoeff,
+    double total,
+    const int[::1] seed_src,
+    const double[:, ::1] seed,
+    const int[::1] degrees,
+    double prob_tol,
+    int max_depth,
+    int max_panels,
+    int certify_subdivide,
+):
     """Build the monotone spectral inverse (``SpectralPPF`` construction).
 
     Returns
@@ -1329,8 +1540,18 @@ def build_ppf(DensitySpec density, Tables tables, int map_kind, double L, double
     bd.coeff = <double*> malloc(nrec_cap * bd.S * sizeof(double))
     work = <double*> malloc(((13 + ms) * (_MAXN + 1) + 8) * sizeof(double))
     depths = <int*> malloc((ms + 2) * sizeof(int))
-    if bd.leaf == NULL or bd.rec == NULL or bd.coeff == NULL or work == NULL or depths == NULL:
-        free(bd.leaf); free(bd.rec); free(bd.coeff); free(work); free(depths)
+    if (
+        bd.leaf == NULL
+        or bd.rec == NULL
+        or bd.coeff == NULL
+        or work == NULL
+        or depths == NULL
+    ):
+        free(bd.leaf)
+        free(bd.rec)
+        free(bd.coeff)
+        free(work)
+        free(depths)
         raise MemoryError("spectral PPF workspace")
     with nogil:
         status = _ppf_partition(&density.d, &mp, &t, &o, &ev, &bd, n_seed, &seed_src[0],
@@ -1367,5 +1588,9 @@ def build_ppf(DensitySpec density, Tables tables, int map_kind, double L, double
         for i in range(p.ncoeff):
             cv[j, i] = bd.coeff[r * bd.S + i]
     detail = bd.fail_rec if status != 0 else 0
-    free(bd.leaf); free(bd.rec); free(bd.coeff); free(work); free(depths)
+    free(bd.leaf)
+    free(bd.rec)
+    free(bd.coeff)
+    free(work)
+    free(depths)
     return int(status), panels, ints, coeff, int(detail)

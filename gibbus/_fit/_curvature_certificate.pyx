@@ -84,7 +84,9 @@ cdef inline void _mul(const Poly* a, const Poly* b, Poly* out) noexcept nogil:
         out.e[k] = prop + _gamma(terms + 1) * mag
 
 
-cdef inline void _axpy(double alpha, double alpha_err, const Poly* x, Poly* y) noexcept nogil:
+cdef inline void _axpy(
+    double alpha, double alpha_err, const Poly* x, Poly* y
+) noexcept nogil:
     """``y += alpha x`` (alpha with its own error bound)."""
     cdef int i
     cdef double prod, sumv
@@ -128,7 +130,9 @@ cdef inline void _trim(Poly* p) noexcept nogil:
         p.m -= 1
 
 
-cdef inline void _two_diff(double a, double b, double* value, double* error) noexcept nogil:
+cdef inline void _two_diff(
+    double a, double b, double* value, double* error
+) noexcept nogil:
     """``a - b`` rounded, with the exact magnitude of its rounding error."""
     cdef double s = a - b
     cdef double bv = s - a
@@ -136,7 +140,9 @@ cdef inline void _two_diff(double a, double b, double* value, double* error) noe
     error[0] = fabs((a - (s - bv)) + (-b - bv))
 
 
-cdef inline void _affine_square(double d, double d_err, double sign, Poly* out) noexcept nogil:
+cdef inline void _affine_square(
+    double d, double d_err, double sign, Poly* out
+) noexcept nogil:
     """``out = (d + sign x)^2``."""
     cdef Poly lin
     lin.m = 2
@@ -219,7 +225,9 @@ cdef int _to_bernstein_half(const Poly* t, Poly* b) noexcept nogil:
     return 0
 
 
-cdef int _to_bernstein_bounded(const Poly* t, double width, double width_err, Poly* b) noexcept nogil:
+cdef int _to_bernstein_bounded(
+    const Poly* t, double width, double width_err, Poly* b
+) noexcept nogil:
     """Bounded: ``x = width s``; power-to-Bernstein on ``[0, 1]``."""
     cdef Poly u
     cdef int d = t.m - 1, j, k, terms
@@ -228,10 +236,17 @@ cdef int _to_bernstein_bounded(const Poly* t, double width, double width_err, Po
     for j in range(t.m):
         prod = t.v[j] * wpow
         u.v[j] = prod
-        u.e[j] = t.e[j] * wpow + fabs(t.v[j]) * wpow_err + t.e[j] * wpow_err + _U * fabs(prod)
+        u.e[j] = (
+            t.e[j] * wpow
+            + fabs(t.v[j]) * wpow_err
+            + t.e[j] * wpow_err
+            + _U * fabs(prod)
+        )
         # next power of the width, with an absolute error bound
         prod = wpow * width
-        wpow_err = wpow_err * width + wpow * width_err + wpow_err * width_err + _U * fabs(prod)
+        wpow_err = (
+            wpow_err * width + wpow * width_err + wpow_err * width_err + _U * fabs(prod)
+        )
         wpow = prod
     b.m = t.m
     for k in range(t.m):
@@ -275,7 +290,10 @@ cdef int _search(const Poly* root, int max_depth, int max_leaves) noexcept nogil
             continue
         # Endpoint values are exact Bernstein coefficients: a certified
         # negative one is a certified violation.
-        if node.v[0] + _SAFETY * node.e[0] < 0.0 or node.v[m - 1] + _SAFETY * node.e[m - 1] < 0.0:
+        if (
+            node.v[0] + _SAFETY * node.e[0] < 0.0
+            or node.v[m - 1] + _SAFETY * node.e[m - 1] < 0.0
+        ):
             return 0
         leaves += 1
         if dep >= max_depth or leaves >= max_leaves or top + 2 > STACK:
@@ -329,8 +347,17 @@ cdef int _piece(const double* q2, int nq, double z0, double z1, bint reflect,
     return _search(&b, max_depth, max_leaves)
 
 
-cdef int _certify(const double* q2, int nq, double lower, double upper, double a_lower,
-                  double a_upper, double tau, int max_depth, int max_leaves) noexcept nogil:
+cdef int _certify(
+    const double* q2,
+    int nq,
+    double lower,
+    double upper,
+    double a_lower,
+    double a_upper,
+    double tau,
+    int max_depth,
+    int max_leaves,
+) noexcept nogil:
     """Decide full-curvature feasibility: 1 feasible, 0 violated, -1 uncertain.
 
     The data region ``[-8, 8]`` of the canonical coordinate (clipped to the
@@ -390,8 +417,16 @@ cdef int _certify(const double* q2, int nq, double lower, double upper, double a
     return 1
 
 
-def certify_full_curvature(q_d2, double lower, double upper, double a_lower, double a_upper,
-                           double tolerance, int max_depth=48, int max_leaves=4096):
+def certify_full_curvature(
+    q_d2,
+    double lower,
+    double upper,
+    double a_lower,
+    double a_upper,
+    double tolerance,
+    int max_depth=48,
+    int max_leaves=4096,
+):
     """Return 1 (feasible), 0 (violated) or -1 (uncertain).
 
     Parameters
@@ -407,7 +442,9 @@ def certify_full_curvature(q_d2, double lower, double upper, double a_lower, dou
     max_depth, max_leaves : int, optional
         Subdivision budget before answering "uncertain".
     """
-    cdef const double[::1] q = __import__("numpy").ascontiguousarray(q_d2, dtype="float64")
+    cdef const double[::1] q = __import__("numpy").ascontiguousarray(
+        q_d2, dtype="float64"
+    )
     cdef int nq = q.shape[0]
     cdef int status
     if nq == 0:

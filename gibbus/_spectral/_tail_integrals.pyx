@@ -262,9 +262,20 @@ cdef void _gk15(TailUd* ud, int kind, double q_ref, double a, double b,
     error[0] = fabs((kr - ga) * half)
 
 
-cdef int _adaptive(TailUd* ud, int kind, double q_ref, double* lo, double* hi, double* val,
-                   double* err, int count, int limit, double epsabs, double epsrel,
-                   double* total_out) noexcept nogil:
+cdef int _adaptive(
+    TailUd* ud,
+    int kind,
+    double q_ref,
+    double* lo,
+    double* hi,
+    double* val,
+    double* err,
+    int count,
+    int limit,
+    double epsabs,
+    double epsrel,
+    double* total_out,
+) noexcept nogil:
     """Global adaptive bisection over ``count`` initial intervals (arrays of ``limit``).
 
     Returns 0 on convergence, 1 when the interval limit was reached.
@@ -348,7 +359,9 @@ cdef double _full_log_mass(TailUd* ud, double x, double epsabs, int limit, doubl
     # scale (``ulp(x) |q'(x)|`` itself on an infinite tail) plus ``q``'s noise.
     rel_floor = 8.0 * _q_noise(ud, x)
     if ud.finite_endpoint:
-        rel_floor += 8.0 * fabs(nextafter(x, INFINITY) - x) / max(scale, 2.2250738585072014e-308)
+        rel_floor += (
+            8.0 * fabs(nextafter(x, INFINITY) - x) / max(scale, 2.2250738585072014e-308)
+        )
     epsrel = min(0.1, max(1e-11, rel_floor))
     # Doubling panels [0, 1], [1, 2], [2, 4], ... until they stop contributing.
     a = 0.0
@@ -368,7 +381,9 @@ cdef double _full_log_mass(TailUd* ud, double x, double epsabs, int limit, doubl
             break
         a = b
         b = 2.0 * b
-    status = _adaptive(ud, 0, 0.0, lo, hi, val, err, count, limit, epsabs, epsrel, &value)
+    status = _adaptive(
+        ud, 0, 0.0, lo, hi, val, err, count, limit, epsabs, epsrel, &value
+    )
     if status != 0:
         failed[0] += 1
     if not isfinite(value) or value <= 0.0:
@@ -506,7 +521,9 @@ cdef class TailIntegrator:
         extreme gets a full adaptive integration and every other one adds the
         integral up to its neighbor in log space.
         """
-        cdef cnp.ndarray[cnp.float64_t, ndim=1] xs = np.ascontiguousarray(x, dtype=np.float64).reshape(-1)
+        cdef cnp.ndarray[cnp.float64_t, ndim=1] xs = np.ascontiguousarray(
+            x, dtype=np.float64
+        ).reshape(-1)
         cdef Py_ssize_t n = xs.shape[0]
         cdef cnp.ndarray[cnp.intp_t, ndim=1] order
         cdef cnp.ndarray[cnp.float64_t, ndim=1] out = np.empty(n, dtype=np.float64)
@@ -528,7 +545,9 @@ cdef class TailIntegrator:
         if work == NULL:
             raise MemoryError("tail mass workspace")
         with self._lock:
-            self._setup(endpoint, upper, support, boundary_amplitudes, mu_eff, sigma_eff)
+            self._setup(
+                endpoint, upper, support, boundary_amplitudes, mu_eff, sigma_eff
+            )
             with nogil:
                 j = ip[0]
                 current = _full_log_mass(self._ud, xp[j], epsabs, limit, work, &failed)
@@ -540,9 +559,13 @@ cdef class TailIntegrator:
                         op[j] = current
                         continue
                     if upper:
-                        piece = _log_piece(self._ud, xp[j], xp[prev], limit, work, &failed)
+                        piece = _log_piece(
+                            self._ud, xp[j], xp[prev], limit, work, &failed
+                        )
                     else:
-                        piece = _log_piece(self._ud, xp[prev], xp[j], limit, work, &failed)
+                        piece = _log_piece(
+                            self._ud, xp[prev], xp[j], limit, work, &failed
+                        )
                     current = _logaddexp(current, piece)
                     op[j] = current
                     prev = j

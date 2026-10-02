@@ -64,10 +64,14 @@ def neg_log_mix_derivs_batch(double[:, :, ::1] ell_jets, int max_order):
     S = <double*>malloc((N + 1) * sizeof(double))
     h = <double*>malloc((N + 1) * sizeof(double))
     if fact == NULL or a == NULL or S == NULL or h == NULL:
-        if fact != NULL: free(fact)
-        if a != NULL: free(a)
-        if S != NULL: free(S)
-        if h != NULL: free(h)
+        if fact != NULL:
+            free(fact)
+        if a != NULL:
+            free(a)
+        if S != NULL:
+            free(S)
+        if h != NULL:
+            free(h)
         raise MemoryError()
     try:
         fact[0] = 1.0

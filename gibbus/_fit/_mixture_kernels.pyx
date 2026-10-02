@@ -77,7 +77,9 @@ cdef extern from * nogil:
     }
     """
     double gibbus_mix_sum_advance(double* x, const double* z, Py_ssize_t n, int advance)
-    void gibbus_mix_sum_square(const double* x, Py_ssize_t n, double* out_s, double* out_q)
+    void gibbus_mix_sum_square(
+        const double* x, Py_ssize_t n, double* out_s, double* out_q
+    )
     void gibbus_mix_syr(double alpha, const double* x, double* a, Py_ssize_t n)
 
 
@@ -85,10 +87,24 @@ cdef extern from * nogil:
 # Empirical point statistics
 # ---------------------------------------------------------------------------
 
-cdef int _point_stats(const double* z, const double* raw, bint weighted, Py_ssize_t n,
-                      int order, double L, double U, bint has_lower, bint has_upper,
-                      double* w, double* work, double* moments, double* participation,
-                      double* boundary, double* total_out, double* n_eff_out) noexcept nogil:
+cdef int _point_stats(
+    const double* z,
+    const double* raw,
+    bint weighted,
+    Py_ssize_t n,
+    int order,
+    double L,
+    double U,
+    bint has_lower,
+    bint has_upper,
+    double* w,
+    double* work,
+    double* moments,
+    double* participation,
+    double* boundary,
+    double* total_out,
+    double* n_eff_out,
+) noexcept nogil:
     """Status: 0 ok; 1 bad weights; 2 zero total; 3 non-finite moment;
     4 lower distance; 5 upper distance; 6 non-finite boundary statistic."""
     cdef Py_ssize_t i
@@ -288,9 +304,14 @@ def mixture_posterior(const double[:, ::1] log_values, const double[::1] log_wei
 # Joint mixture information
 # ---------------------------------------------------------------------------
 
-def joint_information(const double[:, ::1] responsibilities, const double[:, ::1] centered,
-                      within, const Py_ssize_t[::1] offsets, const double[::1] pi,
-                      const double[::1] observation_weights):
+def joint_information(
+    const double[:, ::1] responsibilities,
+    const double[:, ::1] centered,
+    within,
+    const Py_ssize_t[::1] offsets,
+    const double[::1] pi,
+    const double[::1] observation_weights,
+):
     """Gradient and missing information of the joint mixture NLL.
 
     The joint variable is ``(theta_1, ..., theta_K, eta_1, ..., eta_{K-1})``.
