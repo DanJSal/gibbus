@@ -1,0 +1,740 @@
+CODING STANDARDS AUDIT - gibbus
+Read-only review, 2026-10-04
+
+Interpretation
+--------------
+CODING_STANDARDS.md was treated as legacy guidance, not an authoritative
+specification. Findings below distinguish clear conflicts from policy candidates.
+No library, test, build, or repository documentation files were changed.
+Locations are relative to the repository and refer to the reviewed working tree.
+This is a static conventions audit, not a proof of numerical correctness.
+
+An AST inventory covered all 57 library Python files. Its raw results are in
+coding-standards-inventory.jsonl alongside this report. It found:
+  145 non-nested definitions with signature defaults (INCLUDING public APIs);
+    4 nested definitions with signature defaults;
+   17 definitions accepting **kwargs (including intentional compatibility APIs);
+   25 imports inside functions;
+   36 parameter-documentation candidates;
+   26 undocumented non-nested functions/methods;
+    5 undocumented classes.
+These are candidate counts, NOT counts of confirmed violations. Properties,
+publicly accessible component/view methods, storage conversion, compiled ABI
+adaptation, mathematical checks, and local kernel constants need context.
+There were no bare except/except Exception handlers and no NUMERIC_FAILURES
+handlers missing _reraise_if_debug in the Python inventory. Some handlers
+nevertheless broaden NUMERIC_FAILURES with ValueError; see below.
+
+1. FAILURE-HANDLING CONFLICTS
+----------------------------
+High-confidence conflicts with useful current standards:
+
+gibbus\_api\selection.py:326,386,463
+  Screening initialization, degree screening, and refinement catch
+  (*NUMERIC_FAILURES, ValueError), record the exception as routine, and continue.
+  Generic ValueError from NumPy, fitting, or the callback can therefore become a
+  rejected candidate instead of a visible contract defect. Debug mode does not
+  raise routine failures unless strict mode is also enabled.
+
+gibbus\_api\selection.py:292,298,311
+  The score closure itself raises generic ValueError for invalid likelihood or
+  dimension, a degenerate component, and unidentified interval components.
+  Numerical degeneration/expected candidate rejection should be distinguished
+  from invalid contracts with RuntimeError or a typed control-flow sentinel.
+  These cases help explain, but do not justify, swallowing all ValueError above.
+
+gibbus\_api\fitting.py:1125-1134
+  _run_mixture_fit classifies a generic ValueError by matching
+  "point-mixture component is not estimable" in str(exc), then translates it to
+  _PointMixtureEstimabilityError. This is precisely the message-based exception
+  classification the standards discourage. It is translation, not suppression;
+  no missing-ledger allegation is made here.
+
+Policy/contract concern:
+gibbus\_api\component.py:111-115
+  _natural_params_from_seed catches every ValueError from layout.pack and returns
+  None. An incompatible warm-start embedding is a valid reason to decline a seed,
+  but this catch also conflates malformed layout/parameter contracts with that
+  expected outcome. A typed incompatibility result would make the distinction
+  explicit; this is not automatically a swallowed numerical failure.
+
+gibbus\_postfit\resample.py:161-165
+  _collect_replicates counts both a wrong-size callback result and non-finite
+  values as a failed replicate. Wrong-size output is a callback contract defect,
+  not numerical degradation. Non-finite output is discarded without a failure
+  ledger event; the aggregate failure count remains visible. This is narrower
+  than a claim of completely silent resampling failures.
+
+2. BOUNDARY NORMALIZATION / STRICT INTERNAL REPRESENTATIONS
+-----------------------------------------------------------
+Concrete repeated work:
+
+gibbus\_api\views.py:1158-1162 -> :282-285
+  ExpSpaceView.ppf converts and validates p, then calls BaseSpaceView.ppf, which
+  repeats both. Both are publicly accessible views, but internal delegation need
+  not re-enter a user-validation path.
+
+gibbus\_api\views.py:282-285 -> :321
+  BaseSpaceView.ppf converts p, then _raw_ppf converts the already-canonical array
+  again. The compiled evaluator adds its own interface requirements; those
+  requirements should not be confused with necessary user normalization.
+
+gibbus\_api\views.py:349-352 ->
+gibbus\_postfit\evaluators.py:281-291
+  BaseSpaceView.neg_log normalizes and checks derivative order, then
+  _potential_oriented_affine_eval repeats that conversion/check, converts x,
+  support and amplitudes, flattens amplitudes and checks length 2 on every call.
+  Static model geometry is already validated when component state is installed.
+  The affine-scale check is a legitimate numerical precondition.
+
+gibbus\_api\views.py:1180-1184 ->
+gibbus\_postfit\evaluators.py (pot_y closure)
+  ExpSpaceView.neg_log converts/checks n and y; the exp-potential closure repeats
+  derivative-order conversion/checking and array coercion before delegating to
+  the base potential. Numerical support masks remain necessary.
+
+gibbus\_api\distribution.py:1804-1810;
+gibbus\_api\views.py:838-845,1564-1571 ->
+gibbus\_postfit\analytics.py:197-199
+  Public cumulant entry points validate positive integral k; the internal
+  _cumulant_from_centered repeats the same user-level validation.
+
+gibbus\_postfit\analytics.py:433,465-467,505-507,544-546
+  _polyval_scalar coerces/ravels coefficients; _q0_scalar coerces/flattens and
+  checks amplitude length on each scalar evaluation; _q1_scalar/_q2_scalar
+  repeatedly coerce amplitudes/coefficients and recompute polynomial derivative
+  coefficients. They run in root-finding/quadrature loops (:668,:718,:812,:969)
+  after enclosing functions already canonicalized the same geometry.
+  The finite-endpoint/positive-distance tests are mathematical guards, not
+  boundary-validation violations.
+
+gibbus\_postfit\analytics.py:575,608-609,661-663,670,868,952-960,
+  1002-1003,1023-1025,1070-1071
+  Further internal geometry normalization/flattening in _poly_degree_exact,
+  _tail_rate_from_geometry, _expanded_tilted_log_moment, _log_raw_moment_exp,
+  _relative_centered_moment_exp and _internal_geometry; raw-moment helpers also
+  re-convert/check already-validated moment orders. Stored-state views and
+  deliberate copies should be preserved where required, but these helpers are
+  not user-input boundaries.
+
+gibbus\_api\distribution.py:1331,1344,1351 ->
+gibbus\_postfit\gof.py:108-109,145-148
+  goodness_of_fit validates the statistic key, then gof_statistic and
+  asymptotic_pvalue validate it again. The asymptotic KS path canonicalizes PIT
+  values, then calls gof_statistic, which revalidates, reclips and resorts them.
+  goodness_of_fit also evaluates the same CDF twice on its asymptotic path.
+  Validation of internally generated PIT values is a numerical-output contract;
+  repeated user-key validation and sorting are the clearer violations.
+
+gibbus\_postfit\resample.py:226-227,244 ->
+  percentile_bands:114
+  bootstrap_curves validates confidence then percentile_bands validates it again.
+
+gibbus\_api\selection.py:223-225,230-257
+  select_n_components is an internal orchestrator receiving prepared inputs, but
+  recoerces sample arrays, normalizes weights, and interprets/validates raw
+  subsample policy. Some weight renormalization after taking a subset is necessary;
+  repeating normalization of the full canonical input is distinct.
+
+Boundary placement candidates, not automatic violations:
+gibbus\_postfit\survival.py:428-448,469,518,577
+  Public isf/logppf/logisf currently delegate raw input to lower-level helpers
+  that perform conversion and user-range validation. These helpers can serve as
+  boundary adapters, but their computational code is not separated from that role.
+gibbus\_postfit\regions.py:18,44,67,83
+  interval/hpd own user level validation in the numerical module; hpd fallbacks
+  call interval, revalidating the same level.
+gibbus\_spectral\cdf.py:818-837
+  boundary_aware_breaks_from_amplitudes converts/reshapes model support and
+  amplitudes and checks length, despite consuming existing canonical fit geometry.
+gibbus\_api\distribution.py:689-700
+  _base_ppf_for_extensions reconverts/revalidates probabilities supplied by
+  internal survival inversion, then may re-enter a public component PPF boundary.
+
+Do not blindly remove every reshape/asarray: flattening panel storage, quadrature
+node grids, callback results, derived arrays and compiled buffers is not raw-user
+input normalization. Fitted-state load/serialization is also a real boundary.
+
+3. INTERNAL DEFAULTS AND GENERIC KEYWORDS (API / POSTFIT / SPECTRAL)
+-----------------------------------------------------------------
+Defaults worth making explicit at internal call sites, grouped by definition:
+
+gibbus\_api\component.py
+  :412 _fit: poly_degree=None, support=None, log_boundary_lower=None,
+       log_boundary_upper=None, verbose=0, suppress_warnings=False,
+       init_from=None, sample_weights=None.
+  :921 _truncate_base: lower=None, upper=None.
+  :335 __init__: uni_state=None (construction-policy candidate, less urgent).
+
+gibbus\_api\distribution.py
+  :724 _base_log_tail_mass, :742 _base_log_tail_masses: upper=False.
+gibbus\_api\mixture_stats.py
+  :286 _mix_base_log_tail_mass, :307 _mix_base_log_tail_masses: upper=False.
+gibbus\_api\views.py
+  :377 _exact_tail_log_mass, :405 _exact_tail_log_masses: upper=False.
+gibbus\_api\fitting.py
+  :845 _fit_mixture_with_boundary_policy: initial_fit=None.
+gibbus\_api\selection.py
+  :186 select_n_components: subsample="auto", lower_boundary=False,
+       upper_boundary=False, degree_policy="auto", refine_candidate=None.
+  :113 _selection_payload(**extra), :133 _default_refinement(**candidate).
+  :436-447 forwards the dynamic candidate mapping to internal refinement.
+       The callback contract is described but not structurally explicit.
+
+gibbus\_postfit\expectation.py
+  :13 expect: points=None.
+  :122 expect_vectorized: points=None, epsabs=1e-10, epsrel=1e-10, limit=4000.
+gibbus\_postfit\information.py
+  :15 entropy, :32 cross_entropy, :59 kl_divergence: points=None.
+gibbus\_postfit\regions.py
+  :67 hpd: modes=().
+gibbus\_postfit\resample.py
+  :186 bootstrap_curves, :257 simulated_statistics:
+       max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION.
+gibbus\_postfit\scoring.py
+  :181 randomized_quantile_residuals: rng=None.
+gibbus\_postfit\survival.py
+  :32 log_sf_hybrid: lower_endpoint=-inf, log_tail_mass=None,
+       log_tail_masses=None.
+  :92 cdf_hybrid, :165 log_cdf_hybrid: upper_endpoint=inf,
+       log_tail_mass=None, log_tail_masses=None.
+  :451 isf, :499 logppf, :558 logisf: log_tail_mass=None.
+gibbus\_postfit\fitted_state.py
+  :29 _model_metadata: metadata=None.
+  :297 _pack_natural_state, :491 _pack_natural_fit,
+  :522 _pack_natural_component: effective_n=nan,
+       boundary_p_values=(nan,nan).
+       Serialization sentinels are plausible exceptions, but should be explicit
+       at call sites if enforcing the user's stricter private-signature rule.
+
+gibbus\_spectral\cdf.py
+  :57 _builder_tables: ppf_degrees=().
+  :299 SpectralCDF.__init__: mode=None, std=None,
+       degree_options=SPECTRAL_DEGREE_OPTIONS, rel_tol=SPECTRAL_CDF_REL_TOL,
+       abs_tol=SPECTRAL_CDF_ABS_TOL, coeff_tol=SPECTRAL_CDF_COEFF_TOL,
+       max_depth=SPECTRAL_CDF_MAX_DEPTH, max_panels=SPECTRAL_CDF_MAX_PANELS,
+       map_scale=None, initial_breaks=None.
+gibbus\_spectral\ppf.py
+  :98 SpectralPPF.__init__: degree_options=SPECTRAL_DEGREE_OPTIONS,
+      fit_tol=SPECTRAL_PPF_FIT_TOL, logit_tol=SPECTRAL_PPF_LOGIT_TOL,
+      prob_tol=SPECTRAL_PPF_PROB_TOL, coeff_tol=SPECTRAL_PPF_COEFF_TOL,
+      max_depth=SPECTRAL_PPF_MAX_DEPTH, max_panels=SPECTRAL_PPF_MAX_PANELS,
+      certify_subdivide=SPECTRAL_PPF_CERTIFY_SUBDIVIDE.
+  :377 _invert_global: prefer_left=False.
+  :586 ppf_cython: simd=True (compiled dispatch adapter, plausible exception).
+gibbus\_spectral\tail.py
+  :101 tail_log_cdf, :155 exact_tail_log_cdf: upper=False.
+  :382 invert_tail: upper=False, log_tail_mass=None.
+  :489 refine_tail_quantiles: log_tail_mass=None.
+
+Exceptions / lower priority:
+gibbus\_defaults.py:180 _reraise_if_debug(routine=False) is a central developer
+  diagnostics policy, not a buried user-facing numerical default.
+gibbus\_api\frozen.py:224 FrozenDistribution.expect(**_kwargs) is publicly
+  reachable SciPy compatibility, not internal numerical kwargs propagation.
+  It deliberately ignores arbitrary compatibility keywords; whether unsupported
+  quadrature options should instead be rejected deserves a separate API decision.
+Public Distribution methods, .base/.exp methods and component evaluation methods
+  reached through Distribution.components are intentionally not counted as
+  hidden-helper signature violations merely because their classes start with "_".
+Nested closure defaults are implementation-detail candidates, not independent
+  numerical interfaces; their complete raw inventory is retained in JSONL.
+
+4. UNDOCUMENTED INLINE IMPORTS (API / POSTFIT / SPECTRAL)
+-------------------------------------------------------
+gibbus\_api\component.py:264 _natural_interval_start; :945 log_mass_between.
+gibbus\_postfit\analytics.py:724 factorial.
+gibbus\_postfit\fitted_state.py:130 _weakly_identified_sides.
+gibbus\_postfit\survival.py:467 invert_tail;
+  :515-516 invert_tail and log1mexp; :574-575 invert_tail and log1mexp.
+gibbus\_spectral\ppf.py:242-243 _builders, _KIND_CODE and _builder_tables.
+These conflict mechanically with top-of-module imports. An actual cycle/lazy
+dependency reason would warrant a documented exception rather than a blind move.
+
+5. DOCUMENTATION GAPS (API / POSTFIT / SPECTRAL)
+----------------------------------------------
+Missing Parameters sections or signature entries:
+gibbus\_api\component.py:1178 _base_stat(name).
+gibbus\_api\distribution.py:266 _default setter(value).
+gibbus\_api\fitting.py:695 _refine_component_count (all nine arguments).
+gibbus\_api\selection.py:50 _ComponentSelectionError.__init__(diagnostics);
+  :67 _single_selection_fit; :113 _selection_payload;
+  :125 _candidate_degrees; :133 _default_refinement;
+  :186 select_n_components (all thirteen arguments).
+gibbus\_postfit\fitted_state.py:29 _model_metadata(comp_states, metadata).
+gibbus\_postfit\mixture_inference.py:8 _shared_standard_errors;
+  :64 _mixture_fit_metadata; :141 _single_fit_metadata.
+The JSONL appendix names each missing parameter.
+
+Missing docstrings (separate from parameter documentation above):
+gibbus\_api\component.py:366 __copy__, :395 _version, :398 _affine,
+  :890 support, :894 mode, :898 median, :902 mean, :906 var,
+  :910 std, :914 skew, :918 kurt, :1174 _support_base, :1178 _base_stat.
+gibbus\_api\distribution.py:262/266 _default getter/setter.
+gibbus\_api\selection.py:50 __init__, :67 _single_selection_fit,
+  :125 _candidate_degrees.
+gibbus\_spectral\cdf.py:126 _Map, :266 _Panel, :287 width, :291 degree.
+gibbus\_spectral\ppf.py:68 _InversePanel, :85 degree.
+Missing prose on trivial property delegates is lower priority than undocumented
+reusable selection, fitting and inference contracts. The legacy "NumPy style for
+every helper" rule is a policy choice, not evidence of a runtime bug.
+
+6. DEFAULT LOCATION / DUPLICATE IMPLEMENTATIONS
+----------------------------------------------
+gibbus\_postfit\expectation.py:56,122-123
+  Scalar quadrature hardcodes epsabs=epsrel=1e-10, limit=300; vectorized
+  expectation independently defaults to 1e-10,1e-10,4000. These are hidden,
+  externally consequential numerical policies. They differ from QUAD_* in
+  _defaults.py, so moving them must preserve their distinct values, not replace
+  them indiscriminately with existing looser constants.
+
+gibbus\_spectral\cdf.py:625-638 versus :644-702
+  Compiled CDF evaluation coexists with a Python panel-search/Chebyshev-evaluation
+  implementation. tests\test_spectral_construction.py:208-209 compares
+  cdf_z with the compiled compact evaluator.
+gibbus\_spectral\ppf.py:537-584 versus :586-620
+  Python PPF panel evaluation coexists with the compiled evaluator.
+  These paths have construction/diagnostic uses as well as tests; deleting them
+  without replacing those uses would be wrong. Nevertheless they are maintained
+  duplicate evaluators under the stated single-surviving-implementation policy.
+
+7. LEGACY CLAIMS THAT DO NOT MATCH THIS CHECKOUT
+----------------------------------------------
+No DEVELOPER_GUIDE.md, tools\check_docstrings.py, or .github workflow files were
+present. pyproject.toml has no [tool.ruff] section or enforced rule selection.
+The MD's checker/CI/zero-problems claims should not be assumed current.
+The public class's module prose says "sole public class", but frozen objects and
+view/component interfaces are publicly reachable; internal-vs-public audit scope
+must follow reachability, not underscores alone.
+
+8. COMPILED SOURCES AND BUILD SETUP
+----------------------------------
+All 16 .pyx sources and setup.py were reviewed separately.
+
+Allocation cleanup: high confidence, substantive
+gibbus\_spectral\_builders.pyx:1379-1456,1538-1595
+  build_cdf/build_ppf NULL-check allocations and free partial failures, but do
+  Python/list/NumPy allocations and buffer binding after malloc without finally.
+  Exceptions at 1424-1432 or 1559-1571 bypass success-path frees.
+gibbus\_spectral\_tail_integrals.pyx:544-572
+  log_masses allocates work before _setup. _setup conversions and explicit
+  support/amplitude/scale validation at 482-490 can raise before free(work).
+gibbus\_fit\_conic_kernels.pyx:1345-1392
+  solve_conic_qp owns a cone representation and Hessian workspaces before later
+  address extraction. A checked-build exception, e.g. empty-gradient indexing
+  at 1377, bypasses _disown/free. This case depends on malformed input or another
+  checked exception; it is not evidence of a leak on normal successful fits.
+No unchecked malloc was discovered; the issue is exceptional exit paths.
+
+Typed-ndarray access/address extraction inside explicit nogil blocks:
+gibbus\_fit\_conic_kernels.pyx:1383-1385,1463-1465,3058-3066,3172-3173
+gibbus\_fit\_shared_mixture_kernels.pyx:1204-1243,1426-1428,1663-1665,1711-1712
+gibbus\_fit\_mixture_kernels.pyx:226-229
+gibbus\_model\_moment_kernels.pyx:398-402
+gibbus\_model\_state_kernels.pyx:1396-1405
+gibbus\_spectral\_panel_kernels.pyx:55-57
+  These conflict with the conservative pointer-extraction convention. Typed
+  buffer indexing can be legal without the GIL, so these are NOT claims that
+  the code cannot compile. Bind addresses before nogil to clarify checked
+  exception paths and preconditions.
+
+Related typed-memoryview address extraction:
+gibbus\_fit\_curvature_certificate.pyx:452-454
+gibbus\_observations\_finite_reductions.pyx:537-565
+gibbus\_spectral\_builders.pyx:1419-1420,1556-1558
+  Legal memoryview operations, not prohibited Python-object access. Moving
+  extraction outside is a conservative clarity/safety improvement, not an
+  automatic correctness fix.
+
+Deep defaults/rebinding, confirmed production compiled call chain:
+gibbus\_fit\_conic_kernels.pyx:1402-1406,3255-3270
+  solve_preconditioned defaults gap_tolerance=1e-12, max_iterations=100,
+  step_fraction=0.99; solve_callback_newton calls it without supplying them.
+  Callback gradients/Hessians are coerced in the Newton loop and again in
+  solve_preconditioned; unchanged cone buffers are rebound at 1424-1436, with
+  retries repeating that work. ascontiguousarray need not copy, but the repeated
+  coercion/binding is real.
+Other accuracy/budget defaults (policy candidates pending Python caller intent):
+gibbus\_fit\_conic_kernels.pyx:2930-2931,3112
+gibbus\_observations\_interval_integrals.pyx:905-907
+gibbus\_spectral\_tail_integrals.pyx:466-467,514-515
+gibbus\_fit\_curvature_certificate.pyx:427-428
+  Compiled adapter defaults can be justified exceptions; these settings are
+  accuracy/work budgets rather than merely implementation-local constants.
+No generic **kwargs propagation was found in compiled sources.
+
+Imports outside import blocks:
+gibbus\_fit\_curvature_certificate.pyx:445-447
+  Runtime __import__("numpy") inside certify_full_curvature.
+setup.py:131-135
+  import tempfile inside _accepts_flag.
+gibbus\_model\_moment_kernels.pyx:27-28
+  libc cimports after product_moment.
+gibbus\_model\_state_kernels.pyx:953-954
+  Mid-module cimports; libc.math already has another import block above.
+
+Missing parameter documentation on reusable Python-callable compiled interfaces:
+gibbus\_fit\_conic_kernels.pyx
+  _as_c:1296-1297; solve_conic_qp:1300-1320;
+  solve_preconditioned:1402-1423; solve_interval_newton:2917-2938;
+  solve_point_newton:3104-3120; solve_callback_newton:3199-3219.
+gibbus\_fit\_shared_mixture_kernels.pyx
+  SharedMStepObjective.evaluate:1398-1410, .solve:1438-1474;
+  SharedJointObjective.evaluate:1630-1650, .posterior:1684-1701,
+  .solve:1720-1756. Class constructor parameters are already documented.
+gibbus\_model\_moment_kernels.pyx
+  product_moment:10-11; power_moments:347-359.
+gibbus\_model\_quad_integrals.pyx
+  PreparedQuad.__init__:498-499; .integrate:534-553.
+gibbus\_model\_state_kernels.pyx
+  _pdf_vec:816-827; _polyval_vec:898-905.
+gibbus\_observations\_interval_integrals.pyx
+  constructor:891-908; reduce:1323-1324; reduce_many:1352-1358;
+  reduce_weighted:1387-1393.
+gibbus\_postfit\_mix_kernels.pyx
+  neg_logsumexp_batch:13-14; neg_log_mix_derivs_batch:41-42.
+gibbus\_spectral\_builders.pyx
+  DensitySpec.pdf:1292-1293; build_ppf:1460-1498.
+gibbus\_spectral\_panel_kernels.pyx
+  All five entries:34-35,51-52,61-67,117-118,145-146.
+gibbus\_spectral\_tail_integrals.pyx
+  constructor:447-448; log_mass:456-474; log_masses:504-523.
+setup.py
+  _env_flag:25-28; _accepts_flag:131-133.
+These contract documentation gaps are lower priority than allocation safety.
+
+Docstring exception drift:
+gibbus\_model\_quad_integrals.pyx:362-365
+  Documents ValueError for non-finite polynomial coefficients; _ud_make actually
+  raises FloatingPointError at 115-119. The numerical exception is sensible.
+
+Missing local rationale on correct compiled allocation fallbacks:
+gibbus\_spectral\_cdf_eval.pyx:558-572,700-734
+gibbus\_spectral\_ppf_eval.pyx:560-574,668-710
+  SIMD workspace allocation failure frees partial allocations and falls back to
+  scalar evaluation. That is a correct noexcept/nogil fallback, but its local
+  allocation-failure rationale is undocumented. No Python ledger is possible
+  or required here.
+
+Confirmed existing exceptions/support:
+setup.py:104-127 implements GIBBUS_DEBUG_BUILD with bounds, wraparound, None and
+  initialization checks and forced regeneration. No source safety-directive
+  overrides were found. The build profile EXISTS; CI execution is a different
+  matter and was not present in this checkout.
+setup.py:141 has an explicitly justified compiler-probe broad catch; it is not
+  an undocumented numerical fallback.
+Explicit partial cleanup, capsule-owned NumPy backing, finite/singularity guards,
+  quadrature tables, stack limits and SIMD sizes are appropriate local mechanics.
+
+9. RETAINED TEST-ONLY PYTHON IMPLEMENTATIONS
+------------------------------------------
+tests\conic_reference.py:1-6,210-320,338-493,519-612
+  Explicitly retains the Python solver translated by compiled solvers:
+  HKM KKT/direction construction, a complete predictor-corrector interior-point
+  solve, and preconditioned subproblem transformation/solve.
+tests\test_compiled_kernels.py:66-89,92-118
+  Compares compiled and reference model values using certified gaps.
+  These are meaningful comparisons, not recorded number snapshots, but keeping
+  a full superseded solver conflicts with the single-implementation standard.
+
+tests\spectral_builder_harness.py:1-13,55-124,142-187,305-452,479-610,
+  613-626,817-1022,1046-1111
+  Retains independent CDF/PPF adaptive construction algorithms while sharing
+  production algebra, certificates, packing and evaluators. The file explicitly
+  justifies callable/failure-injection coverage, so this is a documented
+  exception candidate, not an accidentally unnoticed duplicate.
+tests\test_compiled_kernels.py:521-570,573-591
+  Demands exact breaks/maps/evaluation agreement and bitwise mixture-cache
+  agreement when Python builders are monkeypatched in. These tests reinforce the
+  retained second implementation; definition/property coverage would fit the
+  legacy standard better, but failure-injection coverage must be preserved.
+
+Not a standalone duplicate:
+tests\test_compiled_kernels.py:208-221,224-252
+  _ReferenceNumericsState only selects an existing production scalar path by
+  subclassing _NaturalCoreState and overriding _compiled_numerics. The test does
+  not itself implement an integration/normalization algorithm.
+
+10. FIT / MODEL / OBSERVATION PYTHON FINDINGS
+------------------------------------------
+This scope contributes 72 default-bearing non-nested definitions, one
+default-bearing closure, 14 **kwargs definitions, 14 inline imports, 23
+parameter-documentation candidates, five undocumented methods/functions and
+two undocumented classes. The exact signatures/default values and missing
+parameter names are exhaustively listed in the JSONL appendix.
+
+Repeated original-data normalization and revalidation:
+gibbus\_fit\natural_mixture.py:2526-2532
+  _fit_natural_mixture again accepts raw 1-D samples, adds a column, and checks
+  shape despite receiving the canonical boundary representation.
+gibbus\_fit\natural_mixture.py:261-281,2531
+  _normalized_observation_weights flattens, validates and renormalizes original
+  boundary-normalized weights.
+gibbus\_fit\natural_mixture.py:1755-1787
+  _degree_policies still normalizes string/scalar/sequence user degree requests
+  and validates per-component counts deep in the mixture implementation.
+gibbus\_fit\natural_objective.py:485-487,613
+  _prepare_natural_point_objective and automatic-degree wrapper coerce/flatten
+  and revalidate canonical point samples.
+gibbus\_model\coords.py:273-279,338-340
+  _support_kind revalidates documented already-validated support;
+  _build_fit_coordinate repeats point flatten/nonempty/finite checks.
+gibbus\_fit\natural_objective.py:1072-1083 ->
+gibbus\_model\coords.py:437-451 ->
+gibbus\_observations\intervals.py:843-852
+  Interval objective preparation, censored coordinate building and observation
+  building each recheck the same row shape/nonempty/NaN/order contract; weights
+  are also repeatedly checked and normalized. Censoring landmarks,
+  identifiability, affine transforms and preserved distances are additional
+  mathematical requirements and should remain.
+gibbus\_observations\empirical.py:219-276
+  _normalized_weights repeats original-weight validation when used on canonical
+  boundary weights; its normalization of newly formed component mass is required.
+gibbus\_fit\mixture.py:1179-1194
+  _aggregate_interval_weights revalidates/normalizes weights already documented
+  as normalized before aggregating them.
+gibbus\_fit\mixture.py:73-75,282-291
+  _interval_initial_representatives repeats canonical interval layout checks;
+  _nested_scale_init_responsibilities repeats original-weight validation and
+  normalization.
+gibbus\_fit\mixture.py:145-155,162,632-633
+  Valley initializer normalizes weights then _silverman_bandwidth normalizes
+  that same normalized vector again.
+gibbus\_fit\mixture_degree.py:73-75 ->
+gibbus\_fit\boundary.py:42-47
+  Joint omitted-statistic diagnostic normalizes weights then _effective_n
+  recoerces/flattens/normalizes the same weights again.
+gibbus\_fit\natural_mixture.py:568-575,587-589 ->
+gibbus\_observations\empirical.py:219-276
+  Component objective normalizes NEW component weights correctly, then the
+  first interval template sends normalized grouped weights through another
+  normalization in observation construction. Only the second is redundant.
+gibbus\_model\coords.py:74-83,197-203,234-246
+  _normalized_nonnegative_weights, _weighted_median and _interval_scale_floor
+  repeatedly flatten/coerce values and weights. Invalid weights can return None
+  and become unweighted median behavior, hiding a malformed internal contract.
+
+Internal-representation tightening candidates (not all raw-user validation):
+gibbus\_model\natural.py:96-105,154-165;
+gibbus\_model\natural_state.py:241-254
+  Layout validation/packing and core-state construction duplicate parameter
+  flattening/length/finite/sign logic. The owned copy and candidate feasibility
+  checks are legitimate; duplicated implementation/permissive shapes are the
+  clearer conventions concern.
+gibbus\_model\numerics.py:31-33,75-77; gibbus\_model\vec.py:98-100
+  Repeated canonical amplitude flattening/length checks through quadrature and
+  vector-evaluation adapters.
+gibbus\_fit\separation.py:310-325,385-386,538-539,706,938,1276-1277
+  Private separation layers repeatedly accept/coerce/flatten support and
+  amplitudes. Exact rational conversion and curvature preconditions are necessary.
+gibbus\_observations\empirical.py:309-319,400-425
+  Uniform moment/log-expectation helpers repeat interval/weight coercion;
+  finite-row requirements and endpoint/divergence guards are stricter numerical
+  conditions, not redundant general sample validation.
+gibbus\_fit\mixture.py:1139-1144
+  Effective-distinct-point helper flattens/rechecks derived component weights;
+  positive/squared-mass checks are legitimate.
+gibbus\_observations\intervals.py:1009-1015,1042-1054
+  Reduction-time scalar/full-row/compact adapters accept flexible representations.
+  Explicit separate compact/full contracts are a policy candidate, not a claim
+  that these perform repeated public validation.
+
+Boundary shortcomings exposed by the duplicated downstream checks:
+gibbus\_fit\inputs.py:293-294
+  _validate_support reads only endpoints 0 and 1, without a pair-length check.
+  Extra endpoints are ignored and short/scalar support fails through indexing
+  instead of a clear invalid-support error.
+gibbus\_fit\inputs.py:86-97
+  Finite nonnegative raw weights are divided by their sum without max scaling.
+  A sum overflowing float64 produces zero weights; downstream helpers use robust
+  max-scaled arithmetic. Robust normalization should be owned at the boundary.
+gibbus\_fit\inputs.py:663-669,748-768
+  component_options claims only poly_degree is allowed, but checks a forbidden
+  subset rather than all unknown keys and leaves degree values unresolved.
+gibbus\_fit\inputs.py:527-533,555-558
+  int(poly_degree) can truncate fractional numeric degrees. Whether that is
+  intentional needs a contract decision, not an assumed behavioral change.
+gibbus\_fit\inputs.py:149-151
+  Samples documentation incorrectly promises flattened finite 1-D observations;
+  actual canonical samples are (R,1)/(R,2), with infinite censoring endpoints.
+
+Generic kwargs propagation (all 14 scoped definitions):
+gibbus\_fit\natural_objective.py
+  _fit_natural_conic_points:515; _fit_natural_conic_points_auto:567;
+  _fit_natural_conic_intervals:1138; _fit_natural_conic_intervals_auto:1191.
+gibbus\_fit\natural_mixture.py
+  _ComponentProblem.fit_compact:694, .fit:727; _coupled_m_step:1306;
+  _em_map:1459; _em_phase:1607; _policy_initial_components:1867;
+  _run_natural_em:1988; _continue_natural_mixture:2313;
+  _fit_natural_mixture:2439.
+gibbus\_model\moments.py:27
+  _ledger_integral(**options) is a narrow integration/ledger adapter exception
+  candidate; the 13 fit-chain definitions form the substantive policy tunnel.
+
+Hidden body defaults/option routing:
+gibbus\_fit\natural_mixture.py:1130-1141
+  _mixture_newton_options independently rebuilds tolerance=1e-12,
+  certified_tolerance=1e-10, accuracy_floor=1e-7, max_iterations=60,
+  armijo=1e-4, backtrack=0.5, max_line_search=40 and only merges known keys.
+  This duplicates _solve_natural_conic policy and silently filters other options.
+gibbus\_fit\natural_mixture.py:1390-1392
+  options.get("face_trigger", 1e-6) supplies another hidden policy default.
+gibbus\_fit\natural_mixture.py:2117-2126
+  Final polish independently hardcodes max_iterations=60, armijo=1e-4,
+  backtrack=0.5, max_line_search=40; M-step **options do not set those controls.
+gibbus\_fit\natural_mixture.py:2414-2418
+  Continuation filters one options dict into a Newton subset before later passing
+  the whole dict through the EM interface.
+gibbus\_fit\natural_mixture.py:2622-2623,2657-2708
+  Exploration defaults and finalist options differ; continuation reuse depends
+  on the options key subset. This distinction is locally documented and
+  deliberate, but deserves explicit exploration/finalist configurations.
+gibbus\_fit\natural_objective.py:613-614,1229 onward;
+gibbus\_fit\degree.py; gibbus\_fit\mixture_degree.py
+  Absent configuration repeatedly becomes a newly constructed
+  _DegreeSelectionConfig instead of one resolved policy object.
+gibbus\_fit\mixture.py:764
+  _count_modes_kde supplies seed 0 when its rng=None default is consumed.
+gibbus\_fit\natural_mixture.py:719-725,746-752;
+gibbus\_fit\natural_objective.py:1184-1187
+  Mutating/setdefault initial and initial_blocks selects computed warm starts.
+  This is a defensible numerical-initialization exception, not arbitrary
+  user-default assignment. Explicit initial=None can differ from a missing key.
+  certify=False combined with unrestricted **options can duplicate a supplied
+  certify keyword; no assertion that a current public call actually does so.
+
+Default inventory interpretation:
+The JSONL appendix lists every one of the 72 scoped signatures. The strongest
+policy candidates are _solve_natural_conic (conic_newton.py:838),
+_run_natural_em (natural_mixture.py:1988), _fit_natural_mixture (:2439),
+Gaussian seed EM (mixture.py:538), KDE controls, omitted-statistic configuration,
+Turnbull bound iteration budgets, and boundary test alpha (boundary.py:66).
+_canon_univariate_samples(min_samples=2) and
+_normalize_mixture_fit_inputs(sample_weights=None) are BOUNDARY signatures;
+their defaults are not buried numerical-policy violations.
+None warm-start/cache/metadata sentinels and nested result-record constructors
+are lower-priority deliberate exception candidates.
+
+Generated dataclass constructor defaults (not captured by function AST records):
+gibbus\_fit\degree.py:48-52 _DegreeSelectionConfig
+  probe_block_size=2, alpha=0.05, min_participation=8.0,
+  covariance_rtol=1e-10, max_variance_inflation=1e6.
+gibbus\_fit\mixture_geometry.py:108 _MixtureFace: n_logits=0.
+gibbus\_fit\natural_mixture.py:204-209 _NaturalMixtureFit
+  n_parameters=0, n_face_parameters=0, observed_information=None,
+  shared_parameter_indices=(None,None), free_parameter_indices=(),
+  degree_diagnostics=().
+gibbus\_fit\separation.py:643-644 _RootBracket
+  exact_lower=None, exact_upper=None.
+gibbus\_model\spec.py:50-51 _PotentialPartial
+  coefficients=None, boundary_side=None.
+gibbus\_observations\empirical.py:56 _EmpiricalStats
+  moment_effective_n=None.
+These are configuration/record defaults, not automatically hidden helper-policy
+violations; solver/search policy centralization is more important.
+
+Failure handling:
+gibbus\_fit\boundary.py:203-204
+  _amplitude_standard_errors catches LinAlgError and returns NaNs with no
+  _reraise_if_debug or local degradation rationale.
+gibbus\_fit\mixture.py:371
+  Initializer catch extends NUMERIC_FAILURES with generic ValueError and redundant
+  OverflowError; records routine failure and tries another initializer.
+gibbus\_fit\natural_mixture.py:2710,2743
+  Exploration/finalist catches extend NUMERIC_FAILURES with ValueError and skip
+  a candidate. Ledger exists; generic contracts still risk being suppressed.
+gibbus\_fit\natural_objective.py:732-735
+  _safeguarded_metric catches eigensolver LinAlgError AND generic ValueError,
+  records it as numerical singularity and falls back to Fisher.
+gibbus\_fit\mixture.py:1936-1937
+  Vectorized root evaluation catches TypeError/ValueError and retries scalar.
+  Documented capability fallback, but arbitrary evaluator bugs can be hidden;
+  an explicit scalar-only capability would narrow the exception contract.
+
+Justified exception handling, not violations:
+gibbus\_fit\inputs.py:470,475 resolves automatic endpoint policy after explicit
+  requests were validated; this is boundary policy control flow.
+gibbus\_model\coords.py:498 handles typed _RobustScaleZero.
+gibbus\_observations\intervals.py:177 translates KeyError into informative
+  ValueError instead of swallowing it.
+gibbus\_fit\separation.py:247,264,1151 handles exact-rational representability
+  saturation/enclosures/search absence; ledger noise is not automatically useful.
+
+Remaining inline imports (all 14 scoped cases):
+gibbus\_fit\conic_newton.py:581,686
+  _NaturalIntervalEvaluation; _ObjectiveEvaluation.
+gibbus\_fit\mixture.py:1464
+  _model_metadata.
+gibbus\_fit\mixture_degree.py:182,243-244
+  _CompiledJointMixture, _degree_probe_problems, _degree_diagnostic_fit.
+gibbus\_fit\natural_mixture.py:343-344,2540
+  _natural_partials; _LOGDIST/_LOWER; _fit_shared_degree_growth.
+gibbus\_fit\natural_objective.py:380-381,991,997-998
+  quadrature/interval constants, _MODE_CONTROLS, _GL_LOG_W/_GL_X.
+  Optimizer/objective and mixture/degree modules have bidirectional
+  dependencies. Hoisting may create cycles; extract shared dependencies or
+  document cycle-breaking exceptions instead of blindly moving imports.
+
+Additional documentation drift:
+gibbus\_fit\natural_mixture.py:1988
+  _run_natural_em lacks _continue_with_em parameter documentation.
+gibbus\_fit\natural_mixture.py:209
+  _NaturalMixtureFit omits degree_diagnostics from its class parameter docs.
+gibbus\_fit\objective.py:122-160
+  Preserved boundary distances advertise float-or-None, but _point_boundary_distance
+  calls np.isfinite(preserved) directly; callers use numeric/NaN metadata.
+gibbus\_fit\mixture.py:1269-1338
+  _interval_nonparametric_loglik_bound describes finite-iteration Turnbull EM as
+  a maximum/upper bound. It returns a feasible EM likelihood without a duality
+  gap, not a certified unrestricted upper bound. The separate implementation in
+  natural_objective.py:747-816 explicitly adds a Frank-Wolfe gap.
+gibbus\_fit\mixture.py:538-548,572
+  Gaussian initializer docs promise None for mass loss, but implementation can
+  return the last accumulated fitted tuple.
+
+Remaining missing parameter documentation (all scoped definitions):
+gibbus\_fit\mixture_degree.py
+  _strict_information_pinv:32; _joint_omitted_statistic_diagnostic:57;
+  _mixture_probe_geometry:180; _shared_degree_diagnostics:220;
+  _fit_shared_degree_growth:285.
+gibbus\_fit\mixture_geometry.py
+  _MixtureNaturalMap.__init__:13, .expand:56, .pack:63, .joint_matrix:80,
+  .face:90; _MixtureFace.expand:198, .restrict:207, .component_dual:211.
+gibbus\_fit\natural_mixture.py
+  _component_evaluation:895; _CompiledJointMixture.solver:1120;
+  _mixture_newton_options:1130; _result_face:1144; _coupled_m_step:1306;
+  _stack:1537 (natural_map only); _unstack:1550 (natural_map only);
+  _run_natural_em:1988 (_continue_with_em only);
+  _degree_probe_problems:2278; _continue_natural_mixture:2313.
+Missing class docs:
+  mixture_degree.py:27 _MixtureDegreeDiagnostic;
+  mixture_geometry.py:104 _MixtureFace.
+Missing function docs:
+  mixture_geometry.py:13 __init__, :110 __post_init__;
+  natural_mixture.py:819 observed_hessian property,
+  :1130 _mixture_newton_options, :1144 _result_face.
+Exact missing parameter names are retained in the JSONL appendix.
+
+11. OVERALL PRIORITY AND LIMITS
+------------------------------
+Most worth reinforcing:
+  - Resolve raw samples, supports, degree policies and ORIGINAL observation
+    weights once, with robust boundary normalization.
+  - Pass explicit canonical contracts and solver/EM policy objects through the
+    internal pipeline; do not use generic kwargs to reconstruct defaults.
+  - Distinguish malformed contracts from typed numerical candidate rejection;
+    keep fallback reporting complete.
+  - Protect every C allocation on exception paths, not just allocation failure.
+  - Document real numerical guarantees and reusable interface contracts.
+  - Consolidate duplicate implementations or record deliberate narrow exceptions.
+
+Keep rather than mechanically remove:
+  - Normalization of DERIVED responsibility/component weights.
+  - Numerical feasibility, endpoint, coordinate-scale and identifiability checks.
+  - Ownership copies/freezing, cache-protection copies and contiguous kernel packing.
+  - Compiled allocation fallbacks and exact-rational representability logic.
+  - Publicly reachable component/view/compatibility defaults.
+  - Truly local numerical constants, justified warm starts and documented cycles.
+
+This report compiles the discovered cases, not an assertion that a static review
+found every possible violation or that every candidate should be changed.
