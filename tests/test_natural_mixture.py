@@ -7,14 +7,13 @@ import pytest
 
 import gibbus._fit.natural_mixture as natural_mixture_module
 from gibbus._fit.natural_mixture import (
+    _CompiledJointMixture,
     _ComponentProblem,
     _e_step,
     _fit_natural_mixture,
-    _JointMixtureObjective,
     _run_natural_em,
 )
 from gibbus._model.coords import _build_fit_coordinate
-from gibbus._observations.intervals import _prepare_partial_interval_reducer
 
 _REAL_LINE = (-np.inf, np.inf)
 
@@ -57,7 +56,7 @@ def test_joint_mixture_objective_has_exact_derivatives(censored):
     for problem, component in zip(problems, fit.components, strict=True):
         assert problem.coordinate == component.coordinate
     layouts = [c.layout for c in fit.components]
-    joint = _JointMixtureObjective(problems, layouts, w)
+    joint = _CompiledJointMixture(problems, layouts, w)
     x0 = joint.join([c.params for c in fit.components], np.log(fit.weights))
     evaluation = joint(x0)
     assert -evaluation.nll == pytest.approx(
@@ -106,7 +105,7 @@ def test_mixture_fit_is_certified_and_beats_production(censored):
     assert np.all(np.diff(fit.history) >= -1e-12)
 
 
-def test_mixture_auto_degree_selects_per_component_then_locks():
+def test_mixture_auto_degree_grows_private_blocks_in_joint_geometry():
     """A Gaussian and quartic component may retain different selected degrees."""
     from scipy.stats import gennorm
 
@@ -267,36 +266,6 @@ def test_duplicate_interval_coordinate_matches_expanded_weighted_geometry():
     assert problem.coordinate.canonical_support == expanded.canonical_support
 
 
-def test_real_line_mass_only_estep_matches_general_interval_reducer():
-    """The finite real-line E-step specialization returns the generic masses."""
-    rows = np.array(
-        [
-            [-2.0, -1.5],
-            [-2.0, -1.5],
-            [-0.75, -0.25],
-            [0.0, 0.5],
-            [0.0, 0.5],
-            [1.0, 1.75],
-            [2.25, 3.0],
-        ]
-    )
-    weights = np.full(rows.shape[0], 1.0 / rows.shape[0])
-    problem = _ComponentProblem(_REAL_LINE, rows, 4, False, False, weights)
-    distinct, inverse = problem.distinct_rows
-    responsibility = np.linspace(0.3, 0.9, distinct.shape[0])
-    objective, result = problem.fit_compact(responsibility, weights, None)
-    state = objective.build_state(result.params)
-
-    fast, _, _ = problem.row_statistics(
-        state, objective.layout, moments=False, distinct=True
-    )
-    generic, _, _, _ = _prepare_partial_interval_reducer(state).reduce_many(distinct)
-    np.testing.assert_allclose(fast, generic, rtol=0.0, atol=3e-13)
-
-    expanded, _, _ = problem.row_statistics(state, objective.layout, moments=False)
-    np.testing.assert_allclose(expanded, fast[inverse], rtol=0.0, atol=0.0)
-
-
 def test_public_mixture_responsibilities_expand_duplicate_rows():
     x = _mixture_sample(23, 300)
     rows = _binned(x, 0.5)
@@ -315,20 +284,24 @@ def test_public_mixture_responsibilities_expand_duplicate_rows():
             )
 
 
-def test_joint_polish_uses_compiled_callback_newton(monkeypatch):
-    """The coupled observed-likelihood polish has no Python Newton traversal."""
-    from gibbus._fit import _conic_kernels
+def test_joint_polish_uses_fused_compiled_objective(monkeypatch):
+    """The coupled observed-likelihood polish never calls back into Python."""
+    from gibbus._fit import _conic_kernels, natural_mixture
 
     x = _mixture_sample(29, 220)
     calls = 0
-    original = _conic_kernels.solve_callback_newton
+    original = natural_mixture._CompiledJointMixture.solver
 
-    def counted(*args, **kwargs):
+    def counted(self, face):
         nonlocal calls
         calls += 1
-        return original(*args, **kwargs)
+        return original(self, face)
 
-    monkeypatch.setattr(_conic_kernels, "solve_callback_newton", counted)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("mixture solves must not use the callback Newton loop")
+
+    monkeypatch.setattr(natural_mixture._CompiledJointMixture, "solver", counted)
+    monkeypatch.setattr(_conic_kernels, "solve_callback_newton", forbidden)
     fit = _fit_natural_mixture(
         _REAL_LINE,
         x,

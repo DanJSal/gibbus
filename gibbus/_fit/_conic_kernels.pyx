@@ -1740,8 +1740,8 @@ cdef int _in_safeguarded_metric(
             b[i * n + j] = f[i * n + j] / d
             a[i * n + j] = observed[i * n + j] / d
 
-    # B = L L^T.  If the Fisher metric is numerically singular, exactly match
-    # the Python fallback and use Fisher itself.
+    # B = L L^T.  If the Fisher metric is numerically singular, use Fisher
+    # itself, exactly as ``_safeguarded_metric`` does.
     if _cholesky(b, n) != 0:
         memcpy(metric, f, n2 * sizeof(double))
         smallest_out[0] = -INFINITY
@@ -1809,7 +1809,56 @@ cdef int _in_evaluate(
     double* metric_work,
     double* nll, double* gradient, double* metric, double* smallest_out,
 ) noexcept nogil:
-    """Evaluate one natural interval objective without the GIL."""
+    """Evaluate one natural interval objective and its Newton metric."""
+    cdef int status = _in_evaluate_raw(
+        n, curvature_degree, theta,
+        Rf, finite_intervals, finite_weights,
+        point_lower_distance, point_upper_distance,
+        Ra, adaptive_intervals, adaptive_weights,
+        whole_weight, log_coordinate_scale,
+        support, data_bounds, kinds, lengths, coefficients, width,
+        controls, epsabs, epsrel, limit,
+        G, gl_nodes, gl_log_weights, width_eps_mult, lower_index, upper_index,
+        q_poly, amplitudes, state_work, geometry, points, moments,
+        model_means, model_fisher, natural_scale, log_probability,
+        obs_h, obs_cov, sum_h, sum_second, hbuf,
+        nll, gradient, NULL, NULL, NULL, NULL, NULL,
+    )
+    if status != 0:
+        return status
+    _in_safeguarded_metric(n, model_fisher, obs_cov, metric, metric_work, smallest_out)
+    return 0
+
+
+cdef int _in_evaluate_raw(
+    int n, int curvature_degree,
+    const double* theta,
+    Py_ssize_t Rf, const double* finite_intervals, const double* finite_weights,
+    const double* point_lower_distance, const double* point_upper_distance,
+    Py_ssize_t Ra, const double* adaptive_intervals, const double* adaptive_weights,
+    double whole_weight, double log_coordinate_scale,
+    const double* support, const double* data_bounds,
+    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t width,
+    const double* controls, double epsabs, double epsrel, int limit,
+    Py_ssize_t G, const double* gl_nodes, const double* gl_log_weights,
+    double width_eps_mult, int lower_index, int upper_index,
+    double* q_poly, double* amplitudes, double* state_work, double* geometry,
+    double* points, double* moments, double* model_means, double* model_fisher,
+    double* natural_scale, double* log_probability,
+    double* obs_h, double* obs_cov, double* sum_h, double* sum_second, double* hbuf,
+    double* nll, double* gradient,
+    double* adaptive_log_probability,
+    double* finite_row_means, double* finite_row_cov,
+    double* adaptive_row_means, double* adaptive_row_cov,
+) noexcept nogil:
+    """Evaluate one natural interval objective's raw geometry without the GIL.
+
+    On success ``model_fisher`` holds the model Fisher matrix and ``obs_cov``
+    the weighted within-row (missing) information; no Newton metric is built.
+    Adaptive rows write their log probabilities to ``adaptive_log_probability``
+    (``log_probability`` when ``NULL``).  The optional feature-major per-row
+    moment outputs are forwarded to the finite and adaptive reducers.
+    """
     cdef int i, j, k, status, npts = 0
     cdef Py_ssize_t nq = curvature_degree + 3
     cdef int n_power = <int>(2 * width - 1)
@@ -1852,6 +1901,7 @@ cdef int _in_evaluate(
                 geometry[2], log_coordinate_scale, natural_scale,
                 gl_nodes, gl_log_weights, width_eps_mult,
                 log_probability, obs_h, obs_cov, sum_h, sum_second, hbuf, nll,
+                finite_row_means, finite_row_cov,
             )
         else:
             status = finite_natural_objective_c(
@@ -1886,6 +1936,8 @@ cdef int _in_evaluate(
                 sum_second,
                 hbuf,
                 nll,
+                finite_row_means,
+                finite_row_cov,
             )
         if status != 0 or not _pn_finite(nll[0]):
             return 30 + status
@@ -1897,12 +1949,15 @@ cdef int _in_evaluate(
             obs_cov[i] = 0.0
 
     if Ra > 0:
+        if adaptive_log_probability == NULL:
+            adaptive_log_probability = log_probability
         status = adaptive_natural_objective_c(
             Ra, n, width, nq,
             adaptive_intervals, adaptive_weights, q_poly, amplitudes[0], amplitudes[1],
             geometry[2], geometry[5], -geometry[3] + log(shifted_z),
             kinds, lengths, coefficients, support[0], support[1],
-            epsabs, epsrel, limit, log_probability, obs_h, obs_cov, nll,
+            epsabs, epsrel, limit, adaptive_log_probability, obs_h, obs_cov, nll,
+            adaptive_row_means, adaptive_row_cov,
         )
         if status != 0 or not _pn_finite(nll[0]):
             return 50 + status
@@ -1915,7 +1970,6 @@ cdef int _in_evaluate(
 
     for k in range(n):
         gradient[k] = obs_h[k] - model_means[k]
-    _in_safeguarded_metric(n, model_fisher, obs_cov, metric, metric_work, smallest_out)
     return 0
 
 
@@ -2628,6 +2682,238 @@ cdef int _interval_newton_loop(
     return 5
 
 
+# ---------------------------------------------------------------------------
+# Generic fixed-face Newton loop over a compiled objective callback
+# ---------------------------------------------------------------------------
+
+cdef int _face_newton_loop(
+    int n, int r, int nb, const int* sizes, const Py_ssize_t* aoff,
+    const Py_ssize_t* qoff, Py_ssize_t qtot, Py_ssize_t na,
+    const double* b, const double* a, const double* ref, const Py_ssize_t* degrees,
+    FaceObjective* objective,
+    double* theta, double* blocks, double* current_nll, double* gradient,
+    double* hessian, double* current_smallest, double* dual,
+    double tolerance, double certified_tolerance, double accuracy_floor,
+    int max_iterations, double armijo, double backtrack, int max_line_search,
+    int min_steps, int* iterations_out, int* evaluations_out,
+    int* subproblem_iterations_out, double* bound_out,
+) noexcept nogil:
+    """Run one fixed-face Newton solve over a compiled objective without the GIL.
+
+    The control flow is the point/interval loops' line for line: warm then
+    cold conic subproblems, the carried certificate, Armijo with the roundoff
+    rule, and backtracking on any nonzero trial status.  The caller has
+    evaluated and accepted ``theta``; ``objective.accept`` commits each
+    accepted trial's raw geometry inside the objective context.
+
+    Return codes 1--5 are the public solver statuses; negative codes come from
+    the conic subproblem kernel (-1 allocation failure).
+    """
+    cdef Py_ssize_t n2 = n * n
+    cdef Py_ssize_t total = n + qtot + r + n + qtot + r + n + qtot + n + n2 + qtot
+    cdef double* arena = <double*>malloc(total * sizeof(double))
+    cdef double* p
+    cdef double* endpoint
+    cdef double* endpoint_blocks
+    cdef double* endpoint_dual
+    cdef double* chosen
+    cdef double* chosen_blocks
+    cdef double* chosen_dual
+    cdef double* trial_theta
+    cdef double* trial_blocks
+    cdef double* trial_gradient
+    cdef double* trial_hessian
+    cdef double* cold_blocks
+    cdef int iteration, _line_it, qp_iterations, status, bb, aa, kk, i
+    cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
+    cdef int first_solve, accepted, any_step
+    cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
+    cdef double model_value = 0.0, candidate_model = 0.0
+    cdef double gap = INFINITY, scaled_model = 0.0
+    cdef double directional, alpha, trial_nll, trial_smallest, decrease, cert
+
+    if arena == NULL:
+        return -1
+    p = arena
+    endpoint = p
+    p += n
+    endpoint_blocks = p
+    p += qtot
+    endpoint_dual = p
+    p += r
+    chosen = p
+    p += n
+    chosen_blocks = p
+    p += qtot
+    chosen_dual = p
+    p += r
+    trial_theta = p
+    p += n
+    trial_blocks = p
+    p += qtot
+    trial_gradient = p
+    p += n
+    trial_hessian = p
+    p += n2
+    cold_blocks = p
+
+    memset(cold_blocks, 0, qtot * sizeof(double))
+    for bb in range(nb):
+        kk = sizes[bb]
+        for aa in range(kk):
+            cold_blocks[qoff[bb] + aa * kk + aa] = 1.0
+
+    for iteration in range(max_iterations):
+        scale = fabs(current_nll[0])
+        if scale < 1.0:
+            scale = 1.0
+        first_solve = 1
+        while True:
+            status = _preconditioned(
+                n, r, nb, sizes, aoff, qoff, qtot, na,
+                hessian, gradient, theta, b, a, ref, degrees,
+                blocks if first_solve else cold_blocks,
+                1e-12, 100, 0.99,
+                endpoint, endpoint_blocks, endpoint_dual,
+                &candidate_model, &gap, &qp_iterations, &scaled_model,
+            )
+            if status != 0:
+                free(arena)
+                return status
+            sub_iterations += qp_iterations
+            solved_bound = (-candidate_model if candidate_model < 0.0 else 0.0) \
+                + (gap if gap > 0.0 else 0.0)
+            if first_solve or solved_bound < bound:
+                bound = solved_bound
+                model_value = candidate_model
+                memcpy(chosen, endpoint, n * sizeof(double))
+                memcpy(chosen_blocks, endpoint_blocks, qtot * sizeof(double))
+                memcpy(chosen_dual, endpoint_dual, r * sizeof(double))
+            directional = 0.0
+            any_step = 0
+            for i in range(n):
+                directional += gradient[i] * (chosen[i] - theta[i])
+                if chosen[i] != theta[i]:
+                    any_step = 1
+            if (
+                (_pn_finite(directional) and directional < 0.0 and any_step)
+                or (not first_solve)
+                or bound <= certified_tolerance * scale
+                or cold_starts >= 2
+            ):
+                break
+            cold_starts += 1
+            first_solve = 0
+
+        memcpy(dual, chosen_dual, r * sizeof(double))
+        if bound <= tolerance * scale and (
+            iteration >= min_steps or model_value >= 0.0
+        ):
+            iterations_out[0] = iteration
+            evaluations_out[0] = evaluations
+            subproblem_iterations_out[0] = sub_iterations
+            bound_out[0] = bound
+            free(arena)
+            return 1
+
+        if not (_pn_finite(directional) and directional < 0.0 and any_step):
+            if carried < bound:
+                bound = carried
+            iterations_out[0] = iteration
+            evaluations_out[0] = evaluations
+            subproblem_iterations_out[0] = sub_iterations
+            bound_out[0] = bound
+            free(arena)
+            if bound <= certified_tolerance * scale:
+                return 1
+            if bound <= accuracy_floor * scale:
+                return 2
+            return 3
+
+        alpha = 1.0
+        accepted = 0
+        for _line_it in range(max_line_search):
+            for i in range(n):
+                trial_theta[i] = theta[i] + alpha * (chosen[i] - theta[i])
+            for i in range(qtot):
+                trial_blocks[i] = (1.0 - alpha) * blocks[i] + alpha * chosen_blocks[i]
+            evaluations += 1
+            status = objective.evaluate(
+                objective.ctx, trial_theta, &trial_nll, trial_gradient,
+                trial_hessian, &trial_smallest,
+            )
+            if status != 0:
+                # A non-normalizable or numerically unresolved trial is a
+                # line-search rejection, not a reason to abandon the solve.
+                alpha *= backtrack
+                continue
+            if (
+                trial_nll <= current_nll[0] + armijo * alpha * directional
+                or (
+                    -model_value <= 1e-9 * scale
+                    and trial_nll <= current_nll[0] + 8.0 * _EPS * scale
+                )
+            ):
+                accepted = 1
+                break
+            alpha *= backtrack
+
+        if not accepted:
+            cert = bound if bound < carried else carried
+            if cert <= accuracy_floor * scale:
+                bound = cert
+                iterations_out[0] = iteration
+                evaluations_out[0] = evaluations
+                subproblem_iterations_out[0] = sub_iterations
+                bound_out[0] = bound
+                free(arena)
+                if cert <= certified_tolerance * scale:
+                    return 1
+                return 2
+            iterations_out[0] = iteration
+            evaluations_out[0] = evaluations
+            subproblem_iterations_out[0] = sub_iterations
+            bound_out[0] = bound
+            free(arena)
+            return 4
+
+        decrease = current_nll[0] - trial_nll
+        if bound <= accuracy_floor * scale and decrease <= bound:
+            carried = bound - (decrease if decrease > 0.0 else 0.0)
+            if carried < 0.0:
+                carried = 0.0
+        else:
+            carried = INFINITY
+        memcpy(theta, trial_theta, n * sizeof(double))
+        memcpy(blocks, trial_blocks, qtot * sizeof(double))
+        memcpy(gradient, trial_gradient, n * sizeof(double))
+        memcpy(hessian, trial_hessian, n2 * sizeof(double))
+        objective.accept(objective.ctx)
+        current_smallest[0] = trial_smallest
+        current_nll[0] = trial_nll
+
+    scale = fabs(current_nll[0])
+    if scale < 1.0:
+        scale = 1.0
+    cert = bound if bound < carried else carried
+    if cert <= accuracy_floor * scale:
+        bound = cert
+        iterations_out[0] = max_iterations
+        evaluations_out[0] = evaluations
+        subproblem_iterations_out[0] = sub_iterations
+        bound_out[0] = bound
+        free(arena)
+        if cert <= certified_tolerance * scale:
+            return 1
+        return 2
+    iterations_out[0] = max_iterations
+    evaluations_out[0] = evaluations
+    subproblem_iterations_out[0] = sub_iterations
+    bound_out[0] = bound
+    free(arena)
+    return 5
+
+
 def solve_interval_newton(
     params, blocks_packed, b_matrix, a_packed, sizes, a_offsets, q_offsets,
     reference_dual, row_degrees, support, data_bounds,
@@ -2806,7 +3092,7 @@ def solve_interval_newton(
         3: "non_descent",
         4: "line_search_failed",
         5: "iteration_limit",
-        90: "fallback",
+        90: "invalid_start",
     }
     return (
         statuses[code], theta, blocks, dual, float(nll), gradient, hessian,

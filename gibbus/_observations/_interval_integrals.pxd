@@ -23,4 +23,6 @@ cdef api int adaptive_natural_objective_c(
     double* obs_h,
     double* obs_cov,
     double* nll_io,
+    double* row_means,
+    double* row_cov,
 ) noexcept nogil

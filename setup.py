@@ -58,6 +58,7 @@ MODULES = {
     "_fit._conic_kernels": "_fit/_conic_kernels.pyx",
     "_fit._curvature_certificate": "_fit/_curvature_certificate.pyx",
     "_fit._mixture_kernels": "_fit/_mixture_kernels.pyx",
+    "_fit._shared_mixture_kernels": "_fit/_shared_mixture_kernels.pyx",
     "_model._quad_integrals": "_model/_quad_integrals.pyx",
     "_model._moment_kernels": "_model/_moment_kernels.pyx",
     "_model._state_kernels": "_model/_state_kernels.pyx",

@@ -171,7 +171,7 @@ def test_endpoint_concentrated_bounded_fit_keeps_explicit_lower_boundary_basis()
     )
 
     assert fitted.fit_diagnostics["converged"]
-    assert bool(fitted.data["boundary_allowed"][0])
+    assert fitted.fit_diagnostics["shared_boundary"]["allowed"][0]
 
 
 def test_nearly_coincident_forced_mixture_remains_certified():

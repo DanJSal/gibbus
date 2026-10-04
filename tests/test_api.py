@@ -111,8 +111,9 @@ class TestSerialization:
         assert np.array_equal(loaded.weights, c.weights)
         assert np.array_equal(loaded.pdf(xs), c.pdf(xs))
         assert before_diag["em"] is not None
-        assert all(item["success"] for item in before_diag["components"])
-        assert all(item["success"] for item in loaded.fit_diagnostics["components"])
+        assert [item["success"] for item in loaded.fit_diagnostics["components"]] == [
+            item["success"] for item in before_diag["components"]
+        ]
 
     def test_repr_summarizes_fitted_state(self, rng):
         c = Distribution().fit(
@@ -142,7 +143,7 @@ class TestSerialization:
         c = Distribution().fit(
             rng.normal(size=400), n_components=1, support=(-np.inf, np.inf)
         )
-        names = set(c.data.dtype.names)
+        names = set(c.components[0].data.dtype.names)
         assert {
             "cdf_map_kind",
             "cdf_breaks",
@@ -186,7 +187,7 @@ class TestSerialization:
             "ppf_coeff_stride",
         ):
             state = np.array(c.data, copy=True)
-            state[field] = -1
+            state[f"comp_{field}"][0] = -1
             with pytest.raises(ValueError, match="must be positive"):
                 Distribution(state)
 
@@ -196,7 +197,7 @@ class TestSerialization:
         )
         for kind in (-1, 99):
             state = np.array(c.data, copy=True)
-            state["cdf_map_kind"] = kind
+            state["comp_cdf_map_kind"][0] = kind
             with pytest.raises(ValueError, match=r"cdf_map_kind.*0\.\.5"):
                 Distribution(state)
 
@@ -213,11 +214,11 @@ class TestSerialization:
         c = Distribution().fit(
             rng.normal(size=300), n_components=1, support=(-np.inf, np.inf)
         )
-        for value in (0, int(c.data[stride_field]) + 1):
+        for value in (0, int(c.data[f"comp_{stride_field}"][0]) + 1):
             state = np.array(c.data, copy=True)
-            counts = np.array(state[field], copy=True)
+            counts = np.array(state[f"comp_{field}"][0], copy=True)
             counts[-1] = value
-            state[field] = counts
+            state[f"comp_{field}"][0] = counts
             with pytest.raises(ValueError, match=r"ncoeff entries must be in"):
                 Distribution(state)
 
@@ -517,10 +518,10 @@ def test_infinite_censored_single_component_uses_native_natural_path():
         intervals, n_components=1, support=(-np.inf, np.inf), poly_degree="auto"
     )
     for fitted in (explicit, auto):
-        assert str(fitted.data["optimizer_status"]) in (
+        assert str(fitted.components[0].data["optimizer_status"]) in (
             "converged",
             "converged_approximately",
         )
-    assert int(auto.data["requested_poly_degree"]) == 2
+    assert int(auto.components[0].data["requested_poly_degree"]) == 2
     assert explicit.mean == pytest.approx(0.3, abs=0.16)
     assert explicit.std == pytest.approx(1.1, rel=0.18)

@@ -287,34 +287,27 @@ class _NaturalPointObjectiveFunction:
     def _compiled_point_newton_inputs(self, /):
         """Return fixed arrays consumed by the fused compiled Newton loop.
 
-        The initial Python objective evaluation populates ``_empirical_means``;
-        after that, point-data Newton trials depend only on these fixed
-        statistics and the shared state-numerics constants.
+        A compiled initial objective evaluation (or an explicit
+        ``_point_empirical_means`` call) populates ``_empirical_means``; after
+        that, point-data Newton trials depend only on these fixed statistics
+        and the shared state-numerics constants.
         """
         if self._empirical_means is None:
             return None
-        from .._defaults import QUAD_EPSABS, QUAD_EPSREL, QUAD_LIMIT
-        from .._model.natural_state import _MODE_CONTROLS
-
-        numerics = _layout_numerics(self.layout)
-        return (
-            numerics.support,
-            np.asarray(self.z_data_bounds, dtype=np.float64),
-            self.layout.lower_a_index is not None,
-            self.layout.upper_a_index is not None,
-            numerics.kinds,
-            numerics.lengths,
-            numerics.coefficients,
-            _MODE_CONTROLS,
-            np.asarray(self._empirical_means, dtype=np.float64),
+        return _point_kernel_inputs(
+            self.layout,
+            self.z_data_bounds,
+            self._empirical_means,
             self._coordinate_constant,
-            self.layout.curvature_degree,
-            -1 if self.layout.lower_a_index is None else self.layout.lower_a_index,
-            -1 if self.layout.upper_a_index is None else self.layout.upper_a_index,
-            QUAD_EPSABS,
-            QUAD_EPSREL,
-            QUAD_LIMIT,
         )
+
+    def _point_empirical_means(self, /):
+        """Return (and cache) the empirical means of the potential partials."""
+        if self._empirical_means is None:
+            partials = _layout_numerics(self.layout).partials
+            self._empirical_means = self.observations.first_expectations(partials)
+            self._zero_missing = np.zeros((len(partials), len(partials)))
+        return self._empirical_means
 
     def build_state(self, params, /):
         """Build and normalize one natural-coordinate candidate state.
@@ -349,26 +342,63 @@ class _NaturalPointObjectiveFunction:
             return _evaluate_point_objective(state, self.observations)
         if not (np.isfinite(state.log_Z) and state.Z > 0.0):
             raise RuntimeError("candidate state is not normalizable")
-        if self._empirical_means is None:
-            self._empirical_means = self.observations.first_expectations(state.partials)
-            self._zero_missing = np.zeros((state.p.size, state.p.size))
+        empirical_means = self._point_empirical_means()
         means, fisher = cached
         # q = theta . h exactly (the potential is linear with no constant),
         # so E_hat[q] is the parameter/statistic contraction; the compiled
         # Fisher matrix is exactly symmetric.
-        nll = (
-            float(self._empirical_means @ state.p)
-            + state.log_Z
-            + self._coordinate_constant
-        )
+        nll = float(empirical_means @ state.p) + state.log_Z + self._coordinate_constant
         return _ObjectiveEvaluation(
             nll=nll,
-            gradient=self._empirical_means - means,
+            gradient=empirical_means - means,
             hessian=fisher,
             fisher=fisher,
             missing_information=self._zero_missing,
             model_partial_means=means,
         )
+
+
+def _point_kernel_inputs(layout, z_data_bounds, empirical_means, coordinate_constant):
+    """Pack one point objective's fixed inputs for the compiled kernels.
+
+    Parameters
+    ----------
+    layout : _NaturalLayout
+        Natural parameter layout.
+    z_data_bounds : tuple of (float, float)
+        Canonical data range used by quadrature windowing.
+    empirical_means : numpy.ndarray, shape (n,)
+        Empirical means of the potential partials (zero for a bare normalizer).
+    coordinate_constant : float
+        ``log`` of the user-to-canonical coordinate scale.
+
+    Returns
+    -------
+    tuple
+        The arguments of the compiled point evaluator, in kernel order.
+    """
+    from .._defaults import QUAD_EPSABS, QUAD_EPSREL, QUAD_LIMIT
+    from .._model.natural_state import _MODE_CONTROLS
+
+    numerics = _layout_numerics(layout)
+    return (
+        numerics.support,
+        np.asarray(z_data_bounds, dtype=np.float64),
+        layout.lower_a_index is not None,
+        layout.upper_a_index is not None,
+        numerics.kinds,
+        numerics.lengths,
+        numerics.coefficients,
+        _MODE_CONTROLS,
+        np.asarray(empirical_means, dtype=np.float64),
+        float(coordinate_constant),
+        layout.curvature_degree,
+        -1 if layout.lower_a_index is None else layout.lower_a_index,
+        -1 if layout.upper_a_index is None else layout.upper_a_index,
+        QUAD_EPSABS,
+        QUAD_EPSREL,
+        QUAD_LIMIT,
+    )
 
 
 def _preserved_point_boundary_distances(coordinate, points, /):
@@ -817,26 +847,13 @@ class _NaturalIntervalObjectiveFunction:
         self.nll_lower_bound = (
             _interval_nll_lower_bound(observations) if nonparametric_bound else None
         )
-        support = tuple(map(float, self.spec.support))
-        intervals = np.asarray(self.observations.intervals, dtype=np.float64)
-        positive_width = intervals[:, 1] > intervals[:, 0]
-        finite_rows = np.all(np.isfinite(intervals), axis=1)
-        boundary_touch = np.zeros(intervals.shape[0], dtype=bool)
-        if np.isfinite(support[0]):
-            boundary_touch |= positive_width & (intervals[:, 0] == support[0])
-        if np.isfinite(support[1]):
-            boundary_touch |= positive_width & (intervals[:, 1] == support[1])
-        whole_support = (
-            (intervals[:, 0] == support[0])
-            & (intervals[:, 1] == support[1])
-            & positive_width
+        regular, adaptive, whole = _interval_partitions(
+            self.observations.intervals, self.spec.support
         )
-        regular_finite = finite_rows & ~boundary_touch
-        adaptive = (~finite_rows | boundary_touch) & ~whole_support
-        self._compiled_interval_regular_mask = regular_finite
+        self._compiled_interval_regular_mask = regular
         self._compiled_interval_adaptive_mask = adaptive
         self._compiled_interval_whole_weight = float(
-            np.sum(self.observations.weights[whole_support])
+            np.sum(self.observations.weights[whole])
         )
         # The fused interval solver is a local fixed-face optimizer.  Global
         # certification from ``nll_lower_bound`` is deliberately handled by
@@ -856,50 +873,15 @@ class _NaturalIntervalObjectiveFunction:
         """
         if not self._compiled_interval_newton_eligible:
             return None
-        from .._defaults import (
-            INTERVAL_W_EPS_MULT,
-            QUAD_EPSABS,
-            QUAD_EPSREL,
-            QUAD_LIMIT,
-        )
-        from .._model.natural_state import _MODE_CONTROLS
-        from .._observations.intervals import _GL_LOG_W, _GL_X
-
-        numerics = _layout_numerics(self.layout)
-        regular = self._compiled_interval_regular_mask
-        adaptive = self._compiled_interval_adaptive_mask
-        return (
-            numerics.support,
-            np.asarray(self.z_data_bounds, dtype=np.float64),
-            numerics.kinds,
-            numerics.lengths,
-            numerics.coefficients,
-            _MODE_CONTROLS,
-            np.ascontiguousarray(
-                self.observations.intervals[regular], dtype=np.float64
-            ),
-            np.ascontiguousarray(self.observations.weights[regular], dtype=np.float64),
-            np.ascontiguousarray(
-                self.observations.point_lower_distance[regular], dtype=np.float64
-            ),
-            np.ascontiguousarray(
-                self.observations.point_upper_distance[regular], dtype=np.float64
-            ),
-            np.ascontiguousarray(
-                self.observations.intervals[adaptive], dtype=np.float64
-            ),
-            np.ascontiguousarray(self.observations.weights[adaptive], dtype=np.float64),
+        return _interval_kernel_inputs(
+            self.layout,
+            self.z_data_bounds,
+            self.observations,
+            self.observations.weights,
+            self._compiled_interval_regular_mask,
+            self._compiled_interval_adaptive_mask,
             self._compiled_interval_whole_weight,
-            float(self.spec.coordinate.scale),
-            _GL_X,
-            _GL_LOG_W,
-            float(INTERVAL_W_EPS_MULT),
-            self.layout.curvature_degree,
-            -1 if self.layout.lower_a_index is None else self.layout.lower_a_index,
-            -1 if self.layout.upper_a_index is None else self.layout.upper_a_index,
-            QUAD_EPSABS,
-            QUAD_EPSREL,
-            QUAD_LIMIT,
+            self.spec.coordinate.scale,
         )
 
     def build_state(self, params, /):
@@ -937,6 +919,115 @@ class _NaturalIntervalObjectiveFunction:
             missing_information=missing,
             smallest_curvature=smallest,
         )
+
+
+def _interval_partitions(intervals, support, /):
+    """Split canonical interval rows among the compiled interval reducers.
+
+    Parameters
+    ----------
+    intervals : numpy.ndarray, shape (R, 2)
+        Canonical interval rows.
+    support : tuple of (float, float)
+        Canonical support.
+
+    Returns
+    -------
+    regular, adaptive, whole : numpy.ndarray of bool, shape (R,)
+        Finite rows away from the support boundary (local Gauss--Legendre
+        reducer), boundary-touching or infinite rows (adaptive reducer), and
+        positive-width whole-support rows (probability one).
+    """
+    lower, upper = map(float, support)
+    intervals = np.asarray(intervals, dtype=np.float64)
+    positive_width = intervals[:, 1] > intervals[:, 0]
+    finite_rows = np.all(np.isfinite(intervals), axis=1)
+    boundary_touch = np.zeros(intervals.shape[0], dtype=bool)
+    if np.isfinite(lower):
+        boundary_touch |= positive_width & (intervals[:, 0] == lower)
+    if np.isfinite(upper):
+        boundary_touch |= positive_width & (intervals[:, 1] == upper)
+    whole = (intervals[:, 0] == lower) & (intervals[:, 1] == upper) & positive_width
+    regular = finite_rows & ~boundary_touch
+    adaptive = (~finite_rows | boundary_touch) & ~whole
+    return regular, adaptive, whole
+
+
+def _interval_kernel_inputs(
+    layout,
+    z_data_bounds,
+    observations,
+    weights,
+    regular,
+    adaptive,
+    whole_weight,
+    coordinate_scale,
+    /,
+):
+    """Pack one interval objective's fixed inputs for the compiled kernels.
+
+    Parameters
+    ----------
+    layout : _NaturalLayout
+        Natural parameter layout.
+    z_data_bounds : tuple of (float, float)
+        Canonical data range used by quadrature windowing.
+    observations : _IntervalObservations
+        Canonical interval rows.
+    weights : numpy.ndarray, shape (R,)
+        Row weights packed for the reducers.
+    regular, adaptive : numpy.ndarray of bool, shape (R,)
+        Reducer partitions from ``_interval_partitions``.
+    whole_weight : float
+        Aggregate weight of whole-support rows.
+    coordinate_scale : float
+        User-to-canonical coordinate scale.
+
+    Returns
+    -------
+    tuple
+        The arguments of the compiled interval evaluator, in kernel order.
+    """
+    from .._defaults import (
+        INTERVAL_W_EPS_MULT,
+        QUAD_EPSABS,
+        QUAD_EPSREL,
+        QUAD_LIMIT,
+    )
+    from .._model.natural_state import _MODE_CONTROLS
+    from .._observations.intervals import _GL_LOG_W, _GL_X
+
+    numerics = _layout_numerics(layout)
+    weights = np.asarray(weights, dtype=np.float64)
+    return (
+        numerics.support,
+        np.asarray(z_data_bounds, dtype=np.float64),
+        numerics.kinds,
+        numerics.lengths,
+        numerics.coefficients,
+        _MODE_CONTROLS,
+        np.ascontiguousarray(observations.intervals[regular], dtype=np.float64),
+        np.ascontiguousarray(weights[regular]),
+        np.ascontiguousarray(
+            observations.point_lower_distance[regular], dtype=np.float64
+        ),
+        np.ascontiguousarray(
+            observations.point_upper_distance[regular], dtype=np.float64
+        ),
+        np.ascontiguousarray(observations.intervals[adaptive], dtype=np.float64),
+        np.ascontiguousarray(weights[adaptive]),
+        float(whole_weight),
+        float(coordinate_scale),
+        _GL_X,
+        _GL_LOG_W,
+        float(INTERVAL_W_EPS_MULT),
+        layout.curvature_degree,
+        -1 if layout.lower_a_index is None else layout.lower_a_index,
+        -1 if layout.upper_a_index is None else layout.upper_a_index,
+        QUAD_EPSABS,
+        QUAD_EPSREL,
+        QUAD_LIMIT,
+    )
 
 
 def _prepare_natural_interval_objective(

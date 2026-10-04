@@ -632,12 +632,20 @@ def test_nested_interval_pattern_is_recognized_by_identifiability_diagnostic():
         SimpleNamespace(layout=SimpleNamespace(n_params=2)),
     ]
 
-    diag = _interval_identifiability_diagnostic(intervals, components, bound, support)
+    diag = _interval_identifiability_diagnostic(
+        intervals, components, bound, support, n_parameters=5
+    )
 
     assert diag is not None
     assert diag["observable_dim"] == 3
     assert diag["n_params"] == 5
     assert diag["gap"] == pytest.approx(0.0, abs=1e-12)
+    assert (
+        _interval_identifiability_diagnostic(
+            intervals, components, bound, support, n_parameters=3
+        )
+        is None
+    )
 
 
 def test_auto_k_rejects_unidentifiable_richer_interval_candidate():
@@ -1121,7 +1129,7 @@ def test_boundary_amplitudes_are_linear_nonnegative_coordinates():
     for seed, (p, q) in enumerate([(2.0, 5.0), (1.5, 1.5), (5.0, 2.0)]):
         data = np.ascontiguousarray(np.random.default_rng(seed).beta(p, q, 3000))
         c = Distribution().fit(data, n_components=1, support=(0.0, 1.0), poly_degree=6)
-        state = c.data
+        state = c.components[0].data
         assert "q_boundary" not in state.dtype.names
         amps = np.asarray(state["boundary_amplitudes"], dtype=float)
         assert np.all(np.isfinite(amps))
@@ -1158,7 +1166,7 @@ def test_degree_screening_uses_the_real_boundary_structure():
         chosen = Distribution().fit(
             data, n_components=1, support=support, poly_degree="auto"
         )
-        chosen_deg = int(chosen.data["requested_poly_degree"])
+        chosen_deg = int(chosen.components[0].data["requested_poly_degree"])
 
         # Converged BIC over the admissible degrees, using the library's
         # own criterion: 2 * nll * n + p * log(n).
@@ -1170,8 +1178,7 @@ def test_degree_screening_uses_the_real_boundary_structure():
                 )
             except (ValueError, RuntimeError):
                 continue
-            state = c.data
-            p_free = int(np.asarray(state["optimizer_params"]).size)
+            p_free = c.fit_diagnostics["n_face_parameters"]
             nll = float(np.mean(c.neg_log(data)))
             bic = 2.0 * nll * n + p_free * log_n
             if bic < best_bic:

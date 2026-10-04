@@ -1,15 +1,16 @@
 """A single fitted log-concave component.
 
-:class:`_Component` owns one fitted density: its packed fitted state, the
-affine map from user coordinates into the fitting coordinate, the cached
-evaluation closures, and the two coordinate-space views.
+:class:`_Component` exposes an immutable fitted payload and read-only queries.
+The fixed fitting coordinate belongs to that payload; the common presentation
+map is supplied by its owning model. Evaluation and moment caches are separate
+from the bytes-backed fitted record.
 
 Users never touch this class directly; they interact with
 :class:`~gibbus._api.distribution.Distribution`.
 """
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Union
 
 import numpy as np
@@ -59,7 +60,16 @@ from .._spectral.runtime import (
 from .views import _BaseSpaceView, _ExpSpaceView
 
 
-def _natural_seed_params(seed, layout, direction, /):
+@dataclass(slots=True)
+class _Presentation:
+    """One model-owned presentation context, shared by its read-only views."""
+
+    affine: tuple[float, float] = (0.0, 1.0)
+    default: str = "base"
+    version: int = 0
+
+
+def _natural_seed_params(seed, layout, coordinate, /):
     """Reconstruct affine natural parameters from a portable fitted state.
 
     The stored normalized potential is sufficient for this conversion.
@@ -70,8 +80,8 @@ def _natural_seed_params(seed, layout, direction, /):
         Portable fitted state.
     layout : _NaturalLayout
         Target natural-coordinate parameter layout.
-    direction : float
-        Canonical fitting-coordinate orientation.
+    coordinate : _FitCoordinate
+        Target fitting coordinate for the new objective.
 
     Returns
     -------
@@ -81,13 +91,24 @@ def _natural_seed_params(seed, layout, direction, /):
     q_poly = np.asarray(seed["q_poly"], dtype=np.float64).reshape(-1)
     if q_poly.size < 2:
         return None
+    source_direction = float(seed["fit_direction"])
+    source_scale = float(seed["fit_scale"])
+    slope = source_direction * coordinate.direction * coordinate.scale / source_scale
+    offset = (
+        source_direction
+        * (coordinate.center - float(seed["fit_center"]))
+        / source_scale
+    )
+    q_poly = Polynomial(q_poly)(Polynomial([offset, slope])).coef
+    if q_poly.size < 2:
+        q_poly = np.pad(q_poly, (0, 2 - q_poly.size))
     q_d2 = np.asarray(Polynomial(q_poly).deriv(2).coef, dtype=np.float64)
     curvature = np.zeros(layout.curvature_degree + 1, dtype=np.float64)
     curvature[: min(curvature.size, q_d2.size)] = q_d2[: curvature.size]
     physical = np.asarray(seed["boundary_amplitudes"], dtype=np.float64).reshape(-1)
     if physical.size != 2:
         return None
-    canonical = _canonical_boundary_amplitudes(physical, direction)
+    canonical = _canonical_boundary_amplitudes(physical, coordinate.direction)
     try:
         return layout.pack(float(q_poly[1]), curvature, canonical)
     except ValueError:
@@ -235,7 +256,7 @@ def _fit_natural_fixed_degree(norm, degree, lower, upper, /):
             )
         elif seed is not None:
             initial = _natural_seed_params(
-                seed, objective.layout, objective.spec.coordinate.direction
+                seed, objective.layout, objective.spec.coordinate
             )
             if initial is not None:
                 options["initial"] = initial
@@ -291,8 +312,28 @@ class _Component:
     users interact with :class:`Distribution` instead.
     """
 
+    __slots__ = (
+        "_base_base_potential",
+        "_base_cdf",
+        "_base_exp_potential",
+        "_base_pdf",
+        "_base_ppf",
+        "_base_view",
+        "_canonical_moments",
+        "_center",
+        "_context",
+        "_data",
+        "_direction",
+        "_exp_view",
+        "_scale",
+        "_spectral_cdf_eval",
+        "_spectral_ppf_eval",
+        "_tail_integrator",
+        "_window",
+    )
+
     def __init__(self, uni_state: Mapping[str, float | NDArray] | None = None):
-        """Create a component, optionally loading a saved state.
+        """Privately construct a component from an immutable fitted payload.
 
         Parameters
         ----------
@@ -300,13 +341,10 @@ class _Component:
             Structured fit state to load.  ``None`` leaves the
             component unfitted.
         """
-        # ``_data`` is the packed fitted record; None marks an unfitted
-        # component.  The remaining fields are derived from it on load.
+        # Fitted storage is backed by immutable bytes, not a reversible
+        # ndarray writeability flag.
         self._data: np.ndarray | None = None
         self._window: Any = None
-        self.mu: float = float("nan")
-        self.sigma: float = float("nan")
-        self.pullback: bool = False
         self._center: float = float("nan")
         self._scale: float = float("nan")
         self._direction: float = 1.0
@@ -320,10 +358,10 @@ class _Component:
         self._tail_integrator: Any = None
         self._base_view = _BaseSpaceView(self)
         self._exp_view = _ExpSpaceView(self)
-        self._default: str = "base"
-        self._version = 0
+        self._context = None
+        self._canonical_moments = {}
         if uni_state is not None:
-            self.load(uni_state)
+            self._assign_from_struct(uni_state)
 
     def __copy__(self):
         return self.copy()
@@ -348,36 +386,17 @@ class _Component:
         """Whether the instance holds a fitted density."""
         return self._data is not None
 
-    def set_default(self, space: str) -> "_Component":
-        """Set the default evaluation space.
-
-        Parameters
-        ----------
-        space : {"base", "exp"}
-            Space that the convenience accessors evaluate in.
-
-        Returns
-        -------
-        _Component
-            ``self``, for chaining.
-
-        Raises
-        ------
-        ValueError
-            If *space* is not ``"base"`` or ``"exp"``.
-        """
-        s = str(space).lower()
-        if s not in ("base", "exp"):
-            raise ValueError("space must be 'base' or 'exp'")
-        self._default = s
-        if self._data is not None:
-            self._data["default_space"] = s
-        return self
-
     @property
     def default(self) -> str:
         """Currently active evaluation space."""
-        return str(self._default)
+        return "base" if self._context is None else self._context.default
+
+    @property
+    def _version(self):
+        return 0 if self._context is None else self._context.version
+
+    def _affine(self):
+        return (0.0, 1.0) if self._context is None else self._context.affine
 
     @property
     def base(self) -> _BaseSpaceView:
@@ -389,25 +408,9 @@ class _Component:
         """Exp-space view."""
         return self._exp_view
 
-    def load(self, uni_state: Mapping[str, float | NDArray]) -> "_Component":
-        """Load a previously saved fitted state.
-
-        Parameters
-        ----------
-        uni_state : Mapping
-            Structured state as returned by the ``data`` property.
-
-        Returns
-        -------
-        _Component
-            ``self``, for chaining.
-        """
-        self._assign_from_struct(uni_state)
-        self._bump_version()
-        return self
-
-    def fit(
-        self,
+    @classmethod
+    def _fit(
+        cls,
         samples: ArrayLike,
         *,
         poly_degree: int | str | None = None,
@@ -419,7 +422,7 @@ class _Component:
         init_from: Union["_Component", Mapping[str, Any]] | None = None,
         sample_weights: ArrayLike | None = None,
     ) -> "_Component":
-        """Fit a log-concave density to the supplied samples.
+        """Privately fit and return a new completed read-only component.
 
         Parameters
         ----------
@@ -454,7 +457,7 @@ class _Component:
         Returns
         -------
         _Component
-            ``self``, for method chaining.
+            A new fitted component.
 
         Raises
         ------
@@ -464,6 +467,8 @@ class _Component:
         RuntimeError
             If the fit encounters a degenerate numerical state.
         """
+        if isinstance(init_from, _Component):
+            init_from = init_from._seed_state()
         norm = _normalize_univariate_fit_inputs(
             _Component,
             samples,
@@ -481,10 +486,7 @@ class _Component:
             data = _pack_natural_fit(
                 objective, result, effective_n=effective_n, boundary_p_values=p_values
             )
-        self._assign_from_struct(data)
-        self._default = "base"
-        self._bump_version()
-        return self
+        return cls(data)
 
     # -- Convenience delegation to active view --
 
@@ -916,92 +918,6 @@ class _Component:
     def kurt(self):
         return self._active.kurt
 
-    def transform(
-        self,
-        *,
-        mu: float | None = None,
-        sigma: float | None = None,
-        pullback: bool,
-        inplace: bool = True,
-    ) -> "_Component":
-        """Apply an affine location-scale transformation.
-
-        Parameters
-        ----------
-        mu : float or None, optional
-            New location.  ``None`` leaves it unchanged.
-        sigma : float or None, optional
-            New scale.  ``None`` leaves it unchanged.
-        pullback : bool
-            ``False`` gives the pushforward ``Y = mu + sigma * X``;
-            ``True`` gives the pullback ``Y = (X - mu) / sigma``.
-            This argument is required so the transform direction is explicit.
-        inplace : bool, optional
-            Mutate this object (default) or return a transformed copy.
-
-        Returns
-        -------
-        _Component
-            ``self`` when *inplace*, otherwise the transformed copy.
-
-        Raises
-        ------
-        RuntimeError
-            If the component is not fitted.
-        TypeError
-            If *pullback* is not a boolean.
-        ValueError
-            If *mu* is non-finite, or *sigma* is non-finite or not positive.
-        """
-        self._ensure_fitted()
-        target = self if inplace else self.copy()
-        target_data = target._ensure_fitted()
-        if not isinstance(pullback, (bool, np.bool_)):
-            raise TypeError("pullback must be a bool")
-        target.pullback = bool(pullback)
-        target_data["pullback"] = target.pullback
-        if mu is None:
-            mu = float(target.mu)
-        else:
-            mu = float(mu)
-            if not np.isfinite(mu):
-                raise ValueError("mu must be finite")
-        if sigma is None:
-            sigma = float(target.sigma)
-        else:
-            sigma = float(sigma)
-            if not (np.isfinite(sigma) and sigma > 0.0):
-                raise ValueError("sigma must be positive and finite")
-        if target.pullback:
-            mu_eff = -mu / sigma
-            sigma_eff = 1.0 / sigma
-        else:
-            mu_eff = mu
-            sigma_eff = sigma
-        old_mu0 = float(target.mu)
-        old_sig0 = float(target.sigma)
-        sigma_new = old_sig0 / sigma_eff
-        mu_new = old_mu0 - (old_sig0 * mu_eff) / sigma_eff
-        upd = _pf._univariate_affine_update_public(target_data, mu_new, sigma_new)
-        target.mu = float(upd["mu"])
-        target.sigma = float(upd["sigma"])
-        target_data["mu"] = target.mu
-        target_data["sigma"] = target.sigma
-        for k in (
-            "support",
-            "mode",
-            "median",
-            "mean",
-            "var",
-            "std",
-            "skew",
-            "kurt",
-            "raw_moments",
-        ):
-            target_data[k] = upd[k]
-        target._bump_version()
-        return target
-
     def _truncate_base(self, lower=None, upper=None):
         """Return this component conditioned to a base-space interval.
 
@@ -1011,6 +927,12 @@ class _Component:
             Base-space truncation bounds. ``None`` keeps the current bound.
         """
         self._ensure_fitted()
+        if self._context is not None:
+            shift, scale = self._affine()
+            return _Component(self._data)._truncate_base(
+                None if lower is None else (float(lower) - shift) / scale,
+                None if upper is None else (float(upper) - shift) / scale,
+            )
         active_lo, active_hi = map(float, self.base.support)
         lo = active_lo if lower is None else max(active_lo, float(lower))
         hi = active_hi if upper is None else min(active_hi, float(upper))
@@ -1158,7 +1080,6 @@ class _Component:
                 data["window"] = zwin
 
         result = _Component(_structured_scalar(data))
-        result.set_default(self.default)
         return result
 
     @property
@@ -1166,6 +1087,20 @@ class _Component:
         """A deep copy of the structured fitted state."""
         self._ensure_fitted()
         return self._data.copy()
+
+    def _seed_state(self):
+        """Materialize seed conditioning in the common current model coordinate."""
+        state = self.data
+        shift, scale = self._affine()
+        state["support"] = self.base.support
+        state["fit_center"] = shift + scale * self._center
+        state["fit_scale"] = scale * self._scale
+        for name in ("mode", "median", "mean", "var", "std", "skew", "kurt"):
+            state[name] = self._base_stat(name)
+        raw = state["raw_moments"]
+        for order in np.flatnonzero(np.isfinite(raw)):
+            raw[order] = self._raw_moment_base(int(order))
+        return state
 
     def copy(self) -> "_Component":
         """Create an independent deep copy.
@@ -1176,21 +1111,16 @@ class _Component:
             A component sharing no mutable state with this one.
         """
         new = _Component()
-        new._default = self._default
         if self._data is None:
             return new
         new._assign_from_struct(self._data)
-        new._bump_version()
+        new._context = None if self._context is None else replace(self._context)
         return new
 
     @property
     def _active(self):
         """Return the currently active space view."""
-        return self._base_view if self._default == "base" else self._exp_view
-
-    def _bump_version(self):
-        """Increment the version counter to invalidate downstream caches."""
-        self._version += 1
+        return self._base_view if self.default == "base" else self._exp_view
 
     def _raw_moment_base(self, k: int) -> float:
         """Compute (or retrieve cached) *k*-th raw moment in base coordinates.
@@ -1204,19 +1134,14 @@ class _Component:
         -------
         float
         """
-        data = self._ensure_fitted()
-        rm = data["raw_moments"]
-        cap = rm.shape[0]
-        if k == 0:
-            if cap > 0:
-                rm[0] = 1.0
-            return 1.0
-        if k < cap and np.isfinite(rm[k]):
-            return float(rm[k])
-        val = float(_pf._univariate_raw_moment(data, int(k)))
-        if k < cap:
-            rm[k] = val
-        return val
+        self._ensure_fitted()
+        mu_eff, sigma_eff = self._mu_sigma_eff()
+        moments = [self._canonical_raw_moment(j) for j in range(k + 1)]
+        return float(
+            _pf._powaff_moment_from_z_moments(
+                moments, 1.0 / sigma_eff, -mu_eff / sigma_eff, k
+            )
+        )
 
     def _canonical_raw_moment(self, k: int) -> float:
         """Compute or retrieve a raw moment in the fitted canonical coordinate.
@@ -1227,32 +1152,39 @@ class _Component:
             Non-negative canonical raw-moment order.
         """
         data = self._ensure_fitted()
+        if k == 0:
+            return 1.0
         rm = data["canonical_raw_moments"]
         cap = rm.shape[0]
-        if k == 0:
-            if cap > 0:
-                rm[0] = 1.0
-            return 1.0
         if k < cap and np.isfinite(rm[k]):
             return float(rm[k])
+        if k in self._canonical_moments:
+            return self._canonical_moments[k]
         val = float(_pf._univariate_canonical_raw_moment(data, int(k)))
-        if k < cap:
-            rm[k] = val
+        self._canonical_moments[k] = val
         return val
 
     def _base_mean_parts(self):
         """Return ``(common_origin, local_mean)`` for the base affine map."""
-        d = self._data
-        sigma = float(d["sigma"])
-        if sigma == 0.0:
-            raise RuntimeError("invalid zero affine scale")
-        origin = -float(d["mu"]) / sigma
+        origin, scale = self._affine()
         z_mean = float(self._canonical_raw_moment(1))
-        local = (
-            float(d["fit_center"])
-            + float(d["fit_direction"]) * float(d["fit_scale"]) * z_mean
-        ) / sigma
+        local = (self._center + self._direction * self._scale * z_mean) * scale
         return float(origin), float(local)
+
+    def _support_base(self):
+        shift, scale = self._affine()
+        return shift + scale * self._data["support"]
+
+    def _base_stat(self, name):
+        value = float(self._data[name])
+        shift, scale = self._affine()
+        if name in ("mode", "median", "mean"):
+            return shift + scale * value
+        if name == "var":
+            return scale * scale * value
+        if name == "std":
+            return scale * value
+        return value
 
     def _assign_from_struct(self, struct):
         """Populate evaluation state from one packed fitted state.
@@ -1266,12 +1198,10 @@ class _Component:
         -------
         None
         """
-        self._data = np.array(struct, copy=True)
-        _check_state_invariants(self._data)
+        data = np.array(struct, copy=True)
+        _check_state_invariants(data)
+        self._data = np.frombuffer(data.tobytes(), dtype=data.dtype).reshape(())
         self._window = self._data["window"]
-        self.mu = float(self._data["mu"])
-        self.sigma = float(self._data["sigma"])
-        self.pullback = bool(self._data["pullback"])
         self._center = float(self._data["fit_center"])
         self._scale = float(self._data["fit_scale"])
         self._direction = float(self._data["fit_direction"])
@@ -1293,7 +1223,6 @@ class _Component:
             lambda x, n: self._base_view.neg_log(x, n)
         )
         self._tail_integrator = TailIntegrator(self._data["q_poly"])
-        self._default = str(self._data["default_space"])
 
     def _internal_model_geometry(self):
         """Return the canonical support and kernel-order boundary amplitudes."""
@@ -1318,14 +1247,15 @@ class _Component:
             If the component is not fitted.
         """
         if self._data is None:
-            raise RuntimeError("Component is not fitted; call .fit(...) or .load(...).")
+            raise RuntimeError("Component has no fitted payload.")
         return self._data
 
     def _mu_sigma_eff(self):
         """Compute the effective affine parameters mapping user *x* to internal *z*."""
         direction = float(self._direction)
-        mu_eff = direction * (float(self.mu) - float(self._center)) / float(self._scale)
-        sigma_eff = direction * float(self.sigma) / float(self._scale)
+        shift, scale = self._affine()
+        mu_eff = direction * (-shift / scale - self._center) / self._scale
+        sigma_eff = direction / (scale * self._scale)
         return mu_eff, sigma_eff
 
     def _potential_support_base(self):

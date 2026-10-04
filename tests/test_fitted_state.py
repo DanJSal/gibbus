@@ -33,7 +33,7 @@ def test_state_missing_required_fields_is_not_loadable():
         poly_degree=4,
     )
     state = fitted.data
-    kept = [name for name in state.dtype.names if name != "q_poly"]
+    kept = [name for name in state.dtype.names if name != "comp_q_poly"]
     truncated = np.zeros((), dtype=[(n, state.dtype.fields[n][0]) for n in kept])
     for name in kept:
         truncated[name] = state[name]
@@ -112,7 +112,7 @@ def test_reported_support_is_exactly_the_requested_support():
         data, n_components=1, poly_degree=4, support=(0.0, np.inf), rng=0
     )
     np.testing.assert_array_equal(model.support, [0.0, np.inf])
-    np.testing.assert_array_equal(model.data["support"], [0.0, np.inf])
+    np.testing.assert_array_equal(model.data["comp_support"][0], [0.0, np.inf])
     assert model.ppf(0.0) == 0.0
 
 
@@ -125,16 +125,16 @@ def test_load_rejects_a_non_positive_scale():
 
 def test_load_rejects_non_monotone_quantile_breakpoints():
     state = _saved_state()
-    state["ppf_breaks_z"] = np.asarray(state["ppf_breaks_z"])[::-1].copy()
+    state["comp_ppf_breaks_z"][0] = state["comp_ppf_breaks_z"][0, ::-1].copy()
     with pytest.raises(ValueError, match="strictly increasing"):
         Distribution().load(state)
 
 
 def test_load_rejects_non_finite_cdf_breakpoints():
     state = _saved_state()
-    breaks = np.asarray(state["cdf_breaks"]).copy()
+    breaks = np.asarray(state["comp_cdf_breaks"][0]).copy()
     breaks[2] = np.nan
-    state["cdf_breaks"] = breaks
+    state["comp_cdf_breaks"][0] = breaks
     with pytest.raises(ValueError, match="cdf_breaks"):
         Distribution().load(state)
 

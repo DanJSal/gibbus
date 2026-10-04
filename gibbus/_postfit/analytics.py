@@ -11,8 +11,6 @@ This module is called from:
 * ``gibbus._api.views._ExpSpaceView`` — for exp-space mode and moment computation.
 * ``gibbus._api.component._Component._raw_moment_base`` — for on-demand base-space moment
   computation beyond the cached ``raw_moments`` array.
-* ``gibbus._api.component._Component.transform`` — via :func:`_univariate_affine_update_public`
-  to recompute statistics after an affine reparameterization.
 
 It wraps the Cython kernels ``_state_kernels._valley_q1_shift`` and
 ``_quad_integrals.quad_integral`` with the package-level defaults from
@@ -1007,10 +1005,8 @@ def _internal_geometry(struct, /):
     canonical = amps.copy() if direction > 0.0 else amps[::-1].copy()
     center = float(struct["fit_center"])
     scale = float(struct["fit_scale"])
-    mu = float(struct["mu"])
-    sigma = float(struct["sigma"])
-    mu_eff = direction * (mu - center) / scale
-    sigma_eff = direction * sigma / scale
+    mu_eff = -direction * center / scale
+    sigma_eff = direction / scale
     return support, canonical, mu_eff, sigma_eff
 
 
@@ -1084,122 +1080,6 @@ def _univariate_raw_moment(struct, k, /):
             base_support, q_poly, boundary_amplitudes, window, mu_eff, sigma_eff, kk
         )
     )
-
-
-def _univariate_affine_update_public(struct, mu_new, sigma_new, /):
-    """Recompute user-coordinate statistics after an affine reparameterization.
-
-    When the user calls ``Distribution.transform(mu=..., sigma=...)``, the
-    polynomial potential itself does not change — only the affine mapping
-    from internal to user coordinates is updated.  This function propagates
-    that change through the cached moments and summary statistics.
-
-    The update uses the existing raw moments (stored in ``struct``) to
-    derive new raw moments in the new coordinate system via two binomial
-    expansions:
-
-    1. Convert existing user-coordinate raw moments back to internal
-       *z*-moments using the pre-transform effective affine parameters.
-    2. Re-expand in the new user coordinates using the requested effective
-       parameters.
-
-    Parameters
-    ----------
-    struct : numpy.void or Mapping
-        Current fitted state.
-    mu_new : float
-        New location parameter.
-    sigma_new : float
-        New scale parameter.
-
-    Returns
-    -------
-    dict
-        Updated fields: ``mu``, ``sigma``, ``support``, ``median``,
-        ``mode``, ``raw_moments``, ``mean``, ``var``, ``std``, ``skew``,
-        ``kurt``.
-
-    Notes
-    -----
-    If the new moments do not yield finite skewness and kurtosis (e.g.
-    because fewer than 4 moments are cached), the pre-transform values from
-    *struct* are preserved.
-    """
-    mu_old = float(struct["mu"])
-    sigma_old = float(struct["sigma"])
-    center = float(struct["fit_center"])
-    scale = float(struct["fit_scale"])
-    direction = float(struct["fit_direction"])
-    mu_eff_old = direction * (mu_old - center) / scale
-    sigma_eff_old = direction * sigma_old / scale
-    mu_eff_new = direction * (float(mu_new) - center) / scale
-    sigma_eff_new = direction * float(sigma_new) / scale
-    base_support = np.asarray(struct["canonical_support"], dtype=np.float64)
-
-    rm_old = np.asarray(struct["raw_moments"], dtype=np.float64)
-
-    K = 0
-    for j in range(1, rm_old.size):
-        if np.isfinite(rm_old[j]):
-            K = j
-        else:
-            break
-    K = min(K, rm_old.size - 1)
-
-    cached_z = np.asarray(struct["canonical_raw_moments"], dtype=np.float64)
-    K = min(K, cached_z.size - 1)
-    z_mom = np.asarray(cached_z[: K + 1], dtype=np.float64).copy()
-
-    a = 1.0 / float(sigma_eff_new)
-    b = -float(mu_eff_new) / float(sigma_eff_new)
-    rm_new = np.full_like(rm_old, np.nan)
-    rm_new[0] = 1.0
-    for k in range(1, K + 1):
-        s = 0.0
-        for i in range(k + 1):
-            s += comb(k, i) * (a**i) * (b ** (k - i)) * z_mom[i]
-        rm_new[k] = s
-
-    z_stats = _stats_from_raw_moments(*map(float, z_mom[1:5]))
-    affine_a = 1.0 / float(sigma_eff_new)
-    affine_b = -float(mu_eff_new) / float(sigma_eff_new)
-    stats = {
-        "mean": float(affine_b + affine_a * z_stats["mean"]),
-        "var": float((affine_a * affine_a) * z_stats["var"]),
-        "std": float(abs(affine_a) * z_stats["std"]),
-        "skew": float((-1.0 if affine_a < 0.0 else 1.0) * z_stats["skew"]),
-        "kurt": float(z_stats["kurt"]),
-    }
-
-    if np.isfinite(stats["skew"]) and np.isfinite(stats["kurt"]):
-        skew = stats["skew"]
-        kurt = stats["kurt"]
-    else:
-        skew = float(struct["skew"])
-        kurt = float(struct["kurt"])
-
-    med_old = float(struct["median"])
-    mode_old = float(struct["mode"])
-    z_med = mu_eff_old + sigma_eff_old * med_old
-    z_mode = mu_eff_old + sigma_eff_old * mode_old
-    median = (z_med - mu_eff_new) / sigma_eff_new
-    mode = (z_mode - mu_eff_new) / sigma_eff_new
-
-    support = _support_from_base(base_support, mu_eff_new, sigma_eff_new)
-
-    return {
-        "mu": float(mu_new),
-        "sigma": float(sigma_new),
-        "support": support,
-        "median": float(median),
-        "mode": float(mode),
-        "raw_moments": rm_new,
-        "mean": float(stats["mean"]),
-        "var": float(stats["var"]),
-        "std": float(stats["std"]),
-        "skew": float(skew),
-        "kurt": float(kurt),
-    }
 
 
 def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, /):

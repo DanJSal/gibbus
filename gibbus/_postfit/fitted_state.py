@@ -25,6 +25,125 @@ from .._spectral.ppf import SpectralPPF
 from .._spectral.runtime import fallback_ppf_state, pack_cdf_state, pack_ppf_state
 from .analytics import _powaff_moment_from_z_moments, _stats_from_raw_moments
 
+
+def _model_metadata(comp_states, metadata=None):
+    """Validate shared fitted geometry and return detached model metadata."""
+    if not comp_states:
+        raise ValueError("model state must contain at least one component")
+    for state in comp_states:
+        _check_state_invariants(state)
+    first = comp_states[0]
+    allowed = np.asarray(first["boundary_allowed"], dtype=bool)
+    amplitudes = np.asarray(first["boundary_amplitudes"], dtype=float)
+    active = np.array(
+        [first["lower_amplitude_active"], first["upper_amplitude_active"]], dtype=bool
+    )
+    if float(first["fit_direction"]) < 0:
+        active = active[::-1]
+
+    def anchors(state):
+        return np.sort(
+            float(state["fit_center"])
+            + float(state["fit_direction"])
+            * float(state["fit_scale"])
+            * np.asarray(state["canonical_support"], dtype=float)
+        )
+
+    for state in comp_states:
+        side_active = np.array(
+            [state["lower_amplitude_active"], state["upper_amplitude_active"]],
+            dtype=bool,
+        )
+        if float(state["fit_direction"]) < 0:
+            side_active = side_active[::-1]
+        if (
+            not np.array_equal(state["boundary_allowed"], allowed)
+            or not np.array_equal(state["boundary_amplitudes"], amplitudes)
+            or not np.array_equal(side_active, active)
+            or not np.array_equal(state["support"], first["support"])
+            or not np.allclose(anchors(state), anchors(first), rtol=1e-12, atol=1e-12)
+        ):
+            raise ValueError("model components disagree on shared boundary geometry")
+    if np.any(active & ~allowed) or np.any((~active) & (amplitudes != 0)):
+        raise ValueError("shared boundary faces disagree with fitted amplitudes")
+    n_parameters = (
+        sum(
+            np.asarray(state["optimizer_params"]).size - int(allowed.sum())
+            for state in comp_states
+        )
+        + int(allowed.sum())
+        + len(comp_states)
+        - 1
+    )
+    n_face = (
+        sum(2 + int(state["effective_curvature_degree"]) for state in comp_states)
+        + int(active.sum())
+        + len(comp_states)
+        - 1
+    )
+    if metadata is None:
+        metadata = {
+            "provenance": "derived",
+            "n_parameters": n_parameters,
+            "n_face_parameters": n_face,
+            "shared_boundary": {
+                "allowed": allowed,
+                "amplitudes": amplitudes,
+                "active": active,
+                "standard_errors": (np.nan, np.nan),
+                "p_values": (np.nan, np.nan),
+            },
+        }
+    provenance = str(metadata["provenance"])
+    if provenance not in ("fitted", "derived"):
+        raise ValueError("model provenance must be 'fitted' or 'derived'")
+    dimensions = []
+    for key, expected in (
+        ("n_parameters", n_parameters),
+        ("n_face_parameters", n_face),
+    ):
+        value = metadata[key]
+        if not np.isfinite(value) or int(value) != value or int(value) != expected:
+            raise ValueError(f"model {key} disagrees with fitted component dimensions")
+        dimensions.append(int(value))
+    shared = metadata["shared_boundary"]
+    for key, expected in (("allowed", allowed), ("active", active)):
+        value = np.asarray(shared[key])
+        if value.shape != (2,) or not np.array_equal(value, expected):
+            raise ValueError(f"shared boundary {key} disagrees with components")
+    declared = np.asarray(shared["amplitudes"], dtype=float)
+    if declared.shape != (2,) or not np.array_equal(
+        declared[allowed], amplitudes[allowed]
+    ):
+        raise ValueError("shared boundary amplitudes disagree with components")
+    if np.any(~(np.isnan(declared[~allowed]) | (declared[~allowed] == 0.0))):
+        raise ValueError("excluded shared amplitudes must be zero or unavailable")
+    errors = np.asarray(shared["standard_errors"], dtype=float)
+    p_values = np.asarray(shared["p_values"], dtype=float)
+    if errors.shape != (2,) or np.any(errors < 0):
+        raise ValueError("shared standard errors must be nonnegative or unavailable")
+    if p_values.shape != (2,) or np.any((p_values < 0) | (p_values > 1)):
+        raise ValueError("shared p-values must lie in [0, 1] or be unavailable")
+    if provenance == "derived":
+        errors = np.full(2, np.nan)
+        p_values = np.full(2, np.nan)
+    from .._fit.boundary import _weakly_identified_sides
+
+    return {
+        "provenance": provenance,
+        "n_parameters": dimensions[0],
+        "n_face_parameters": dimensions[1],
+        "shared_boundary": {
+            "allowed": tuple(map(bool, allowed)),
+            "amplitudes": tuple(map(float, amplitudes)),
+            "active": tuple(map(bool, active)),
+            "standard_errors": tuple(map(float, errors)),
+            "p_values": tuple(map(float, p_values)),
+            "weakly_identified": _weakly_identified_sides(amplitudes, errors),
+        },
+    }
+
+
 # Fields every fitted state must carry; the spectral CDF/PPF evaluators check
 # their own array geometry when they are rebuilt.
 _STATE_FIELDS = (
@@ -47,10 +166,6 @@ _STATE_FIELDS = (
     "fit_center",
     "fit_scale",
     "fit_direction",
-    "mu",
-    "sigma",
-    "pullback",
-    "default_space",
     "optimizer_params",
     "requested_poly_degree",
     "effective_poly_degree",
@@ -331,10 +446,6 @@ def _pack_natural_state(
         "fit_center": float(coord.center),
         "fit_scale": float(coord.scale),
         "fit_direction": float(coord.direction),
-        "mu": 0.0,
-        "sigma": 1.0,
-        "pullback": True,
-        "default_space": np.str_("base"),
         "optimizer_params": np.asarray(result.params, dtype=np.float64),
         "requested_poly_degree": int(spec.requested_poly_degree),
         "effective_poly_degree": int(spec.effective_poly_degree),
@@ -418,10 +529,9 @@ def _pack_natural_component(
     component : _NaturalMixtureComponent
         Final natural mixture component.
     effective_n : float, optional
-        Effective sample size behind the component (its responsibility-
-        weighted observations).
+        Not used for coupled mixtures: their inference belongs to the model.
     boundary_p_values : tuple of float, optional
-        Automatic boundary-term test p-values of the mixture per physical side.
+        Not stored on components: shared boundary tests belong to the model.
 
     Returns
     -------
@@ -434,8 +544,8 @@ def _pack_natural_component(
         component.spec,
         component.coordinate,
         result,
-        effective_n=effective_n,
-        boundary_p_values=boundary_p_values,
+        effective_n=np.nan,
+        boundary_p_values=(np.nan, np.nan),
     )
 
 
@@ -497,24 +607,37 @@ def _check_state_invariants(struct, /):
     def field(name):
         return np.asarray(struct[name], dtype=np.float64).ravel()
 
-    sigma = float(struct["sigma"])
-    if not np.isfinite(sigma) or sigma <= 0.0:
-        raise ValueError(f"state sigma must be finite and positive, got {sigma}")
+    if np.asarray(struct).shape != () or struct.dtype.hasobject:
+        raise ValueError("component state must be a non-object structured scalar")
+    forbidden = {"mu", "sigma", "pullback", "default_space"}.intersection(names)
+    if forbidden:
+        raise ValueError("component state cannot contain presentation transforms")
     scale = float(struct["fit_scale"])
     if not np.isfinite(scale) or scale <= 0.0:
         raise ValueError(f"state fit_scale must be finite and positive, got {scale}")
-    if not np.isfinite(float(struct["mu"])) or not np.isfinite(
-        float(struct["fit_center"])
-    ):
-        raise ValueError("state mu and fit_center must be finite")
+    if not np.isfinite(float(struct["fit_center"])):
+        raise ValueError("state fit_center must be finite")
     if float(struct["fit_direction"]) not in (-1.0, 1.0):
         raise ValueError("state fit_direction must be -1 or +1")
-    if str(struct["default_space"]) not in ("base", "exp"):
-        raise ValueError("state default_space must be 'base' or 'exp'")
 
     q_poly = field("q_poly")
-    if q_poly.size < 3 or not np.all(np.isfinite(q_poly)):
+    if (
+        np.asarray(struct["q_poly"]).ndim != 1
+        or q_poly.size < 3
+        or not np.all(np.isfinite(q_poly))
+    ):
         raise ValueError("state q_poly must hold at least three finite coefficients")
+    for name in (
+        "boundary_amplitudes",
+        "boundary_allowed",
+        "boundary_standard_errors",
+        "boundary_p_values",
+        "support",
+        "canonical_support",
+        "window",
+    ):
+        if np.asarray(struct[name]).shape != (2,):
+            raise ValueError(f"state {name} must have shape (2,)")
     amplitudes = field("boundary_amplitudes")
     if not np.all(np.isfinite(amplitudes)) or np.any(amplitudes < 0.0):
         raise ValueError("state boundary_amplitudes must be finite and non-negative")
@@ -524,6 +647,20 @@ def _check_state_invariants(struct, /):
             raise ValueError(f"state {name} must satisfy lower < upper")
     if not np.all(np.isfinite(field("window"))):
         raise ValueError("state window must be finite")
+    active_support = np.sort(
+        float(struct["fit_direction"])
+        * (field("support") - float(struct["fit_center"]))
+        / scale
+    )
+    anchors = field("canonical_support")
+    tolerance = 1e-12 * max(
+        1.0, float(np.max(np.abs(anchors[np.isfinite(anchors)]), initial=0.0))
+    )
+    if (
+        active_support[0] < anchors[0] - tolerance
+        or active_support[1] > anchors[1] + tolerance
+    ):
+        raise ValueError("active support lies outside the original potential anchors")
 
     npanels = int(struct["cdf_npanels"])
     stride = int(struct["cdf_coeff_stride"])
@@ -534,6 +671,10 @@ def _check_state_invariants(struct, /):
         if not np.all(np.isfinite(field("cdf_coeffs")[: npanels * stride])):
             raise ValueError("cdf_coeffs must be finite")
         params = field("cdf_map_params")
+        if params.size != 4 or not np.allclose(
+            params[:2], active_support, rtol=1e-12, atol=tolerance
+        ):
+            raise ValueError("cdf_map_params disagree with the active support")
         if np.any(np.isnan(params)) or not np.all(np.isfinite(params[2:])):
             raise ValueError(
                 "cdf_map_params must be finite apart from support endpoints"

@@ -95,7 +95,7 @@ class _BaseSpaceView:
             Shape ``(2,)`` float64 array ``[lower, upper]``.
         """
         self._p._ensure_fitted()
-        return self._p._data["support"]
+        return self._p._support_base()
 
     @property
     def mode(self):
@@ -106,7 +106,7 @@ class _BaseSpaceView:
         float
         """
         self._p._ensure_fitted()
-        return float(self._p._data["mode"])
+        return self._p._base_stat("mode")
 
     @property
     def median(self):
@@ -117,7 +117,7 @@ class _BaseSpaceView:
         float
         """
         self._p._ensure_fitted()
-        return float(self._p._data["median"])
+        return self._p._base_stat("median")
 
     @property
     def mean(self):
@@ -128,7 +128,7 @@ class _BaseSpaceView:
         float
         """
         self._p._ensure_fitted()
-        return float(self._p._data["mean"])
+        return self._p._base_stat("mean")
 
     @property
     def var(self):
@@ -139,7 +139,7 @@ class _BaseSpaceView:
         float
         """
         self._p._ensure_fitted()
-        return float(self._p._data["var"])
+        return self._p._base_stat("var")
 
     @property
     def std(self):
@@ -150,7 +150,7 @@ class _BaseSpaceView:
         float
         """
         self._p._ensure_fitted()
-        return float(self._p._data["std"])
+        return self._p._base_stat("std")
 
     @property
     def skew(self):
@@ -161,7 +161,7 @@ class _BaseSpaceView:
         float
         """
         self._p._ensure_fitted()
-        return float(self._p._data["skew"])
+        return self._p._base_stat("skew")
 
     @property
     def kurt(self):
@@ -176,7 +176,7 @@ class _BaseSpaceView:
         float
         """
         self._p._ensure_fitted()
-        return float(self._p._data["kurt"])
+        return self._p._base_stat("kurt")
 
     def pdf(self, x):
         """Evaluate the probability density function in base coordinates.

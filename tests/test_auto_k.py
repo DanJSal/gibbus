@@ -1,9 +1,9 @@
 """Subsampled component-count selection.
 
-Subsampling applies only to *selecting* the integer K; the winning K is
-always refitted on every sample.  These tests therefore assert that the
-selection agrees with the full-data selection and that the fitted
-parameters are unaffected, not that any particular speed-up is reached.
+Subsampling applies only to *selecting* the integer K.  A subsampled winner
+is refitted on all rows; a completed full-data winner is reused.  These tests
+check agreement up to solver accuracy, rather than identical optimizer paths
+or any particular speed-up.
 """
 
 import numpy as np
@@ -12,6 +12,7 @@ from scipy.integrate import trapezoid
 
 from gibbus import Distribution
 from gibbus._api import fitting as _fitting
+from gibbus._api import selection as _selection
 from gibbus._defaults import AUTO_KDE_GRID_POINTS
 from gibbus._fit.mixture import (
     _binned_kde_sweep,
@@ -93,9 +94,14 @@ class TestSelectionAgreement:
         full = Distribution().fit(
             big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=False
         )
-        assert sub.mean == pytest.approx(full.mean, rel=1e-9)
-        assert sub.var == pytest.approx(full.var, rel=1e-9)
-        assert sub.weights == pytest.approx(full.weights, rel=1e-9)
+        assert sub.mean == pytest.approx(full.mean, abs=1e-7)
+        assert sub.var == pytest.approx(full.var, rel=1e-7)
+        assert sub.weights == pytest.approx(full.weights, abs=1e-8)
+        assert np.mean(sub.neg_log(big_bimodal)) == pytest.approx(
+            np.mean(full.neg_log(big_bimodal)), abs=1e-9
+        )
+        assert not sub.selection_diagnostics["reuse_selected_fit"]
+        assert full.selection_diagnostics["reuse_selected_fit"]
 
     def test_unimodal_still_selects_one(self):
         rng = np.random.default_rng(6)
@@ -117,25 +123,39 @@ class TestSelectionAgreement:
         assert diag["subsampled"] is False
         assert diag["scores"]
 
-    def test_selection_candidates_remain_lite(self, monkeypatch):
+    @pytest.mark.parametrize("bimodal", [False, True])
+    def test_selection_candidates_remain_lite(self, monkeypatch, bimodal):
         """Discarded BIC candidates must not build spectral CDF/PPF state."""
 
         rng = np.random.default_rng(17)
-        x = np.concatenate([rng.normal(-3, 0.5, 75), rng.normal(3, 0.5, 75)])
+        x = (
+            np.concatenate([rng.normal(-3, 0.5, 75), rng.normal(3, 0.5, 75)])
+            if bimodal
+            else rng.normal(size=150)
+        )
         original = _fitting._pack_natural_component
+        original_single = _fitting._pack_natural_fit
         calls = 0
+        single_calls = 0
 
         def counted_pack(component, **kwargs):
             nonlocal calls
             calls += 1
             return original(component, **kwargs)
 
+        def counted_single(*args, **kwargs):
+            nonlocal single_calls
+            single_calls += 1
+            return original_single(*args, **kwargs)
+
         monkeypatch.setattr(_fitting, "_pack_natural_component", counted_pack)
+        monkeypatch.setattr(_fitting, "_pack_natural_fit", counted_single)
         c = Distribution().fit(x, support=(-np.inf, np.inf), rng=0)
 
         # Selection candidates stay in natural solver state; only components
         # of the final selected model build spectral CDF/PPF state.
-        assert calls == c.n_components
+        assert calls + single_calls == c.n_components
+        assert single_calls == int(c.n_components == 1)
 
 
 class TestSubsampleOption:
@@ -183,6 +203,41 @@ class TestWeightedSubsampling:
             big_bimodal, support=(-np.inf, np.inf), rng=0, sample_weights=w
         )
         assert c.mean == pytest.approx(np.average(big_bimodal, weights=w), abs=0.1)
+
+
+@pytest.mark.parametrize("intervals", [False, True])
+def test_full_data_endpoint_exclusion_is_resolved_before_auto_k_thinning(
+    monkeypatch, intervals
+):
+    x = np.r_[0.0, np.random.default_rng(96).beta(2, 3, 199)]
+    rows = np.column_stack((x, x)) if intervals else x
+    monkeypatch.setattr(
+        _selection,
+        "_stratified_subsample",
+        lambda x, count, rng: np.arange(1, count + 1),
+    )
+    seen = []
+    original = _selection._single_selection_fit
+
+    def single(support, sample, degree, lower, upper, weights):
+        seen.append((lower, upper, sample))
+        return original(support, sample, degree, lower, upper, weights)
+
+    monkeypatch.setattr(_selection, "_single_selection_fit", single)
+    fitted = Distribution().fit(
+        rows,
+        support=(0.0, 1.0),
+        poly_degree=2,
+        log_boundary_lower="auto",
+        log_boundary_upper=False,
+        auto_k_subsample=100,
+        k_max=2,
+        rng=0,
+    )
+    assert seen
+    assert all(lower is False and upper is False for lower, upper, _ in seen)
+    assert all(np.min(sample) > 0 for _, _, sample in seen)
+    assert fitted.selection_diagnostics["screen_boundary_enabled"] == (False, False)
 
 
 class TestBinnedKDE:

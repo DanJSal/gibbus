@@ -9,7 +9,7 @@ cdef api int finite_natural_objective_c(
     const double* gl_nodes, const double* gl_log_weights, double width_eps_mult,
     double* log_probability, double* obs_h, double* obs_cov,
     double* sum_h, double* sum_second, double* hbuf,
-    double* nll_out,
+    double* nll_out, double* row_means, double* row_cov,
 ) noexcept nogil
 
 cdef api int finite_natural_real_line_objective_c(
@@ -22,5 +22,5 @@ cdef api int finite_natural_real_line_objective_c(
     double width_eps_mult,
     double* log_probability, double* obs_h, double* obs_cov,
     double* sum_h, double* sum_second, double* hbuf,
-    double* nll_out,
+    double* nll_out, double* row_means, double* row_cov,
 ) noexcept nogil

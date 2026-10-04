@@ -39,8 +39,7 @@ def _mixture(rng, specs, n=N):
 def _bic(distribution, data):
     """BIC of a fitted mixture on *data*; lower is better."""
     ll = float(np.mean(np.log(np.clip(distribution.pdf(data), 1e-300, None))))
-    p = sum(c.data["optimizer_params"].size for c in distribution.components)
-    p += distribution.n_components - 1
+    p = int(distribution.fit_diagnostics["n_face_parameters"])
     return -2.0 * ll * data.size + p * np.log(data.size)
 
 

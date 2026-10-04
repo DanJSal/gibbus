@@ -1339,7 +1339,7 @@ def _interval_nonparametric_loglik_bound(
 
 
 def _interval_identifiability_diagnostic(
-    intervals, components, ll, support, /, obs_weights=None
+    intervals, components, ll, support, /, obs_weights=None, *, n_parameters
 ):
     """Detect an exactly saturated censored likelihood with excess parameters.
 
@@ -1362,6 +1362,9 @@ def _interval_identifiability_diagnostic(
         Shared model support.
     obs_weights : numpy.ndarray, shape (R,) or None, optional
         Normalized relative observation weights.
+    n_parameters : int
+        Authoritative selected-face model dimension, counting shared boundary
+        amplitudes once and including fitted mixture-weight degrees of freedom.
 
     Returns
     -------
@@ -1373,27 +1376,9 @@ def _interval_identifiability_diagnostic(
     if x.ndim != 2 or x.shape[1] != 2 or x.shape[0] == 0 or not np.isfinite(ll):
         return None
 
-    n_params = max(0, len(components) - 1)
-    for comp in components:
-        # Natural screening/final components expose their affine layout
-        # directly; public components expose packed fitted state.
-        layout = getattr(comp, "layout", None)
-        if layout is not None and hasattr(layout, "n_params"):
-            n_params += int(layout.n_params)
-            continue
-        state = getattr(comp, "_data", None)
-        if state is None:
-            return None
-        names = getattr(getattr(state, "dtype", None), "names", None)
-        if (
-            names is not None
-            and "optimizer_params" in names
-            or isinstance(state, dict)
-            and "optimizer_params" in state
-        ):
-            n_params += int(np.asarray(state["optimizer_params"]).size)
-        else:
-            return None
+    n_params = int(n_parameters)
+    if n_params < 0 or n_params != n_parameters:
+        raise ValueError("n_parameters must be a non-negative integer")
 
     observable_dim = _interval_observable_dimension(x, support)
     if n_params <= observable_dim:
@@ -1434,8 +1419,18 @@ def _interval_identifiability_diagnostic(
 # ======================================================================
 
 
-def _pack_mixture_struct(weights, default_space, comp_states, /, base_modes=None):
-    """Pack mixture metadata and per-component states into one scalar.
+def _pack_mixture_struct(
+    weights,
+    default_space,
+    comp_states,
+    /,
+    base_modes=None,
+    *,
+    mu=0.0,
+    sigma=1.0,
+    fit_metadata=None,
+):
+    """Pack the uniform model envelope for every component count, including one.
 
     Any component field whose one-dimensional shape differs across components
     is padded to the maximum length and accompanied by a ``comp_<name>_len``
@@ -1454,12 +1449,21 @@ def _pack_mixture_struct(weights, default_space, comp_states, /, base_modes=None
         Mixture modes in base coordinates, when already known.  Stored as a
         1-D ``base_modes`` array with matching ``n_modes``; ``None`` stores an
         empty array and ``n_modes == 0``.
+    mu, sigma : float, optional
+        The one accumulated model pushforward map.
+    fit_metadata : dict or None, optional
+        Validated model dimensions, shared boundary inference and provenance.
+        Without supplied fitting metadata, the assembled model is derived;
+        equality of expanded amplitudes alone cannot establish fit provenance.
 
     Returns
     -------
     numpy.void
         Single structured scalar holding the whole mixture.
     """
+    from .._postfit.fitted_state import _model_metadata
+
+    metadata = _model_metadata(comp_states, fit_metadata)
     K = len(comp_states)
     field_names = list(comp_states[0].dtype.names)
     fields = {}
@@ -1495,6 +1499,15 @@ def _pack_mixture_struct(weights, default_space, comp_states, /, base_modes=None
     fields["weights"] = np.asarray(weights, dtype=np.float64)
     fields["n_components"] = np.int64(K)
     fields["default_space"] = np.array(str(default_space), dtype="U4")
+    fields["mu"] = np.float64(mu)
+    fields["sigma"] = np.float64(sigma)
+    fields["provenance"] = np.asarray(metadata["provenance"], dtype="U7")
+    fields["n_parameters"] = np.int64(metadata["n_parameters"])
+    fields["n_face_parameters"] = np.int64(metadata["n_face_parameters"])
+    for name in ("allowed", "amplitudes", "active", "standard_errors", "p_values"):
+        fields[f"shared_boundary_{name}"] = np.asarray(
+            metadata["shared_boundary"][name]
+        )
 
     if base_modes is not None:
         n_modes = len(base_modes)
@@ -1534,6 +1547,8 @@ def _unpack_mixture_struct(struct):
     comp_states : list of numpy.void
         Reconstructed per-component structured scalars.
     """
+    if np.asarray(struct).shape != () or struct.dtype.hasobject:
+        raise ValueError("model state must be a non-object structured scalar")
     names = list(struct.dtype.names or ())
     missing = [
         name
@@ -1543,6 +1558,16 @@ def _unpack_mixture_struct(struct):
             "default_space",
             "base_modes",
             "n_modes",
+            "mu",
+            "sigma",
+            "provenance",
+            "n_parameters",
+            "n_face_parameters",
+            "shared_boundary_allowed",
+            "shared_boundary_amplitudes",
+            "shared_boundary_active",
+            "shared_boundary_standard_errors",
+            "shared_boundary_p_values",
         )
         if name not in names
     ]
@@ -1550,15 +1575,58 @@ def _unpack_mixture_struct(struct):
         raise ValueError(
             "not a gibbus mixture state; missing fields: " + ", ".join(missing)
         )
-    K = int(struct["n_components"])
+    if any(
+        name in names
+        for name in (
+            "comp_mu",
+            "comp_sigma",
+            "comp_pullback",
+            "comp_default_space",
+            "pullback",
+        )
+    ):
+        raise ValueError("model state contains duplicate presentation fields")
+    count = np.asarray(struct["n_components"])
+    if count.shape != () or count.dtype.kind not in "iu" or int(count) < 1:
+        raise ValueError("model n_components must be a positive integer")
+    K = int(count)
+    mu, sigma = float(struct["mu"]), float(struct["sigma"])
+    if not np.isfinite(mu):
+        raise ValueError("state mu must be finite")
+    if not np.isfinite(sigma) or sigma <= 0:
+        raise ValueError("state sigma must be finite and positive")
     weights = np.asarray(struct["weights"], dtype=np.float64).reshape(-1)
     default_space = str(struct["default_space"])
+    if default_space not in ("base", "exp"):
+        raise ValueError("state default_space must be 'base' or 'exp'")
+    if (
+        np.asarray(struct["weights"]).shape != (K,)
+        or not np.all(np.isfinite(weights))
+        or np.any(weights < 0.0)
+        or not np.isclose(weights.sum(), 1.0, rtol=0.0, atol=1e-8)
+    ):
+        raise ValueError("model state has invalid component weights")
 
     comp_field_names = [
         fn[5:] for fn in names if fn.startswith("comp_") and not fn.endswith("_len")
     ]
 
     comp_states = []
+    for name in comp_field_names:
+        raw = np.asarray(struct[f"comp_{name}"])
+        if raw.ndim < 1 or raw.shape[0] != K:
+            raise ValueError(f"component field {name} must have n_components rows")
+        length_name = f"comp_{name}_len"
+        if length_name in names:
+            lengths = np.asarray(struct[length_name])
+            if (
+                raw.ndim != 2
+                or lengths.shape != (K,)
+                or lengths.dtype.kind not in "iu"
+                or np.any(lengths < 0)
+                or np.any(lengths > raw.shape[1])
+            ):
+                raise ValueError(f"component field {name} has invalid lengths")
     for j in range(K):
         comp_dict = {}
         for name in comp_field_names:

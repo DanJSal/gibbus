@@ -4,7 +4,7 @@
 
 `gibbus` fits explicit, support-aware analytic probability distributions to point or interval-censored data without requiring a named parametric family such as Normal or Gamma. A fitted `Distribution` represents a **Gibbus distribution**. A single component is log-concave and therefore unimodal; finite mixtures extend the model to multimodal data.
 
-Within each component, the convex negative-log density (potential) is represented by support-aware polynomial structure together with optional finite-boundary logarithmic terms. Increasing the polynomial degree gives progressively richer smooth shapes, so the model is designed to approximate a broad range of smooth log-concave behavior over the probability-mass region rather than assuming that the data-generating distribution itself has a low-degree polynomial potential.
+Within each component, the convex negative-log density (potential) is represented by support-aware polynomial structure together with optional finite-boundary logarithmic terms. Mixture components share one exponent per enabled physical boundary, while retaining their own polynomial shapes and numerical fitting coordinates. Increasing the polynomial degree gives progressively richer smooth shapes, so the model is designed to approximate a broad range of smooth log-concave behavior over the probability-mass region rather than assuming that the data-generating distribution itself has a low-degree polynomial potential.
 
 The fitted distribution has an **explicit analytic representation on the interior of its support**: its density and potential are smooth functions of the fitted parameters, not a grid, histogram, KDE, spline, or piecewise-linear log-density. Fitting uses analytic first- and second-order derivatives, including the full Hessian, while the post-fit numerical layer provides accurate CDFs, quantiles, moments, sampling, survival quantities, information measures, and extreme-tail evaluation from that analytic model.
 
@@ -139,7 +139,7 @@ c.sample(100, rng=rng)
 
 ### Automatic component selection (default)
 
-By default, `fit()` uses `n_components="auto"`. A KDE bandwidth sweep estimates the number of data modes and focuses the candidate range; lightweight log-concave fits are then compared by BIC to choose *K*. For interval-censored data, candidates are scored on their actual interval probability masses rather than midpoint-density surrogates. The full log-concave mixture is fitted only once for the selected *K*:
+By default, `fit()` uses `n_components="auto"`. A KDE bandwidth sweep estimates the number of data modes and focuses the candidate range. Lightweight shared-boundary fits screen that range; competitive candidates are then refined with the requested degree and boundary-selection policies before their BIC scores choose *K*. This is a staged search, not an exhaustive or globally certified search. For interval-censored data, candidates are scored on their actual interval probability masses rather than midpoint-density surrogates. When selection uses a subsample, the winner is refitted on all observations:
 
 ```python
 bimodal = np.concatenate(
@@ -257,10 +257,10 @@ All parameters except `samples` are keyword-only. Returns `self` for method chai
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `samples` | array_like | *(required)* | Observations. Shape `(R,)` or `(R,1)` for point samples; `(R,2)` for interval-censored samples. Point samples must be finite. Interval endpoints may be `-np.inf` or `np.inf` for one-sided censoring, but may not be NaN; an infinite zero-width row is invalid. Reversed rows (`lo > hi`) are swapped silently, and a finite zero-width row is treated as a point. |
-| `n_components` | `int` or `'auto'` | `'auto'` | Number of mixture components. `'auto'` counts KDE modes to center a search range, picks the best *K* by BIC over lightweight log-concave fits, then runs the full log-concave EM once; `1` = single unimodal fit; `> 1` = EM mixture with exactly that many components. Ignored when `init_from` is given (inherited from seed). |
-| `poly_degree` | `int`, `'auto'`, or `None` | `None` | Requested degree of the polynomial potential. Must be ≥ 2. On full-infinite support `(-np.inf, np.inf)`, an explicit odd degree is rejected because it is structurally inadmissible; use an even degree. `'auto'` considers only admissible even degrees on full-infinite support. Odd degrees remain available on one-sided or bounded support. `None` (default) means `'auto'` when no seed, or inherit from seed when `init_from` is given. `'auto'` selects the degree with an information-based omitted-statistic test (see `_fit/degree.py`), applied per-component in mixtures on the first M-step; mixture fits from different initializations that locked different degrees are then compared by BIC. BIC also chooses the component count `n_components='auto'`. |
+| `n_components` | `int` or `'auto'` | `'auto'` | Number of mixture components. `'auto'` uses KDE proposals, short shared-boundary screening fits, and policy-aware refinement of competitive candidates before choosing *K* by BIC; `1` = single unimodal fit; `> 1` = EM mixture with exactly that many components. Ignored when `init_from` is given (inherited from seed). |
+| `poly_degree` | `int`, `'auto'`, or `None` | `None` | Requested degree of the polynomial potential. Must be ≥ 2. On full-infinite support `(-np.inf, np.inf)`, an explicit odd degree is rejected because it is structurally inadmissible; use an even degree. `'auto'` considers only admissible even degrees on full-infinite support. Odd degrees remain available on one-sided or bounded support. `None` means `'auto'` without a seed, or inheritance from a seed. Automatic mixtures grow component degrees using omitted-information diagnostics of the jointly fitted model, including shared boundary parameters and mixture-weight nuisance directions. Different components can retain different degrees. |
 | `support` | `(float, float)` or `None` | `None` | Domain of the density, e.g. `(-np.inf, np.inf)`, `(0, np.inf)`, `(0, 1)`. `None` means the unconstrained real line `(-np.inf, np.inf)`; structural boundaries such as zero must be supplied explicitly. Ignored when `init_from` is given (inherited from seed). |
-| `log_boundary_lower` | `bool` or `None` | `None` | Allow the direct zero-offset lower-endpoint log term `-aL log(x - L)`, with `aL >= 0` (it may optimize to zero). `None` lets the data decide on a finite lower endpoint: the term is kept only when a one-sided likelihood-ratio test against the fit without it has `p < 0.05`, and never when a positive-weight observation sits exactly at the endpoint. `None` means no term on an infinite endpoint and inherits the seed setting with `init_from`. Global across all mixture components. |
+| `log_boundary_lower` | `bool` or `None` | `None` | Allow the direct zero-offset lower-endpoint log term `-aL log(x - L)`, with `aL >= 0` (it may optimize to zero). Both its presence and its amplitude are shared across mixture components. `None` lets the data decide on a finite lower endpoint: the term is kept only when a calibrated one-sided likelihood-ratio comparison against the fit without it has `p < 0.05`, and never when a positive-weight observation sits exactly at the endpoint. `None` means no term on an infinite endpoint and inherits the seed setting with `init_from`. |
 | `log_boundary_upper` | `bool` or `None` | `None` | The same for the upper endpoint, `-aU log(U - x)`. |
 | `verbose` | `int` | `0` | Verbosity level for fitting and automatic selection diagnostics. |
 | `suppress_warnings` | `bool` | `False` | Suppress selected numerical warnings. Warning filters are process-global on supported Python versions, so leave this `False` for concurrent fitting. |
@@ -592,9 +592,10 @@ c.transform(mu=5.0, sigma=2.0, pullback=True)  # pullback:    Y = (X - 5) / 2
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mu` | `float` or `None` | `None` (keep current) | Finite location parameter. |
-| `sigma` | `float` or `None` | `None` (keep current) | Finite scale parameter (must be positive). |
+| `mu` | `float` or `None` | `None` (identity: 0) | Finite shift for this operation. |
+| `sigma` | `float` or `None` | `None` (identity: 1) | Finite positive scale for this operation. |
 | `pullback` | `bool` | *(required)* | Interpretation of `(mu, sigma)`. See below. |
+| `relative_to` | `'current'` or `'original'` | `'current'` | Compose with the accumulated transform, or replace it relative to the original fitted density. |
 | `inplace` | `bool` | `True` | Modify in-place or return a new `Distribution`. |
 
 Returns `self` (if `inplace=True`) or a new `Distribution`.
@@ -610,11 +611,17 @@ The two are exact inverses of each other — pulling back and then pushing forwa
 # Pushforward: shift the density by +5 and scale by 2
 c_shifted = c.transform(mu=5.0, sigma=2.0, pullback=False, inplace=False)
 
-# Pullback: directly set affine mapping parameters
+# Pullback of the current distribution
 c_pulled = c.transform(mu=0.5, sigma=1.5, pullback=True, inplace=False)
+
+# Replace the accumulated transform relative to the original fitted density
+c.transform(mu=10.0, sigma=3.0, pullback=False, relative_to="original")
+
+# Identity relative to the original fit resets the presentation transform
+c.transform(pullback=False, relative_to="original")
 ```
 
-For multi-component models, the transform is applied to every component.
+One accumulated affine map belongs to the whole `Distribution` and applies uniformly to every component. It never changes fitted polynomial coefficients or shared boundary exponents. Component-specific fitting centers/scales remain immutable numerical conditioning coordinates, not independently adjustable transforms. Omitted arguments are identity operations relative to whichever reference `relative_to` selects.
 
 ---
 
@@ -622,7 +629,7 @@ For multi-component models, the transform is applied to every component.
 
 ### Serialization — Save & Load
 
-The fitted state is stored as a NumPy structured scalar (mixtures wrap their component states in one scalar), enabling save/load without pickle. Loading validates the required fields and their values.
+The fitted state is stored as a NumPy structured scalar with the same model envelope for single-component fits and mixtures, enabling save/load without pickle. The envelope stores the accumulated public `(mu, sigma)` once, together with component payloads, weights, and model metadata. Loading validates the required fields and their values.
 
 ```python
 # Save
@@ -642,7 +649,7 @@ c4.load(state)
 
 **`Distribution.data`** (property): Returns a deep copy of the structured fitted state.
 
-**`Distribution.load(state)`**: Load a previously saved state. Automatically detects single-component vs multi-component format. Returns `self`.
+**`Distribution.load(state)`**: Validate and install a saved model envelope, including its component count. Returns `self`. An invalid state leaves the existing model unchanged.
 
 For multi-component models, the structured state includes all components, their weights, and mixture metadata. `pickle.dumps(c)` / `pickle.loads(...)` are also supported; `Distribution.__reduce__` delegates to the same structured state so compiled evaluator objects are never pickled directly.
 
@@ -657,10 +664,10 @@ The structured NumPy state returned by `Distribution.data` is the portable persi
 ### Copying
 
 ```python
-c2 = c.copy()  # independent deep copy
+c2 = c.copy()  # independent model
 ```
 
-`Distribution` also supports `copy.copy()` and `copy.deepcopy()`, both of which produce independent deep copies.
+`Distribution` also supports `copy.copy()` and `copy.deepcopy()`. Copies have independent presentation transforms and mutable caches; immutable fitted payloads may be shared safely.
 
 ---
 
@@ -672,11 +679,11 @@ These properties and behaviors are specific to multi-component models (`n_compon
 |--------------------|-------------|
 | `.n_components` | Number of mixture components (`int`). |
 | `.weights` | Mixture weights, shape `(K,)`, summing to 1 (`ndarray`). |
-| `.components` | List of fitted component objects. |
+| `.components` | Read-only sequence of component query objects. |
 | `.modes` | Tuple of all local PDF maxima (1 to *K* modes). |
 | `.mode` | Location of the tallest peak among all modes. |
 
-Individual components are full single-component fitted objects with `.base` and `.exp` views:
+Individual components provide read-only density queries with `.base` and `.exp` views:
 
 ```python
 comp = c2.components[0]
@@ -684,13 +691,15 @@ comp.base.pdf(0.0)
 comp.exp.mean
 ```
 
+Fitted coefficients, boundary amplitudes, and weights cannot be edited in place. Components cannot be independently refitted, loaded into, or transformed. Use `Distribution.fit(...)` or `load(...)` to replace a whole fitted model, and `Distribution.transform(...)` for its common affine map. This ownership rule applies to single-component fits too. Derived moments and caches are maintained by the library rather than set independently of the density.
+
 Top-level evaluation methods (`pdf`, `cdf`, `ppf`, `sample`, `moment`, `cumulant`, and all summary statistics) automatically aggregate over components using the mixture weights.
 
 ---
 
 ### Fit and Selection Diagnostics
 
-`Distribution.fit_diagnostics` reports whether the natural-coordinate component optimizers converged and, for a mixture fitted in the current process, why the final EM/polish run stopped. Per-component records include the natural-conic status/message, Newton and objective-evaluation counts, conic-subproblem work, the certified remaining-decrease bound, effective curvature degree, active boundary-amplitude faces, and the final separator certificate, plus each boundary term's amplitude standard error, the p-value of the test that kept or dropped an automatically chosen term, and `weakly_identified_boundary_terms`: the sides whose amplitude lies within two standard errors of zero, where the data barely distinguish the term from the polynomial. `converged_approximately` is a successful termination only when its certified bound is at most `1e-7`; it remains distinct from `converged` in the record. Treat `converged=False` as a reason to inspect the component records before using the fit quantitatively.
+`Distribution.fit_diagnostics` distinguishes component geometry/feasibility from joint mixture convergence. Shared boundary amplitudes, standard errors, automatic-selection p-values, and weak-identification flags are reported once in the model-level `shared_boundary` record. Their errors use joint observed information, accounting for private component parameters and mixture weights, rather than independent component fits. A zero-face amplitude has no ordinary interior standard error; an unresolved positive direction has infinite uncertainty. `converged_approximately` remains distinct from `converged`, with its certified remaining-decrease bound reported. Treat `converged=False` as a reason to inspect the diagnostics before using the fit quantitatively.
 
 ```python
 d = c.fit_diagnostics

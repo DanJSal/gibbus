@@ -6,10 +6,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from gibbus import _defaults
+from gibbus._fit import _conic_kernels, conic_newton
 from gibbus._fit.conic_newton import _amplitude_release_gain, _solve_natural_conic
 from gibbus._fit.conic_qp import _support_representation
 from gibbus._fit.natural_objective import (
     _fit_natural_conic_points,
+    _natural_interval_start,
+    _prepare_natural_interval_objective,
     _prepare_natural_point_objective,
 )
 from gibbus._model.natural import _natural_layout
@@ -221,6 +225,92 @@ def test_small_positive_leading_coefficient_is_not_snapped():
     assert result.status == "converged"
     assert result.effective_curvature_degree == 4
     assert curvature[4] == pytest.approx(leading, rel=1e-4)
+
+
+class _BoundedStartObjective(_QuadraticObjective):
+    """Quadratic objective that cannot be evaluated far from its target."""
+
+    def __call__(self, params):
+        if np.max(np.abs(np.asarray(params) - self.target)) > 50.0:
+            raise FloatingPointError("start is not normalizable")
+        return super().__call__(params)
+
+
+def _bounded_start_case():
+    layout = _natural_layout(_REAL_LINE, 4)
+    target = _curvature_target(layout, [1.0, 0.0, 1.0])
+    objective = _BoundedStartObjective(layout, target, np.ones(layout.n_params))
+    warm = target.copy()
+    warm[layout.gamma_index] = 1e3
+    return objective, target, warm
+
+
+def test_unnormalizable_warm_start_restarts_from_the_cold_start():
+    """A failing warm start is replaced by the cold start, never re-evaluated
+    elsewhere, and the replacement is recorded as a non-routine failure."""
+    objective, target, warm = _bounded_start_case()
+    _defaults.clear_suppressed_failures()
+    result = _solve_natural_conic(objective, initial=warm)
+    records = [
+        r
+        for r in _defaults.suppressed_failures()
+        if r["context"] == "conic Newton start"
+    ]
+    _defaults.clear_suppressed_failures()
+    assert result.status == "converged"
+    np.testing.assert_allclose(result.params, target, atol=1e-8)
+    assert len(records) == 1 and not records[0]["routine"]
+
+
+def test_unnormalizable_warm_start_is_fatal_under_debug(monkeypatch):
+    objective, _, warm = _bounded_start_case()
+    monkeypatch.setattr(_defaults, "DEBUG", True)
+    with pytest.raises(RuntimeError, match="conic Newton start"):
+        _solve_natural_conic(objective, initial=warm)
+
+
+def test_no_normalizable_start_raises():
+    layout = _natural_layout(_REAL_LINE, 4)
+    target = np.full(layout.n_params, 1e3)
+    objective = _BoundedStartObjective(layout, target, np.ones(layout.n_params))
+    with pytest.raises(RuntimeError, match="no start of the conic fit"):
+        _solve_natural_conic(objective)
+
+
+def test_invalid_compiled_interval_start_skips_the_face(monkeypatch):
+    """The compiled interval loop reports an invalid start as a failed face;
+    the fit restarts from the cold start and reaches the same optimum."""
+    rng = np.random.default_rng(11)
+    centers = rng.gamma(3.0, size=200)
+    rows = np.column_stack([centers, centers + 0.5])
+    objective = _prepare_natural_interval_objective(
+        (0.0, np.inf), rows, 4, True, False, None
+    )
+    start, blocks = _natural_interval_start(objective)
+    expected = _solve_natural_conic(
+        objective, certify=False, initial=start, initial_blocks=blocks
+    )
+    original = _conic_kernels.solve_interval_newton
+    calls = []
+
+    def first_start_invalid(*args):
+        calls.append(None)
+        output = original(*args)
+        if len(calls) == 1:
+            return ("invalid_start", *output[1:])
+        return output
+
+    monkeypatch.setattr(_conic_kernels, "solve_interval_newton", first_start_invalid)
+    _defaults.clear_suppressed_failures()
+    result = _solve_natural_conic(
+        objective, certify=False, initial=start, initial_blocks=blocks
+    )
+    contexts = [r["context"] for r in _defaults.suppressed_failures()]
+    _defaults.clear_suppressed_failures()
+    assert conic_newton._conic_kernels.solve_interval_newton is first_start_invalid
+    assert contexts[:2] == ["conic Newton face start", "conic Newton start"]
+    assert result.status == expected.status
+    assert result.objective_value == pytest.approx(expected.objective_value, abs=1e-10)
 
 
 def test_warm_start_without_certificate_is_projected():

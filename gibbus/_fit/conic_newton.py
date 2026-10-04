@@ -420,19 +420,16 @@ def _apply_global_objective_certificate(objective, run, options, /):
 def _newton_on_representation(
     objective, representation, params, blocks, evaluation, options, min_steps, /
 ):
-    """Run one fixed-face Newton solve, compiling eligible natural objectives.
+    """Run one fixed-face Newton solve in the fused compiled loops.
 
     Point-data objectives expose immutable sufficient statistics to their
     fused C loop.  Interval objectives expose compressed censoring rows to a
-    parallel fused loop across finite, half-infinite, and real-line supports.
-    This local traversal is shared by standalone fits and mixture M-steps;
-    standalone nonparametric likelihood bounds are applied only by the Python
-    controller after face optimization.  Objectives whose likelihood evaluator
-    remains Python-level, currently the joint mixture polish, still use a
-    compiled Newton control loop and compiled conic subproblems; only their
-    objective evaluations cross the Python boundary.  A declined compiled
-    interval initialization is evaluated once through the
-    ordinary objective and then retried in the fused traversal.
+    fused loop across finite, half-infinite, and real-line supports, which
+    also evaluates the start.  Standalone nonparametric likelihood bounds are
+    applied only by the Python controller after face optimization.  Library
+    objectives never leave their compiled loop; only generic objectives
+    without compiled inputs (for example, synthetic test objectives) use the
+    compiled Newton control loop with Python objective evaluations.
 
     Parameters
     ----------
@@ -445,7 +442,8 @@ def _newton_on_representation(
     blocks : sequence of numpy.ndarray
         Gram certificate of ``params``.
     evaluation : object
-        Objective evaluation at ``params``.
+        Objective evaluation at ``params``; ``None`` lets the compiled
+        interval loop evaluate the start itself.
     options : _NewtonOptions
         Newton and certification tolerances.
     min_steps : int
@@ -453,264 +451,259 @@ def _newton_on_representation(
 
     Returns
     -------
-    _NewtonRun
-        Final fixed-face iterate and certification metadata.
+    _NewtonRun or None
+        Final fixed-face iterate and certification metadata, or ``None`` when
+        the compiled interval loop cannot evaluate the start.
+
+    Raises
+    ------
+    RuntimeError
+        If a library objective does not provide its compiled inputs.
     """
     interval_inputs = getattr(objective, "_compiled_interval_newton_inputs", None)
     if interval_inputs is not None:
         packed = interval_inputs()
-        if packed is not None:
-            (
-                support,
-                data_bounds,
-                kinds,
-                lengths,
-                coefficients,
-                controls,
-                finite_intervals,
-                finite_weights,
-                point_lower_distance,
-                point_upper_distance,
-                adaptive_intervals,
-                adaptive_weights,
-                whole_weight,
-                coordinate_scale,
-                gl_nodes,
-                gl_log_weights,
-                width_eps_mult,
-                curvature_degree,
-                lower_index,
-                upper_index,
-                epsabs,
-                epsrel,
-                limit,
-            ) = packed
-            a_packed, sizes, a_offsets, q_offsets = representation.packed
-            if evaluation is None:
-                n_params = np.asarray(params, dtype=np.float64).size
-                current_nll = 0.0
-                current_gradient = np.zeros(n_params, dtype=np.float64)
-                current_hessian = np.zeros((n_params, n_params), dtype=np.float64)
-                current_fisher = np.zeros((n_params, n_params), dtype=np.float64)
-                current_missing = np.zeros((n_params, n_params), dtype=np.float64)
-                current_smallest = 0.0
-                initialize = True
-            else:
-                current_nll = float(evaluation.nll)
-                current_gradient = evaluation.gradient
-                current_hessian = evaluation.hessian
-                current_fisher = evaluation.fisher
-                current_missing = evaluation.missing_information
-                current_smallest = float(evaluation.smallest_curvature)
-                initialize = False
-            compiled = _conic_kernels.solve_interval_newton(
-                params,
-                representation.pack_blocks(blocks),
-                representation.b_matrix,
-                a_packed,
-                sizes,
-                a_offsets,
-                q_offsets,
-                representation.reference_dual,
-                representation.row_degrees,
-                support,
-                data_bounds,
-                kinds,
-                lengths,
-                coefficients,
-                controls,
-                finite_intervals,
-                finite_weights,
-                point_lower_distance,
-                point_upper_distance,
-                adaptive_intervals,
-                adaptive_weights,
-                whole_weight,
-                coordinate_scale,
-                gl_nodes,
-                gl_log_weights,
-                width_eps_mult,
-                curvature_degree,
-                lower_index,
-                upper_index,
-                current_nll,
-                current_gradient,
-                current_hessian,
-                current_fisher,
-                current_missing,
-                current_smallest,
-                options.tolerance,
-                options.certified_tolerance,
-                options.accuracy_floor,
-                options.max_iterations,
-                options.armijo,
-                options.backtrack,
-                options.max_line_search,
-                min_steps,
-                initialize,
-                epsabs,
-                epsrel,
-                limit,
+        if packed is None:
+            raise RuntimeError(
+                "interval objective did not provide its compiled Newton inputs"
             )
-            (
-                status,
-                theta,
-                packed_blocks,
-                dual,
-                nll,
-                gradient,
-                hessian,
-                fisher,
-                missing,
-                smallest,
-                iterations,
-                evaluations,
-                sub_iterations,
-                bound,
-            ) = compiled
-            if status == "fallback":
-                if evaluation is not None:
-                    raise RuntimeError(
-                        "compiled interval Newton requested fallback after initialization"
-                    )
-                # The compiled initializer can decline a numerically awkward
-                # starting state.  Evaluate that one point through the ordinary
-                # objective, then resume the same fused traversal with explicit
-                # initialized statistics; do not restart Newton in Python.
-                initialized = objective(params)
-                return _newton_on_representation(
-                    objective,
-                    representation,
-                    params,
-                    blocks,
-                    initialized,
-                    options,
-                    min_steps,
-                )
-            if evaluation is None:
-                from .natural_objective import _NaturalIntervalEvaluation
+        (
+            support,
+            data_bounds,
+            kinds,
+            lengths,
+            coefficients,
+            controls,
+            finite_intervals,
+            finite_weights,
+            point_lower_distance,
+            point_upper_distance,
+            adaptive_intervals,
+            adaptive_weights,
+            whole_weight,
+            coordinate_scale,
+            gl_nodes,
+            gl_log_weights,
+            width_eps_mult,
+            curvature_degree,
+            lower_index,
+            upper_index,
+            epsabs,
+            epsrel,
+            limit,
+        ) = packed
+        a_packed, sizes, a_offsets, q_offsets = representation.packed
+        if evaluation is None:
+            n_params = np.asarray(params, dtype=np.float64).size
+            current_nll = 0.0
+            current_gradient = np.zeros(n_params, dtype=np.float64)
+            current_hessian = np.zeros((n_params, n_params), dtype=np.float64)
+            current_fisher = np.zeros((n_params, n_params), dtype=np.float64)
+            current_missing = np.zeros((n_params, n_params), dtype=np.float64)
+            current_smallest = 0.0
+            initialize = True
+        else:
+            current_nll = float(evaluation.nll)
+            current_gradient = evaluation.gradient
+            current_hessian = evaluation.hessian
+            current_fisher = evaluation.fisher
+            current_missing = evaluation.missing_information
+            current_smallest = float(evaluation.smallest_curvature)
+            initialize = False
+        compiled = _conic_kernels.solve_interval_newton(
+            params,
+            representation.pack_blocks(blocks),
+            representation.b_matrix,
+            a_packed,
+            sizes,
+            a_offsets,
+            q_offsets,
+            representation.reference_dual,
+            representation.row_degrees,
+            support,
+            data_bounds,
+            kinds,
+            lengths,
+            coefficients,
+            controls,
+            finite_intervals,
+            finite_weights,
+            point_lower_distance,
+            point_upper_distance,
+            adaptive_intervals,
+            adaptive_weights,
+            whole_weight,
+            coordinate_scale,
+            gl_nodes,
+            gl_log_weights,
+            width_eps_mult,
+            curvature_degree,
+            lower_index,
+            upper_index,
+            current_nll,
+            current_gradient,
+            current_hessian,
+            current_fisher,
+            current_missing,
+            current_smallest,
+            options.tolerance,
+            options.certified_tolerance,
+            options.accuracy_floor,
+            options.max_iterations,
+            options.armijo,
+            options.backtrack,
+            options.max_line_search,
+            min_steps,
+            initialize,
+            epsabs,
+            epsrel,
+            limit,
+        )
+        (
+            status,
+            theta,
+            packed_blocks,
+            dual,
+            nll,
+            gradient,
+            hessian,
+            fisher,
+            missing,
+            smallest,
+            iterations,
+            evaluations,
+            sub_iterations,
+            bound,
+        ) = compiled
+        if status == "invalid_start":
+            return None
+        if evaluation is None:
+            from .natural_objective import _NaturalIntervalEvaluation
 
-                evaluation_type = _NaturalIntervalEvaluation
-            else:
-                evaluation_type = type(evaluation)
-            final = evaluation_type(
-                nll=float(nll),
-                gradient=np.asarray(gradient, dtype=np.float64),
-                hessian=np.asarray(hessian, dtype=np.float64),
-                observed_hessian=np.asarray(fisher - missing, dtype=np.float64),
-                fisher=np.asarray(fisher, dtype=np.float64),
-                missing_information=np.asarray(missing, dtype=np.float64),
-                smallest_curvature=float(smallest),
-            )
-            return _NewtonRun(
-                status=status,
-                params=theta,
-                blocks=representation.unpack_blocks(packed_blocks),
-                dual=dual,
-                evaluation=final,
-                iterations=iterations,
-                evaluations=evaluations,
-                subproblem_iterations=sub_iterations,
-                decrease_bound=bound,
-            )
+            evaluation_type = _NaturalIntervalEvaluation
+        else:
+            evaluation_type = type(evaluation)
+        final = evaluation_type(
+            nll=float(nll),
+            gradient=np.asarray(gradient, dtype=np.float64),
+            hessian=np.asarray(hessian, dtype=np.float64),
+            observed_hessian=np.asarray(fisher - missing, dtype=np.float64),
+            fisher=np.asarray(fisher, dtype=np.float64),
+            missing_information=np.asarray(missing, dtype=np.float64),
+            smallest_curvature=float(smallest),
+        )
+        return _NewtonRun(
+            status=status,
+            params=theta,
+            blocks=representation.unpack_blocks(packed_blocks),
+            dual=dual,
+            evaluation=final,
+            iterations=iterations,
+            evaluations=evaluations,
+            subproblem_iterations=sub_iterations,
+            decrease_bound=bound,
+        )
 
     inputs = getattr(objective, "_compiled_point_newton_inputs", None)
     if inputs is not None:
         packed = inputs()
-        if packed is not None:
-            (
-                support,
-                data_bounds,
-                lower_basis,
-                upper_basis,
-                kinds,
-                lengths,
-                coefficients,
-                controls,
-                empirical_means,
-                coordinate_constant,
-                curvature_degree,
-                lower_index,
-                upper_index,
-                epsabs,
-                epsrel,
-                limit,
-            ) = packed
-            a_packed, sizes, a_offsets, q_offsets = representation.packed
-            compiled = _conic_kernels.solve_point_newton(
-                params,
-                representation.pack_blocks(blocks),
-                representation.b_matrix,
-                a_packed,
-                sizes,
-                a_offsets,
-                q_offsets,
-                representation.reference_dual,
-                representation.row_degrees,
-                support,
-                data_bounds,
-                lower_basis,
-                upper_basis,
-                kinds,
-                lengths,
-                coefficients,
-                controls,
-                empirical_means,
-                coordinate_constant,
-                curvature_degree,
-                lower_index,
-                upper_index,
-                float(evaluation.nll),
-                evaluation.gradient,
-                evaluation.hessian,
-                evaluation.model_partial_means,
-                options.tolerance,
-                options.certified_tolerance,
-                options.accuracy_floor,
-                options.max_iterations,
-                options.armijo,
-                options.backtrack,
-                options.max_line_search,
-                min_steps,
-                epsabs,
-                epsrel,
-                limit,
+        if packed is None:
+            raise RuntimeError(
+                "point objective did not provide its compiled Newton inputs"
             )
-            (
-                status,
-                theta,
-                packed_blocks,
-                dual,
-                nll,
-                gradient,
-                hessian,
-                means,
-                iterations,
-                evaluations,
-                sub_iterations,
-                bound,
-            ) = compiled
-            from .objective import _ObjectiveEvaluation
+        (
+            support,
+            data_bounds,
+            lower_basis,
+            upper_basis,
+            kinds,
+            lengths,
+            coefficients,
+            controls,
+            empirical_means,
+            coordinate_constant,
+            curvature_degree,
+            lower_index,
+            upper_index,
+            epsabs,
+            epsrel,
+            limit,
+        ) = packed
+        a_packed, sizes, a_offsets, q_offsets = representation.packed
+        compiled = _conic_kernels.solve_point_newton(
+            params,
+            representation.pack_blocks(blocks),
+            representation.b_matrix,
+            a_packed,
+            sizes,
+            a_offsets,
+            q_offsets,
+            representation.reference_dual,
+            representation.row_degrees,
+            support,
+            data_bounds,
+            lower_basis,
+            upper_basis,
+            kinds,
+            lengths,
+            coefficients,
+            controls,
+            empirical_means,
+            coordinate_constant,
+            curvature_degree,
+            lower_index,
+            upper_index,
+            float(evaluation.nll),
+            evaluation.gradient,
+            evaluation.hessian,
+            evaluation.model_partial_means,
+            options.tolerance,
+            options.certified_tolerance,
+            options.accuracy_floor,
+            options.max_iterations,
+            options.armijo,
+            options.backtrack,
+            options.max_line_search,
+            min_steps,
+            epsabs,
+            epsrel,
+            limit,
+        )
+        (
+            status,
+            theta,
+            packed_blocks,
+            dual,
+            nll,
+            gradient,
+            hessian,
+            means,
+            iterations,
+            evaluations,
+            sub_iterations,
+            bound,
+        ) = compiled
+        from .objective import _ObjectiveEvaluation
 
-            final = _ObjectiveEvaluation(
-                nll=nll,
-                gradient=gradient,
-                hessian=hessian,
-                fisher=hessian,
-                missing_information=np.zeros_like(hessian),
-                model_partial_means=means,
-            )
-            return _NewtonRun(
-                status=status,
-                params=theta,
-                blocks=representation.unpack_blocks(packed_blocks),
-                dual=dual,
-                evaluation=final,
-                iterations=iterations,
-                evaluations=evaluations,
-                subproblem_iterations=sub_iterations,
-                decrease_bound=bound,
-            )
+        final = _ObjectiveEvaluation(
+            nll=nll,
+            gradient=gradient,
+            hessian=hessian,
+            fisher=hessian,
+            missing_information=np.zeros_like(hessian),
+            model_partial_means=means,
+        )
+        return _NewtonRun(
+            status=status,
+            params=theta,
+            blocks=representation.unpack_blocks(packed_blocks),
+            dual=dual,
+            evaluation=final,
+            iterations=iterations,
+            evaluations=evaluations,
+            subproblem_iterations=sub_iterations,
+            decrease_bound=bound,
+        )
     a_packed, sizes, a_offsets, q_offsets = representation.packed
     compiled = _conic_kernels.solve_callback_newton(
         objective,
@@ -914,7 +907,9 @@ def _solve_natural_conic(
     Raises
     ------
     RuntimeError
-        If a cone description fails its rank checks.
+        If a cone description fails its rank checks, or if neither the given
+        start nor the cold interior start (on the full or zero-amplitude face)
+        can be normalized.
     """
     layout = objective.layout
     options = _NewtonOptions(
@@ -983,6 +978,13 @@ def _solve_natural_conic(
         face_run = _newton_on_representation(
             objective, face, theta, blocks, evaluation, options, min_steps
         )
+        if face_run is None:
+            _reraise_if_debug(
+                FloatingPointError("compiled objective cannot normalize the start"),
+                "conic Newton face start",
+                routine=True,
+            )
+            return None
         counters["iterations"] += face_run.iterations
         counters["evaluations"] += face_run.evaluations
         counters["sub"] += face_run.subproblem_iterations
@@ -1026,8 +1028,35 @@ def _solve_natural_conic(
     # Every Armijo segment must lie in the cone, so an infeasible start is
     # first projected onto it (in the start's Fisher metric).
     run = solve_face(effective, dict(active), start, initial_blocks, metric, 0)
+    # A start the compiled objective cannot normalize is never re-evaluated by
+    # another evaluator.  It is replaced by the cold interior start, then by
+    # that start on the zero-amplitude face; each replacement is recorded and
+    # is fatal under ``GIBBUS_DEBUG``, since a failing start (warm starts
+    # especially) points at the kernels rather than at the data.
+    tried = [] if initial is not None else [dict(active)]
+    cold_active = (
+        dict.fromkeys(enabled, False)
+        if zero_first
+        else {side: index is not None for side, index in enabled.items()}
+    )
+    for retry_active in (cold_active, dict.fromkeys(enabled, False)):
+        if run is not None:
+            break
+        if retry_active in tried:
+            continue
+        _reraise_if_debug(
+            FloatingPointError("conic fit start is not normalizable"),
+            "conic Newton start",
+        )
+        start = np.array(_interior_start(objective), dtype=np.float64)
+        for side, index in enabled.items():
+            if index is not None and not retry_active[side]:
+                start[index] = 0.0
+        active = dict(retry_active)
+        run = solve_face(effective, dict(active), start, None, None, 0)
+        tried.append(retry_active)
     if run is None:
-        raise RuntimeError("starting point of the conic fit is not normalizable")
+        raise RuntimeError("no start of the conic fit is normalizable")
 
     # Active set over exact faces.  Boundary amplitudes in infinite-censoring
     # cold starts begin at exact zero and are released when the contact KKT

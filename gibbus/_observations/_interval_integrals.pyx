@@ -724,12 +724,16 @@ cdef api int adaptive_natural_objective_c(
     double* obs_h,
     double* obs_cov,
     double* nll_io,
+    double* row_means,
+    double* row_cov,
 ) noexcept nogil:
     """Accumulate adaptive interval likelihood geometry without Python objects.
 
     ``obs_h``, ``obs_cov`` and ``nll_io`` are additive accumulators so callers
     can combine ordinary finite rows, adaptive rows and whole-support rows in
-    one objective evaluation.
+    one objective evaluation.  Optional feature-major ``row_means``
+    (``P x R``) and ``row_cov`` (``P*P x R``) receive each row's conditional
+    moments; pass ``NULL`` to skip them.
     """
     cdef Py_ssize_t m = 1 + P + P * P
     cdef Py_ssize_t doubles_n = (
@@ -842,8 +846,12 @@ cdef api int adaptive_natural_objective_c(
         nll_io[0] -= w * log_probability[r]
         for i in range(P):
             obs_h[i] += w * mean_tmp[i]
+            if row_means != NULL:
+                row_means[i * R + r] = mean_tmp[i]
             for j in range(P):
                 obs_cov[i * P + j] += w * cov_tmp[i * P + j]
+                if row_cov != NULL:
+                    row_cov[(i * P + j) * R + r] = cov_tmp[i * P + j]
 
     free(arena)
     free(kinds)

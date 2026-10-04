@@ -46,6 +46,7 @@ from .._fit.mixture import (
 from .._postfit.analytics import _cumulant_from_centered, _exp_moment_from_stats
 from .._postfit.expectation import expect as _expect
 from .._postfit.expectation import expect_vectorized as _expect_vectorized
+from .._postfit.fitted_state import _model_metadata
 from .._postfit.gof import asymptotic_pvalue as _asymptotic_gof_pvalue
 from .._postfit.gof import gof_statistic as _gof_statistic
 from .._postfit.gof import monte_carlo_pvalue as _monte_carlo_pvalue
@@ -70,7 +71,7 @@ from .._postfit.survival import logppf as _logppf
 from .._postfit.survival import mean_residual_life as _mean_residual_life
 from .._postfit.survival import residual_entropy as _residual_entropy
 from .._spectral.tail import refine_tail_quantiles
-from .component import _Component
+from .component import _Component, _Presentation
 from .diagnostics import _DiagnosticsMixin
 from .fitting import _FitRequest, _prepare_fit_request, _run_fit_request
 from .frozen import FrozenDistribution
@@ -163,14 +164,15 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         Parameters
         ----------
         state : Mapping or None, optional
-            Structured fit state, single- or multi-component.  ``None``
+            Structured model envelope, for any component count. ``None``
             leaves the model unfitted.
         """
         # An empty component list is the unfitted state.
-        self._components: list[_Component] = []
+        self._presentation = _Presentation()
+        self._components: tuple[_Component, ...] = ()
         self._weights: np.ndarray = np.ones(0, dtype=np.float64)
-        self._default: str = "base"
         self._K: int = 0
+        self._fit_metadata = None
 
         # Mixture-level caches (used only when K > 1).
         self._mix_base_cdf = None
@@ -251,10 +253,30 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         return self._weights.copy()
 
     @property
-    def components(self) -> list[_Component]:
-        """Fitted components (read-only list)."""
+    def components(self) -> tuple[_Component, ...]:
+        """Read-only fitted component views sharing the model presentation."""
         self._ensure_fitted()
-        return list(self._components)
+        return self._components
+
+    @property
+    def _default(self):
+        return self._presentation.default
+
+    @_default.setter
+    def _default(self, value):
+        self._presentation.default = value
+
+    @property
+    def mu(self):
+        """Accumulated pushforward shift from the original fitted coordinate."""
+        self._ensure_fitted()
+        return self._presentation.affine[0]
+
+    @property
+    def sigma(self):
+        """Accumulated positive pushforward scale."""
+        self._ensure_fitted()
+        return self._presentation.affine[1]
 
     @property
     def default(self) -> str:
@@ -323,8 +345,6 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._stats_cache = None
         self._cumulant_cache.clear()
         self._fit_diagnostics_cache = None
-        for comp in self._components:
-            comp.set_default(s)
         return self
 
     # ------------------------------------------------------------------
@@ -457,8 +477,6 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             point-density estimability check because their row contributions
             are probability masses rather than point densities.
         """
-        self._em_diagnostics = None
-        self._selection_diagnostics = None
         request = _FitRequest(
             samples=samples,
             n_components=n_components,
@@ -492,23 +510,17 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Completed fitting result returned by the API-internal fitting
             controller.
         """
-        self._components = list(result.components)
-        self._weights = np.asarray(result.weights, dtype=np.float64).copy()
-        self._K = len(self._components)
-        self._default = "base"
-        self._stats_cache = None
-        self._cumulant_cache.clear()
-        self._fit_diagnostics_cache = None
-        self._mode_cache = None
-        self._spectral_cache_valid = False
-        self._em_diagnostics = (
-            None if result.em_diagnostics is None else dict(result.em_diagnostics)
+        target = Distribution(
+            _pack_mixture_struct(
+                result.weights,
+                "base",
+                [comp.data for comp in result.components],
+                fit_metadata=result.fit_metadata,
+            )
         )
-        self._selection_diagnostics = (
-            None
-            if result.selection_diagnostics is None
-            else dict(result.selection_diagnostics)
-        )
+        target._em_diagnostics = _copy.deepcopy(result.em_diagnostics)
+        target._selection_diagnostics = _copy.deepcopy(result.selection_diagnostics)
+        self.__dict__.update(target.__dict__)
 
     # ------------------------------------------------------------------
     # Evaluation
@@ -1637,15 +1649,14 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         new_weights = np.exp(kept_log_array - normalizer)
         new_weights /= np.sum(new_weights, dtype=np.float64)
 
-        if len(kept_components) == 1:
-            result = Distribution(kept_components[0].data)
-        else:
-            state = _pack_mixture_struct(
-                new_weights, self._default, [comp.data for comp in kept_components]
-            )
-            result = Distribution(state)
-        result.set_default(self._default)
-        return result
+        state = _pack_mixture_struct(
+            new_weights,
+            self._default,
+            [comp.data for comp in kept_components],
+            mu=self.mu,
+            sigma=self.sigma,
+        )
+        return Distribution(state)
 
     def _log_concavity_margin(self) -> float:
         """Return a certified lower bound on component base-space convexity.
@@ -1925,20 +1936,22 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         mu: float | None = None,
         sigma: float | None = None,
         pullback: bool,
+        relative_to: str = "current",
         inplace: bool = True,
     ) -> "Distribution":
         """Apply an affine location-scale transformation to every component.
 
         An exact change of variables, not a refit: the PDF, CDF, PPF and
-        every summary statistic are updated analytically.
+        every summary statistic are updated analytically. A single model map
+        ``y = mu + sigma*x_fit`` is retained. In exp space this transforms the
+        modeled log variable, not the exponentiated variable affinely.
 
         Parameters
         ----------
         mu : float or None, optional
-            Location parameter.  ``None`` leaves it unchanged.
+            Operation shift. ``None`` means zero.
         sigma : float or None, optional
-            Scale parameter; must be positive.  ``None`` leaves it
-            unchanged.
+            Operation scale; must be positive. ``None`` means one.
         pullback : bool
             ``False`` gives the pushforward ``Y = mu + sigma * X``.
             ``True`` gives the pullback ``Y = (X - mu) / sigma``, the
@@ -1946,6 +1959,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             is never inferred from mutable model state.
         inplace : bool, optional
             Mutate this object (default) or return a transformed copy.
+        relative_to : {"current", "original"}, optional
+            Compose with the current presentation (default), or replace the
+            accumulated map relative to the original fit. An identity
+            operation relative to ``"original"`` resets the presentation.
 
         Returns
         -------
@@ -1962,18 +1979,34 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             If *mu* is non-finite, or *sigma* is non-finite or not positive.
         """
         self._ensure_fitted()
+        if not isinstance(pullback, (bool, np.bool_)):
+            raise TypeError("pullback must be a bool")
+        if relative_to not in ("current", "original"):
+            raise ValueError("relative_to must be 'current' or 'original'")
+        shift = 0.0 if mu is None else float(mu)
+        scale = 1.0 if sigma is None else float(sigma)
+        if not np.isfinite(shift):
+            raise ValueError("mu must be finite")
+        if not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError("sigma must be positive and finite")
+        if pullback:
+            shift, scale = -shift / scale, 1.0 / scale
+        if relative_to == "current":
+            shift, scale = shift + scale * self.mu, scale * self.sigma
+        if not np.isfinite(shift) or not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError(
+                "composed transform must have finite shift and positive finite scale"
+            )
         target = self if inplace else self.copy()
-        for comp in target._components:
-            comp.transform(mu=mu, sigma=sigma, pullback=pullback, inplace=True)
+        target._presentation.affine = (shift, scale)
+        target._presentation.version += 1
         target._stats_cache = None
         target._cumulant_cache.clear()
         target._mode_cache = None
         # The diagnostics cache key cannot observe a location-scale change, so
         # clear it here alongside the other state-dependent caches.
         target._fit_diagnostics_cache = None
-        if target._K > 1:
-            target._rebuild_spectral_cache()
-            target._spectral_cache_valid = True
+        target._spectral_cache_valid = False
         return target
 
     @property
@@ -1985,22 +2018,25 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         numpy.void
         """
         self._ensure_fitted()
-        if self._K == 1:
-            return self._components[0].data
         comp_states = [c.data for c in self._components]
         bm = None
         if self._mode_cache is not None and "base" in self._mode_cache:
             bm = self._mode_cache["base"]
         return _pack_mixture_struct(
-            self._weights, self._default, comp_states, base_modes=bm
+            self._weights,
+            self._default,
+            comp_states,
+            base_modes=bm,
+            mu=self.mu,
+            sigma=self.sigma,
+            fit_metadata=self._fit_metadata,
         )
 
     def load(self, state) -> "Distribution":
         """Load a previously saved fitted state.
 
-        Automatically detects single-component vs multi-component format. The
-        current instance is updated only after the complete state has validated
-        and all required spectral caches have been reconstructed.
+        All component counts use the same model envelope. The current
+        instance changes only after the complete state has validated.
 
         Parameters
         ----------
@@ -2014,61 +2050,50 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             ``self``.
         """
         state = np.array(state, copy=True)
-        names = state.dtype.names or ()
         target = Distribution()
-        if "n_components" in names:
-            weights, default_space, comp_states = _unpack_mixture_struct(state)
-            packed = np.asarray(weights, dtype=np.float64).ravel()
-            if (
-                packed.size != len(comp_states)
-                or not np.all(np.isfinite(packed))
-                or np.any(packed < 0.0)
-                or abs(float(packed.sum()) - 1.0) > 1e-8
-            ):
-                raise ValueError(
-                    "mixture state has invalid component weights: expected one "
-                    "finite non-negative weight per component, summing to one"
-                )
-            if str(default_space) not in ("base", "exp"):
-                raise ValueError("mixture state default space must be 'base' or 'exp'")
-            components = [_Component(cs) for cs in comp_states]
-            components, weights = _sort_components_by_mode(components, weights)
-            target._components = components
-            target._weights = weights
-            target._K = len(components)
-            target._default = default_space
-            target._stats_cache = None
-            target._mode_cache = None
-            raw = np.asarray(state["base_modes"], dtype=np.float64)
-            n_modes = np.asarray(state["n_modes"])
-            if (
-                raw.ndim != 1
-                or n_modes.ndim != 0
-                or not np.issubdtype(n_modes.dtype, np.integer)
-                or int(n_modes) != raw.size
-            ):
-                raise ValueError(
-                    "mixture state has inconsistent n_modes/base_modes: expected a "
-                    "1-D base_modes array with exactly n_modes entries"
-                )
-            if not np.all(np.isfinite(raw)):
-                raise ValueError("mixture state base_modes must be finite")
-            base_modes = tuple(float(value) for value in raw)
-            if base_modes:
-                target._mode_cache = {"base": base_modes}
-            if target._K > 1:
-                target._rebuild_spectral_cache()
-                target._spectral_cache_valid = True
-        else:
-            comp = _Component(state)
-            target._components = [comp]
-            target._weights = np.array([1.0], dtype=np.float64)
-            target._K = 1
-            target._default = comp.default
-            target._stats_cache = None
-            target._mode_cache = None
-            target._spectral_cache_valid = False
-
+        weights, default_space, comp_states = _unpack_mixture_struct(state)
+        metadata = {
+            name: state[name].item()
+            for name in ("provenance", "n_parameters", "n_face_parameters")
+        }
+        metadata["shared_boundary"] = {
+            name: state[f"shared_boundary_{name}"]
+            for name in (
+                "allowed",
+                "amplitudes",
+                "active",
+                "standard_errors",
+                "p_values",
+            )
+        }
+        target._fit_metadata = _model_metadata(comp_states, metadata)
+        components = [_Component(cs) for cs in comp_states]
+        components, weights = _sort_components_by_mode(components, weights)
+        target._components = tuple(components)
+        target._weights = np.frombuffer(
+            np.asarray(weights, dtype=np.float64).tobytes(), dtype=np.float64
+        )
+        target._K = len(components)
+        target._presentation.affine = (float(state["mu"]), float(state["sigma"]))
+        target._default = default_space
+        for comp in components:
+            comp._context = target._presentation
+        raw = np.asarray(state["base_modes"], dtype=np.float64)
+        n_modes = np.asarray(state["n_modes"])
+        if (
+            raw.ndim != 1
+            or n_modes.ndim != 0
+            or not np.issubdtype(n_modes.dtype, np.integer)
+            or int(n_modes) != raw.size
+        ):
+            raise ValueError(
+                "model state has inconsistent n_modes/base_modes: expected a "
+                "1-D base_modes array with exactly n_modes entries"
+            )
+        if not np.all(np.isfinite(raw)):
+            raise ValueError("model state base_modes must be finite")
+        if raw.size:
+            target._mode_cache = {"base": tuple(map(float, raw))}
         self.__dict__.update(target.__dict__)
         return self
 

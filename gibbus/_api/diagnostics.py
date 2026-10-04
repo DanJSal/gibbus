@@ -27,7 +27,6 @@ from .._defaults import (
     NUMERIC_FAILURES,
     _reraise_if_debug,
 )
-from .._fit.boundary import _weakly_identified_sides
 
 
 class _DiagnosticsMixin:
@@ -42,14 +41,14 @@ class _DiagnosticsMixin:
         dict
             ``converged`` summarizes all component optimizers and, when
             available, the final EM run. ``components`` is a tuple of
-            per-component optimizer records with natural-conic termination
-            status and certified decrease bounds, plus each boundary term's
-            amplitude standard error (``boundary_standard_errors``, lower and
-            upper, ``nan`` without a term), the p-value of the test that kept
-            or dropped an automatically chosen term (``boundary_p_values``,
-            ``nan`` where none ran) and the sides whose amplitude lies within
-            two standard errors of zero
-            (``weakly_identified_boundary_terms``). ``em`` is ``None`` for a
+            per-component geometry and solver records; these are not
+            independent optimality certificates for a coupled mixture.
+            ``shared_boundary`` reports physical lower/upper amplitudes,
+            allowed and active sides, marginal standard errors, policy
+            p-values, and weakly identified sides once for the whole model.
+            ``provenance`` distinguishes fitted from derived distributions;
+            derived models have no applicable fit uncertainty.
+            ``em`` is ``None`` for a
             single-component fit or for a mixture
             reconstructed only from the portable structured ``data`` state,
             which intentionally omits session-level EM diagnostics. Copies
@@ -98,16 +97,6 @@ class _DiagnosticsMixin:
                         int(state["upper_amplitude_active"])
                     ),
                     "separator_certified": bool(int(state["separator_certified"])),
-                    "boundary_standard_errors": tuple(
-                        float(v)
-                        for v in np.asarray(state["boundary_standard_errors"]).ravel()
-                    ),
-                    "boundary_p_values": tuple(
-                        float(v) for v in np.asarray(state["boundary_p_values"]).ravel()
-                    ),
-                    "weakly_identified_boundary_terms": _weakly_identified_sides(
-                        state["boundary_amplitudes"], state["boundary_standard_errors"]
-                    ),
                 }
             )
         optimizer_ok = all(r.get("success") is True for r in component_records)
@@ -132,11 +121,21 @@ class _DiagnosticsMixin:
             _reraise_if_debug(exc, "hazard monotonicity diagnostic")
             hazard_is_monotone = None
         result = {
-            "converged": bool(optimizer_ok and em_ok),
+            "converged": (
+                bool(optimizer_ok)
+                if self._K == 1
+                else (None if em is None else bool(em_ok))
+            ),
+            "provenance": self._fit_metadata["provenance"],
+            "n_parameters": self._fit_metadata["n_parameters"],
+            "n_face_parameters": self._fit_metadata["n_face_parameters"],
+            "shared_boundary": copy.deepcopy(self._fit_metadata["shared_boundary"]),
             "components": tuple(component_records),
             "em": em,
             "hazard_is_monotone": hazard_is_monotone,
         }
+        if result["provenance"] != "fitted":
+            result["converged"] = None
         self._fit_diagnostics_cache = (cache_key, result)
         return copy.deepcopy(result)
 
@@ -155,8 +154,8 @@ class _DiagnosticsMixin:
         """
         if self._selection_diagnostics is None:
             return None
-        out = dict(self._selection_diagnostics)
-        out["scores"] = tuple(dict(item) for item in out.get("scores", ()))
+        out = copy.deepcopy(self._selection_diagnostics)
+        out["scores"] = tuple(out.get("scores", ()))
         return out
 
     @property

@@ -142,7 +142,13 @@ cdef int _finite_rows(
     double* log_probability, double* obs_h, double* obs_cov,
     double* sum_h, double* sum_second, double* hbuf,
     bint natural_real_line, const double* natural_scale,
+    double* row_means, double* row_cov,
 ) noexcept nogil:
+    """Reduce finite rows; optionally keep each row's conditional moments.
+
+    ``row_means`` (``P x R``) and ``row_cov`` (``P*P x R``) are feature-major
+    per-row outputs, skipped when ``NULL``.
+    """
     cdef Py_ssize_t r, i, j, g, panel, n_panels
     cdef double lo, hi, width, mid, hpanel, mpanel, log_hpanel, z, zpow
     cdef double qv, term, max_log, scaled, scale, total
@@ -181,9 +187,13 @@ cdef int _finite_rows(
             if natural_real_line:
                 if P > 0:
                     obs_h[0] += wrow * mid
+                    if row_means != NULL:
+                        row_means[r] = mid
                     zpow = mid * mid
                     for i in range(1, P):
                         obs_h[i] += wrow * zpow * natural_scale[i]
+                        if row_means != NULL:
+                            row_means[i * R + r] = zpow * natural_scale[i]
                         zpow *= mid
             else:
                 for i in range(P):
@@ -194,6 +204,11 @@ cdef int _finite_rows(
                     if not isfinite(mean_i):
                         return _BAD_POINT_PARTIAL
                     obs_h[i] += wrow * mean_i
+                    if row_means != NULL:
+                        row_means[i * R + r] = mean_i
+            if row_cov != NULL:
+                for i in range(P * P):
+                    row_cov[i * R + r] = 0.0
             continue
 
         for i in range(P):
@@ -284,84 +299,17 @@ cdef int _finite_rows(
         for i in range(P):
             mean_i = sum_h[i] / total
             obs_h[i] += wrow * mean_i
+            if row_means != NULL:
+                row_means[i * R + r] = mean_i
             for j in range(P):
                 mean_j = sum_h[j] / total
                 obs_cov[i * P + j] += wrow * (
                     sum_second[i * P + j] / total - mean_i * mean_j
                 )
-    return 0
-
-
-cdef int _finite_logp_real_line(
-    Py_ssize_t R, Py_ssize_t G, Py_ssize_t nq,
-    const double* intervals, const double* q_poly, double q_shift,
-    double shifted_log_Z, double mode, double log_scale,
-    const double* gl_nodes, const double* gl_log_weights, double width_eps_mult,
-    double* log_probability,
-) noexcept nogil:
-    """Evaluate only finite-interval log masses for a polynomial potential on R."""
-    cdef Py_ssize_t r, g, panel, n_panels
-    cdef double lo, hi, width, mid, hpanel, mpanel, log_hpanel, z
-    cdef double qv, term, max_log, scaled, scale, total, log_integral
-    cdef bint have_term, split
-
-    for r in range(R):
-        lo = intervals[2 * r]
-        hi = intervals[2 * r + 1]
-        if not (isfinite(lo) and isfinite(hi)) or lo > hi:
-            return _BAD_ROW
-        width = hi - lo
-        mid = 0.5 * (lo + hi)
-        if width <= width_eps_mult * (1.0 + fabs(mid)):
-            qv = _polyval(q_poly, nq, mid)
-            if not isfinite(qv):
-                return _BAD_POTENTIAL
-            log_integral = q_shift - qv
-            if width > 0.0:
-                log_integral += log(width)
-            log_probability[r] = log_integral - shifted_log_Z
-            if width == 0.0:
-                log_probability[r] -= log_scale
-            continue
-
-        max_log = 0.0
-        total = 0.0
-        have_term = False
-        split = isfinite(mode) and lo < mode and mode < hi
-        n_panels = 2 if split else 1
-        for panel in range(n_panels):
-            if split and panel == 0:
-                hpanel = 0.5 * (mode - lo)
-                mpanel = 0.5 * (lo + mode)
-            elif split:
-                hpanel = 0.5 * (hi - mode)
-                mpanel = 0.5 * (mode + hi)
-            else:
-                hpanel = 0.5 * width
-                mpanel = mid
-            if not (hpanel > 0.0 and isfinite(hpanel)):
-                return _BAD_PANEL
-            log_hpanel = log(hpanel)
-            for g in range(G):
-                z = mpanel + hpanel * gl_nodes[g]
-                qv = _polyval(q_poly, nq, z)
-                if not isfinite(qv):
-                    return _BAD_POTENTIAL
-                term = log_hpanel + gl_log_weights[g] + q_shift - qv
-                if not have_term:
-                    max_log = term
-                    total = 1.0
-                    have_term = True
-                elif term > max_log:
-                    scale = exp(max_log - term)
-                    total = total * scale + 1.0
-                    max_log = term
-                else:
-                    scaled = exp(term - max_log)
-                    total += scaled
-        if not have_term or not (total > 0.0 and isfinite(total)):
-            return _BAD_MASS
-        log_probability[r] = max_log + log(total) - shifted_log_Z
+                if row_cov != NULL:
+                    row_cov[(i * P + j) * R + r] = (
+                        sum_second[i * P + j] / total - mean_i * mean_j
+                    )
     return 0
 
 
@@ -376,14 +324,16 @@ cdef api int finite_natural_objective_c(
     const double* gl_nodes, const double* gl_log_weights, double width_eps_mult,
     double* log_probability, double* obs_h, double* obs_cov,
     double* sum_h, double* sum_second, double* hbuf,
-    double* nll_out,
+    double* nll_out, double* row_means, double* row_cov,
 ) noexcept nogil:
     """Reduce ordinary finite interval rows for an arbitrary natural basis.
 
     This C-API entry point mirrors :func:`evaluate_finite_objective` without
     allocating Python objects.  The caller owns all workspaces and must route
     positive-width rows that touch a finite support boundary to the adaptive
-    reducer, exactly as the Python objective does.
+    reducer, exactly as the Python objective does.  Optional feature-major
+    ``row_means`` (``P x R``) and ``row_cov`` (``P*P x R``) receive each row's
+    conditional moments; pass ``NULL`` to skip them.
     """
     cdef Py_ssize_t i
     cdef int status
@@ -402,7 +352,7 @@ cdef api int finite_natural_objective_c(
         gl_nodes, gl_log_weights, width_eps_mult,
         log_probability, obs_h, obs_cov,
         sum_h, sum_second, hbuf,
-        False, NULL,
+        False, NULL, row_means, row_cov,
     )
     if status != 0:
         return status
@@ -424,13 +374,15 @@ cdef api int finite_natural_real_line_objective_c(
     double width_eps_mult,
     double* log_probability, double* obs_h, double* obs_cov,
     double* sum_h, double* sum_second, double* hbuf,
-    double* nll_out,
+    double* nll_out, double* row_means, double* row_cov,
 ) noexcept nogil:
     """Reduce a finite real-line natural interval objective without Python objects.
 
     This is the C-API entry point used by the fused interval Newton loop.  The
     caller owns every workspace.  ``obs_h`` and ``obs_cov`` are zeroed here;
     ``nll_out`` receives the negative weighted interval log likelihood.
+    Optional per-row moments are written as in
+    :c:func:`finite_natural_objective_c`.
     """
     cdef Py_ssize_t i
     cdef int status
@@ -448,7 +400,7 @@ cdef api int finite_natural_real_line_objective_c(
         gl_nodes, gl_log_weights, width_eps_mult,
         log_probability, obs_h, obs_cov,
         sum_h, sum_second, hbuf,
-        True, natural_scale,
+        True, natural_scale, row_means, row_cov,
     )
     if status != 0:
         return status
@@ -458,54 +410,6 @@ cdef api int finite_natural_real_line_objective_c(
     if not isfinite(nll_out[0]):
         return _BAD_MASS
     return 0
-
-
-def evaluate_finite_log_probabilities_real_line(
-    const double[:, ::1] intervals,
-    const double[::1] q_poly,
-    double q_shift,
-    double shifted_log_Z,
-    double mode,
-    double log_coordinate_scale,
-    const double[::1] gl_nodes,
-    const double[::1] gl_log_weights,
-    double width_eps_mult,
-):
-    """Return finite-row log masses/densities for a natural real-line state.
-
-    This mass-only path is used by mixture E-steps, which do not need
-    conditional sufficient statistics.  It intentionally uses the same local
-    Gauss--Legendre rule and mode split as the interval M-step objective.
-    """
-    cdef Py_ssize_t R = intervals.shape[0]
-    cdef Py_ssize_t G = gl_nodes.shape[0]
-    cdef Py_ssize_t nq = q_poly.shape[0]
-    cdef int status
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] log_probability = np.empty(
-        R, dtype=np.float64
-    )
-    cdef double[::1] lp_view = log_probability
-    if intervals.shape[1] != 2:
-        raise ValueError("intervals must have shape (R, 2)")
-    if nq < 1 or G < 1 or gl_log_weights.shape[0] != G:
-        raise ValueError("potential and quadrature descriptors must be non-empty")
-    if R == 0:
-        return log_probability
-    with nogil:
-        status = _finite_logp_real_line(
-            R, G, nq, &intervals[0, 0], &q_poly[0], q_shift, shifted_log_Z,
-            mode, log_coordinate_scale, &gl_nodes[0], &gl_log_weights[0],
-            width_eps_mult, &lp_view[0],
-        )
-    if status == _BAD_ROW:
-        raise ValueError("finite objective rows must have ordered finite endpoints")
-    if status == _BAD_PANEL:
-        raise RuntimeError("finite interval quadrature panel is invalid")
-    if status == _BAD_POTENTIAL:
-        raise RuntimeError("finite interval potential is non-finite")
-    if status == _BAD_MASS:
-        raise RuntimeError("finite interval quadrature produced invalid mass")
-    return log_probability
 
 
 def evaluate_finite_objective(
@@ -664,6 +568,8 @@ def evaluate_finite_objective(
             work + P + P * P,
             natural_real_line,
             work + 2 * P + P * P,
+            NULL,
+            NULL,
         )
     free(work)
     if status == _BAD_ROW:
