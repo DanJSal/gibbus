@@ -871,7 +871,7 @@ class TestExtremeTailQuantiles:
         Boundary distances are evaluated directly in public coordinates, so
         points such as ``1e-100`` remain distinguishable from a lower endpoint
         at zero even though their internal affine coordinates round to the same
-        float.  Extreme quantiles should therefore keep moving towards the edge
+        float.  Extreme quantiles should therefore keep moving toward the edge
         instead of saturating around ``1e-16`` of the fitted scale.
         """
         c = Distribution().fit(

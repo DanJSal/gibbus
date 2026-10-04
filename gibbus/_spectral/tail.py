@@ -144,7 +144,7 @@ def tail_log_cdf(potential, x, endpoint, /, *, upper):
     # distances themselves are evaluated in public coordinates, so there is
     # no additional O(1)-internal-coordinate cancellation floor here.
     # Moving away from the mode, the potential must be rising; the
-    # gradient points back towards it.
+    # gradient points back toward it.
     slope = abs(dq)
     if not np.isfinite(q) or not np.isfinite(slope) or slope <= 0.0:
         return -np.inf
@@ -256,7 +256,7 @@ def _displacement_coordinate(potential, endpoint, direction, start, /):
     infinite tail the displacement is scaled by the local hazard length
     ``1 / |Q'(start)|``.  On a finite tail it is displacement in log-distance
     from the endpoint.  In both cases positive coordinate values move outward,
-    towards smaller tail mass.
+    toward smaller tail mass.
 
     Parameters
     ----------
