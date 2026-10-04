@@ -271,6 +271,18 @@ LOG_HALF: Final = -np.log(2.0)
 EXPECT_MAX_RELATIVE_ERROR: Final = 1e-8
 """Largest accepted relative quadrature error for public expectations."""
 
+EXPECT_EPSABS: Final = 1e-10
+"""Absolute error target shared by scalar and vectorized expectations."""
+
+EXPECT_EPSREL: Final = 1e-10
+"""Relative error target shared by scalar and vectorized expectations."""
+
+EXPECT_SCALAR_LIMIT: Final = 300
+"""Maximum QUADPACK subinterval count for scalar expectations."""
+
+EXPECT_VECTORIZED_LIMIT: Final = 4000
+"""Maximum adaptive panel count for vectorized expectations."""
+
 NARROW_LOG_MASS_GAP: Final = 1e-6
 """Log-probability gap below which interval mass is checked by quadrature."""
 
@@ -382,6 +394,31 @@ QUAD_EPSREL: Final = 1.49e-08
 QUAD_LIMIT: Final = 100
 """Maximum sub-interval limit passed to ``scipy.integrate.quad``."""
 
+TAIL_QUAD_EPSABS: Final = 1e-12
+"""Absolute tolerance for scaled relative-tail quadrature."""
+
+TAIL_QUAD_LIMIT: Final = 200
+"""Adaptive panel budget for scaled relative-tail quadrature."""
+
+# ---------------------------------------------------------------------------
+# Conic subproblems and curvature certification
+# ---------------------------------------------------------------------------
+
+CONIC_QP_GAP_TOL: Final = 1e-12
+"""Relative interior-point duality-gap target for Newton subproblems."""
+
+CONIC_QP_MAX_ITER: Final = 100
+"""Interior-point iteration budget per Newton subproblem."""
+
+CONIC_QP_STEP_FRACTION: Final = 0.99
+"""Fraction of the maximal feasible conic interior-point step."""
+
+CURVATURE_CERT_MAX_DEPTH: Final = 48
+"""Subdivision-depth budget for compiled full-curvature certification."""
+
+CURVATURE_CERT_MAX_LEAVES: Final = 4096
+"""Leaf budget before compiled full-curvature certification returns uncertain."""
+
 # ---------------------------------------------------------------------------
 # Moment cache
 # ---------------------------------------------------------------------------
@@ -458,6 +495,19 @@ so the same point-density singularity is absent.
 """
 
 # ---------------------------------------------------------------------------
+# Boundary selection and censored-likelihood bounds
+# ---------------------------------------------------------------------------
+
+BOUNDARY_ALPHA: Final = 0.05
+"""One-sided LR test level for retaining an automatic boundary term."""
+
+TURNBULL_MAX_ITER: Final = 5000
+"""Maximum EM iterations for the censored nonparametric likelihood bound."""
+
+TURNBULL_GAP_TOL: Final = 1e-13
+"""Frank-Wolfe gap threshold for the censored nonparametric likelihood bound."""
+
+# ---------------------------------------------------------------------------
 # Automatic component-count selection
 # ---------------------------------------------------------------------------
 
@@ -470,6 +520,15 @@ AUTO_K_MAX: Final = 10
 AUTO_GMM_N_INIT: Final = 5
 """Number of k-means++ restarts of the Gaussian-mixture initialization seed;
 the restart with the best average log likelihood is kept."""
+
+GMM_SEED_TOL: Final = 1e-3
+"""Average-log-likelihood stopping tolerance for Gaussian seed EM."""
+
+GMM_SEED_MAX_ITER: Final = 100
+"""Maximum EM iterations per Gaussian initialization seed."""
+
+GMM_SEED_VARIANCE_FLOOR: Final = 1e-6
+"""Additive variance floor for Gaussian initialization seed components."""
 
 GMM_SEED_MAX_POINTS: Final = 2000
 """Largest sample the GMM initialization seed is fitted on.  Larger samples
@@ -488,6 +547,9 @@ AUTO_KDE_BW_HI: Final = 3.0
 AUTO_KDE_BW_STEPS: Final = 15
 """Number of log-spaced bandwidth multipliers evaluated by the KDE
 mode-counting sweep."""
+
+AUTO_KDE_GRID_MARGIN: Final = 0.1
+"""Fraction of the sample range added at each end of the KDE mode-count grid."""
 
 AUTO_KDE_GRID_POINTS: Final = 2048
 """Number of equally spaced grid points on which each KDE is evaluated

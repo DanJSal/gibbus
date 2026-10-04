@@ -82,7 +82,7 @@ def _q_eval(x, support, poly, boundary_amplitudes, order, /):
     poly : array_like, shape (d+1,)
         Polynomial coefficients, constant term first. For derivative order
         *n*, pass the *n*-times-differentiated polynomial.
-    boundary_amplitudes : array_like, shape (2,)
+    boundary_amplitudes : numpy.ndarray, shape (2,), dtype float64
         Canonical lower/upper zero-offset log amplitudes ``[aL, aU]``.
         ``NaN`` or zero denotes an inactive side.
     order : int
@@ -95,10 +95,7 @@ def _q_eval(x, support, poly, boundary_amplitudes, order, /):
         terms are suppressed; callers mask out-of-support values as needed.
     """
     Lx, Ux = map(float, support)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if amps.size != 2:
-        raise ValueError("boundary_amplitudes must have length 2")
-    aL, aU = map(float, amps)
+    aL, aU = boundary_amplitudes
 
     xx = np.asarray(x, dtype=np.float64)
     scalar = xx.ndim == 0

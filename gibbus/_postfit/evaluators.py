@@ -128,7 +128,6 @@ def _stirling1(n):
     tuple of float
         ``(s(n,0), s(n,1), ..., s(n,n))``.
     """
-    n = int(n)
     s = [0.0] * (n + 1)
     s[0] = 1.0
     for m in range(1, n + 1):
@@ -167,28 +166,20 @@ def _potential_exp_from_x_potential(pot_x):
 
         Parameters
         ----------
-        y : float or array_like
-            Evaluation point(s).  Non-positive values return ``inf``
+        y : numpy.ndarray, dtype float64
+            Boundary-prepared points. Non-positive values return ``inf``
             (for ``n == 0``) or ``nan`` (for ``n >= 1``).
         n : int
-            Derivative order (``>= 0``).
+            Boundary-validated derivative order (``>= 0``).
 
         Returns
         -------
         float or numpy.ndarray
 
-        Raises
-        ------
-        ValueError
-            If *n* is negative.
     """
 
     def pot_y(y, n):
-        n = int(n)
-        if n < 0:
-            raise ValueError("n must be >= 0")
-
-        yy = np.asarray(y, dtype=np.float64)
+        yy = y
         scalar = yy.ndim == 0
 
         out = np.empty_like(yy, dtype=np.float64)
@@ -266,41 +257,34 @@ def _potential_oriented_affine_eval(
 
     Parameters
     ----------
-    x : float or array_like
-        Public-coordinate evaluation points.
-    support : array_like, shape (2,)
-        Public lower/upper support.
+    x : numpy.ndarray, dtype float64
+        Boundary-prepared public-coordinate evaluation points.
+    support : numpy.ndarray, shape (2,), dtype float64
+        Canonical public lower/upper support.
     mu_eff, sigma_eff : float
         Effective affine parameters satisfying ``z = sigma_eff*x + mu_eff``.
         ``sigma_eff`` may be negative for a reflected upper half-line.
     q_poly : array_like
         Normalized canonical polynomial-potential coefficients.
-    boundary_amplitudes : array_like, shape (2,)
-        Physical lower/upper zero-offset log amplitudes.
+    boundary_amplitudes : numpy.ndarray, shape (2,), dtype float64
+        Canonical physical lower/upper zero-offset log amplitudes.
     n : int
-        Derivative order.
+        Boundary-validated nonnegative derivative order.
 
     Returns
     -------
     float or numpy.ndarray
         Potential or derivative in public coordinates.
     """
-    n = int(n)
-    if n < 0:
-        raise ValueError("n must be >= 0")
-    xx = np.asarray(x, dtype=np.float64)
+    xx = x
     scalar = xx.ndim == 0
-    support = np.asarray(support, dtype=np.float64)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if amps.size != 2:
-        raise ValueError("boundary_amplitudes must have length 2")
-    L, U = map(float, support)
-    aL, aU = map(float, amps)
-    sig = float(sigma_eff)
+    L, U = support
+    aL, aU = boundary_amplitudes
+    sig = sigma_eff
     jac = abs(sig)
     if not np.isfinite(jac) or jac <= 0.0:
         raise ValueError("effective affine scale must be finite and nonzero")
-    mu = float(mu_eff)
+    mu = mu_eff
 
     mask = np.isfinite(xx)
     if np.isfinite(L):

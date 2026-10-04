@@ -4,12 +4,15 @@ import numpy as np
 import pytest
 
 from gibbus._fit.conic_qp import _support_representation
+from gibbus._fit.degree import _DegreeSelectionConfig
 from gibbus._fit.natural_mixture import (
     _CompiledJointMixture,
     _ComponentProblem,
     _continue_natural_mixture,
     _degree_probe_problems,
+    _EMOptions,
     _fit_natural_mixture,
+    _MixtureSearchOptions,
     _run_natural_em,
 )
 
@@ -78,7 +81,15 @@ def test_all_shared_phases_use_coupled_solver_and_matching_certificates(
     monkeypatch.setattr(_ComponentProblem, "fit", independent_fit)
     monkeypatch.setattr(_ComponentProblem, "fit_compact", independent_fit)
     fit = _run_natural_em(
-        (0, 1), rows, 4, True, True, w, r, max_em_steps=4, max_rounds=3
+        (0, 1),
+        rows,
+        (4, 4),
+        True,
+        True,
+        w,
+        r,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=4, max_rounds=3),
     )
     _assert_matching_fit(fit, rows, w)
     assert fit.n_parameters == 11
@@ -91,7 +102,15 @@ def test_global_zero_faces_are_exact_and_released_by_joint_refits():
     r = np.column_stack((x < np.median(x), x >= np.median(x))).astype(float)
     w = np.full(x.size, 1 / x.size)
     fit = _run_natural_em(
-        (0, 1), rows, 2, True, True, w, r, max_em_steps=3, max_rounds=3
+        (0, 1),
+        rows,
+        (2, 2),
+        True,
+        True,
+        w,
+        r,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=3, max_rounds=3),
     )
     _assert_matching_fit(fit, rows, w)
     for component in fit.components:
@@ -106,7 +125,15 @@ def test_global_zero_faces_are_exact_and_released_by_joint_refits():
     # the observations change. The continuation must actually optimize its release.
     changed = np.r_[rng.beta(3, 9, 90), rng.beta(9, 3, 90)][:, None]
     released = _continue_natural_mixture(
-        fit, (0, 1), changed, (2, 2), True, True, w, max_em_steps=4, max_rounds=3
+        fit,
+        (0, 1),
+        changed,
+        (2, 2),
+        True,
+        True,
+        w,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=4, max_rounds=3),
     )
     _assert_matching_fit(released, changed, w)
     assert any(released.components[0].params[-2:] > 0.1)
@@ -115,7 +142,15 @@ def test_global_zero_faces_are_exact_and_released_by_joint_refits():
 def test_degree_probe_and_continuation_preserve_fixed_coordinates():
     rows, r, w = _sample()
     fit = _run_natural_em(
-        (0, 1), rows, 2, True, True, w, r, max_em_steps=3, max_rounds=3
+        (0, 1),
+        rows,
+        (2, 2),
+        True,
+        True,
+        w,
+        r,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=3, max_rounds=3),
     )
     problems, layouts, params = _degree_probe_problems(fit, rows, w, (4, 2))
     for old, problem, layout, theta in zip(
@@ -138,8 +173,8 @@ def test_degree_probe_and_continuation_preserve_fixed_coordinates():
         True,
         w,
         initial_fit=fit,
-        max_em_steps=3,
-        max_rounds=3,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=3, max_rounds=3),
     )
     _assert_matching_fit(lifted, rows, w)
     assert lifted.log_likelihood >= fit.log_likelihood - 1e-10
@@ -159,11 +194,19 @@ def test_single_automatic_warmstart_reselects_degree(intervals):
         (-np.inf, np.inf),
         rows,
         1,
-        "auto",
+        ("auto",),
+        degree_config=_DegreeSelectionConfig(),
         responsibilities=np.ones((len(rows), 1)),
-        paths=(("direct", "raw"),),
+        search_options=_MixtureSearchOptions(paths=(("direct", "raw"),)),
     )
-    warm = _fit_natural_mixture((-np.inf, np.inf), rows, 1, "auto", initial_fit=cold)
+    warm = _fit_natural_mixture(
+        (-np.inf, np.inf),
+        rows,
+        1,
+        ("auto",),
+        initial_fit=cold,
+        degree_config=_DegreeSelectionConfig(),
+    )
     assert cold.components[0].spec.requested_poly_degree == 4
     assert warm.components[0].spec.requested_poly_degree == 4
     assert warm.components[0].coordinate == cold.components[0].coordinate
@@ -180,19 +223,27 @@ def test_infinite_censoring_releases_shared_physical_upper_after_reflection():
     rows = np.column_stack((np.floor(x * 5) / 5, np.floor(x * 5) / 5 + 0.2))
     rows[rows[:, 0] > 9, 1] = np.inf
     lower = _run_natural_em(
-        (0, np.inf), rows, 2, True, False, w, r, max_em_steps=4, max_rounds=3
+        (0, np.inf),
+        rows,
+        (2, 2),
+        True,
+        False,
+        w,
+        r,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=4, max_rounds=3),
     )
     reflected_rows = -rows[:, ::-1]
     upper = _run_natural_em(
         (-np.inf, 0),
         reflected_rows,
-        2,
+        (2, 2),
         False,
         True,
         w,
         r,
-        max_em_steps=4,
-        max_rounds=3,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=4, max_rounds=3),
     )
     _assert_matching_fit(lower, rows, w)
     _assert_matching_fit(upper, reflected_rows, w)
@@ -204,12 +255,20 @@ def test_infinite_censoring_releases_shared_physical_upper_after_reflection():
 def test_boundary_policy_warmstarts_preserve_coordinates_across_basis_changes():
     rows, r, w = _sample()
     fit = _run_natural_em(
-        (0, 1), rows, 2, True, True, w, r, max_em_steps=3, max_rounds=3
+        (0, 1),
+        rows,
+        (2, 2),
+        True,
+        True,
+        w,
+        r,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=3, max_rounds=3),
     )
     coordinates = [component.coordinate for component in fit.components]
     for lower, upper, degree in (
         (False, True, (2, 2)),
-        (False, True, "auto"),
+        (False, True, ("auto", "auto")),
         (False, False, (2, 2)),
     ):
         fit = _fit_natural_mixture(
@@ -221,8 +280,8 @@ def test_boundary_policy_warmstarts_preserve_coordinates_across_basis_changes():
             upper,
             w,
             initial_fit=fit,
-            max_em_steps=3,
-            max_rounds=3,
+            degree_config=_DegreeSelectionConfig(),
+            em_options=_EMOptions(max_steps=3, max_rounds=3),
         )
         _assert_matching_fit(fit, rows, w)
         assert [component.coordinate for component in fit.components] == coordinates
@@ -239,25 +298,25 @@ def test_subsample_warmstart_recomputes_full_data_posteriors(intervals):
     screened = _run_natural_em(
         (0, 1),
         rows[subset],
-        4,
+        (4, 4),
         True,
         True,
         sample_weights,
         r[subset],
-        max_em_steps=3,
-        max_rounds=3,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=3, max_rounds=3),
     )
     fit = _fit_natural_mixture(
         (0, 1),
         rows,
         2,
-        "auto",
+        ("auto", "auto"),
         True,
         True,
         w,
+        degree_config=_DegreeSelectionConfig(),
         initial_fit=screened,
-        max_em_steps=3,
-        max_rounds=3,
+        em_options=_EMOptions(max_steps=3, max_rounds=3),
     )
     _assert_matching_fit(fit, rows, w)
     assert fit.responsibilities.shape == r.shape
@@ -272,6 +331,15 @@ def test_subsample_warmstart_recomputes_full_data_posteriors(intervals):
 def test_invalid_trial_covariance_backtracks_without_scaling_overflow():
     rng = np.random.default_rng(5)
     x = np.r_[rng.gamma(3, 0.5, 150), rng.normal(8, 1, 150)]
-    fit = _fit_natural_mixture((0, np.inf), x, 2, 4, True, False, rng=0)
+    fit = _fit_natural_mixture(
+        (0, np.inf),
+        x[:, None],
+        2,
+        (4, 4),
+        True,
+        False,
+        rng=0,
+        degree_config=_DegreeSelectionConfig(),
+    )
     assert fit.status in ("converged", "converged_approximately")
     assert fit.separator_certified

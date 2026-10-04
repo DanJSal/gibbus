@@ -1290,7 +1290,14 @@ cdef class DensitySpec:
         self.d.par = &pv[0]
 
     def pdf(self, x):
-        """Evaluate the described density (for tests)."""
+        """Evaluate the described density (for tests).
+
+        Parameters
+        ----------
+        x : array_like
+            Points in the density description's coordinate space. The result
+            is flattened in input order.
+        """
         xs = np.ascontiguousarray(x, dtype=np.float64).reshape(-1)
         out = np.empty_like(xs)
         cdef double[::1] xv = xs
@@ -1370,6 +1377,9 @@ def build_cdf(
     cdef double mults[7]
     cdef double* work = NULL
     cdef int* depths = NULL
+    cdef double[:, ::1] pv, cv, icv
+    cdef int[:, ::1] iv
+    cdef CPanel* p
     mults[:] = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
     _tab_from(tables, &t)
     if maxdeg + 2 > _MAXN or 2 * maxdeg + 3 > 150:
@@ -1392,68 +1402,69 @@ def build_cdf(
         free(work)
         free(depths)
         raise MemoryError("spectral CDF workspace")
-    o.degrees = &degrees[0]
-    o.n_degrees = degrees.shape[0]
-    o.rel_tol = rel_tol
-    o.abs_tol = abs_tol
-    o.coeff_tol = coeff_tol
-    o.max_depth = max_depth
-    o.max_panels = max_panels
-    mp.kind = map_kind
-    mp.L = L
-    mp.U = U
-    mp.center = center
-    mp.scale = scale
-    with nogil:
-        if choose_scale:
-            for i in range(7):
-                sc = s0 * mults[i]
-                if sc < _TINY:
-                    sc = _TINY
-                mp.scale = sc
-                trial = _trial_score(&density.d, &mp, &t, maxdeg)
-                if i == 0 or trial < best_score:
-                    best_score = trial
-                    best_s = sc
-            mp.scale = best_s
-        _build_partition(
-            &density.d, &mp, &t, &o, &bd, &breaks[0], breaks.shape[0], work, depths
-        )
-        fixed = _recertify(&density.d, &mp, &t, &bd)
-    m = bd.n_leaves
-    panels = np.empty((m, 7), dtype=np.float64)
-    ints = np.empty((m, 3), dtype=np.int32)
-    coeff = np.zeros((m, bd.S), dtype=np.float64)
-    icoeff = np.zeros((m, bd.S + 1), dtype=np.float64)
-    cdef double[:, ::1] pv = panels
-    cdef int[:, ::1] iv = ints
-    cdef double[:, ::1] cv = coeff
-    cdef double[:, ::1] icv = icoeff
-    cdef CPanel* p
-    for j in range(m):
-        r = bd.leaf[j]
-        p = &bd.rec[r]
-        pv[j, 0] = p.a
-        pv[j, 1] = p.b
-        pv[j, 2] = p.mass
-        pv[j, 3] = p.fit_error
-        pv[j, 4] = p.error_mass
-        pv[j, 5] = p.tail_ratio
-        pv[j, 6] = p.lift
-        iv[j, 0] = p.depth
-        iv[j, 1] = p.certified
-        iv[j, 2] = p.ncoeff
-        for i in range(p.ncoeff):
-            cv[j, i] = bd.coeff[r * bd.S + i]
-        for i in range(p.ncoeff + 1):
-            icv[j, i] = bd.icoeff[r * (bd.S + 1) + i]
-    exhausted = bd.exhausted
-    free(bd.leaf)
-    free(bd.rec)
-    free(bd.coeff)
-    free(bd.icoeff)
-    free(work)
-    free(depths)
+    try:
+        o.degrees = &degrees[0]
+        o.n_degrees = degrees.shape[0]
+        o.rel_tol = rel_tol
+        o.abs_tol = abs_tol
+        o.coeff_tol = coeff_tol
+        o.max_depth = max_depth
+        o.max_panels = max_panels
+        mp.kind = map_kind
+        mp.L = L
+        mp.U = U
+        mp.center = center
+        mp.scale = scale
+        with nogil:
+            if choose_scale:
+                for i in range(7):
+                    sc = s0 * mults[i]
+                    if sc < _TINY:
+                        sc = _TINY
+                    mp.scale = sc
+                    trial = _trial_score(&density.d, &mp, &t, maxdeg)
+                    if i == 0 or trial < best_score:
+                        best_score = trial
+                        best_s = sc
+                mp.scale = best_s
+            _build_partition(
+                &density.d, &mp, &t, &o, &bd, &breaks[0], breaks.shape[0], work, depths
+            )
+            fixed = _recertify(&density.d, &mp, &t, &bd)
+        m = bd.n_leaves
+        panels = np.empty((m, 7), dtype=np.float64)
+        ints = np.empty((m, 3), dtype=np.int32)
+        coeff = np.zeros((m, bd.S), dtype=np.float64)
+        icoeff = np.zeros((m, bd.S + 1), dtype=np.float64)
+        pv = panels
+        iv = ints
+        cv = coeff
+        icv = icoeff
+        for j in range(m):
+            r = bd.leaf[j]
+            p = &bd.rec[r]
+            pv[j, 0] = p.a
+            pv[j, 1] = p.b
+            pv[j, 2] = p.mass
+            pv[j, 3] = p.fit_error
+            pv[j, 4] = p.error_mass
+            pv[j, 5] = p.tail_ratio
+            pv[j, 6] = p.lift
+            iv[j, 0] = p.depth
+            iv[j, 1] = p.certified
+            iv[j, 2] = p.ncoeff
+            for i in range(p.ncoeff):
+                cv[j, i] = bd.coeff[r * bd.S + i]
+            for i in range(p.ncoeff + 1):
+                icv[j, i] = bd.icoeff[r * (bd.S + 1) + i]
+        exhausted = bd.exhausted
+    finally:
+        free(bd.leaf)
+        free(bd.rec)
+        free(bd.coeff)
+        free(bd.icoeff)
+        free(work)
+        free(depths)
     return mp.scale, panels, ints, coeff, icoeff, bool(exhausted), fixed
 
 
@@ -1485,6 +1496,39 @@ def build_ppf(
 ):
     """Build the monotone spectral inverse (``SpectralPPF`` construction).
 
+    Parameters
+    ----------
+    density : DensitySpec
+        Prepared component or mixture density description.
+    tables : Tables
+        Cached interpolation, validation and quadrature tables.
+    map_kind : int
+        Compact-coordinate map code shared with the source CDF.
+    L, U : float
+        Physical support bounds.
+    center, scale : float
+        Source CDF map's center and positive scale.
+    breaks, offsets, cum : contiguous float64 buffers
+        Packed source evaluator breaks, offsets and cumulative masses.
+    ev_coeffs, ev_ncoeff : contiguous buffers
+        Source CDF evaluator coefficients and valid coefficient counts.
+    a, b : contiguous float64 buffers
+        Compact-coordinate bounds of the source panels.
+    icoeff, nicoeff : contiguous buffers
+        Padded source antiderivative coefficients and valid lengths.
+    total : float
+        Positive source CDF total mass.
+    seed_src, seed : contiguous buffers
+        Source-panel indices and the corresponding inverse-panel seed bounds.
+    degrees : contiguous integer buffer
+        Increasing candidate Chebyshev degrees supported by the cached tables.
+    prob_tol : float
+        Maximum accepted inverse probability residual.
+    max_depth, max_panels : int
+        Subdivision-depth and leaf-panel budgets.
+    certify_subdivide : int
+        Bernstein subdivision depth for derivative positivity certification.
+
     Returns
     -------
     tuple
@@ -1505,6 +1549,9 @@ def build_ppf(
     cdef int i, j, r, m, nrec_cap, status = 0, ms = certify_subdivide
     cdef double* work = NULL
     cdef int* depths = NULL
+    cdef double[:, ::1] pv, cv
+    cdef int[:, ::1] iv
+    cdef IPanel* p
     if 2 * maxdeg + 5 > 150 or maxdeg + 2 > _MAXN:
         raise ValueError("degree options exceed the compiled table size")
     _tab_from(tables, &t)
@@ -1553,44 +1600,56 @@ def build_ppf(
         free(work)
         free(depths)
         raise MemoryError("spectral PPF workspace")
-    with nogil:
-        status = _ppf_partition(&density.d, &mp, &t, &o, &ev, &bd, n_seed, &seed_src[0],
-                                &seed[0, 0], work, depths)
-    if status == 0:
-        order = [bd.leaf[j] for j in range(bd.n_leaves)]
-    else:
-        order = list(range(bd.n_rec))
-    m = len(order)
-    panels = np.empty((m, 11), dtype=np.float64)
-    ints = np.empty((m, 3), dtype=np.int32)
-    coeff = np.zeros((m, bd.S), dtype=np.float64)
-    cdef double[:, ::1] pv = panels
-    cdef int[:, ::1] iv = ints
-    cdef double[:, ::1] cv = coeff
-    cdef IPanel* p
-    for j in range(m):
-        r = order[j]
-        p = &bd.rec[r]
-        pv[j, 0] = p.ra
-        pv[j, 1] = p.rb
-        pv[j, 2] = p.pa
-        pv[j, 3] = p.pb
-        pv[j, 4] = p.za
-        pv[j, 5] = p.zb
-        pv[j, 6] = p.fit_error
-        pv[j, 7] = p.logit_residual
-        pv[j, 8] = p.prob_residual
-        pv[j, 9] = p.tail_abs
-        pv[j, 10] = p.derivative_lower
-        iv[j, 0] = p.depth
-        iv[j, 1] = p.source
-        iv[j, 2] = p.ncoeff
-        for i in range(p.ncoeff):
-            cv[j, i] = bd.coeff[r * bd.S + i]
-    detail = bd.fail_rec if status != 0 else 0
-    free(bd.leaf)
-    free(bd.rec)
-    free(bd.coeff)
-    free(work)
-    free(depths)
+    try:
+        with nogil:
+            status = _ppf_partition(
+                &density.d,
+                &mp,
+                &t,
+                &o,
+                &ev,
+                &bd,
+                n_seed,
+                &seed_src[0],
+                &seed[0, 0],
+                work,
+                depths,
+            )
+        if status == 0:
+            order = [bd.leaf[j] for j in range(bd.n_leaves)]
+        else:
+            order = list(range(bd.n_rec))
+        m = len(order)
+        panels = np.empty((m, 11), dtype=np.float64)
+        ints = np.empty((m, 3), dtype=np.int32)
+        coeff = np.zeros((m, bd.S), dtype=np.float64)
+        pv = panels
+        iv = ints
+        cv = coeff
+        for j in range(m):
+            r = order[j]
+            p = &bd.rec[r]
+            pv[j, 0] = p.ra
+            pv[j, 1] = p.rb
+            pv[j, 2] = p.pa
+            pv[j, 3] = p.pb
+            pv[j, 4] = p.za
+            pv[j, 5] = p.zb
+            pv[j, 6] = p.fit_error
+            pv[j, 7] = p.logit_residual
+            pv[j, 8] = p.prob_residual
+            pv[j, 9] = p.tail_abs
+            pv[j, 10] = p.derivative_lower
+            iv[j, 0] = p.depth
+            iv[j, 1] = p.source
+            iv[j, 2] = p.ncoeff
+            for i in range(p.ncoeff):
+                cv[j, i] = bd.coeff[r * bd.S + i]
+        detail = bd.fail_rec if status != 0 else 0
+    finally:
+        free(bd.leaf)
+        free(bd.rec)
+        free(bd.coeff)
+        free(work)
+        free(depths)
     return int(status), panels, ints, coeff, int(detail)

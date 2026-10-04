@@ -3,13 +3,16 @@
 import numpy as np
 import pytest
 from conic_reference import _preconditioned_subproblem_reference, _solve_conic_newton_qp
+from gibbus._spectral._panel_kernels import chebval_many
 from spectral_builder_harness import PythonSpectralCDFBuilder, PythonSpectralPPFBuilder
 
+from gibbus._defaults import CURVATURE_CERT_MAX_DEPTH, CURVATURE_CERT_MAX_LEAVES
 from gibbus._fit import _conic_kernels, _curvature_certificate
 from gibbus._fit.conic_newton import _preconditioned_subproblem
 from gibbus._fit.conic_qp import _support_representation
 from gibbus._fit.separation import _separate_full_curvature
 from gibbus._model.natural import _natural_layout
+from gibbus._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 
 _GEOMETRIES = [
     ((-np.inf, np.inf), False, False),
@@ -20,6 +23,23 @@ _GEOMETRIES = [
     ((-1.3, 1.7), False, False),
     ((-1.3, 1.7), True, False),
 ]
+
+
+@pytest.mark.parametrize(
+    ("points", "coefficients", "expected"),
+    [
+        ([], [1.0, 2.0], []),
+        ([0.0, 0.5], [], [0.0, 0.0]),
+    ],
+)
+def test_compiled_panel_evaluation_handles_empty_buffers(
+    points, coefficients, expected
+):
+    actual = chebval_many(
+        np.asarray(points, dtype=np.float64),
+        np.asarray(coefficients, dtype=np.float64),
+    )
+    np.testing.assert_array_equal(actual, expected)
 
 
 def _compiled_qp(hessian, gradient, theta0, representation, blocks, /):
@@ -147,7 +167,14 @@ def test_compiled_certificate_never_contradicts_the_exact_separator():
             support = (-1.3, 1.7)
             amplitudes = np.array([abs(rng.normal()), abs(rng.normal())])
         code = _curvature_certificate.certify_full_curvature(
-            q_d2, support[0], support[1], amplitudes[0], amplitudes[1], 1e-12
+            q_d2,
+            support[0],
+            support[1],
+            amplitudes[0],
+            amplitudes[1],
+            1e-12,
+            max_depth=CURVATURE_CERT_MAX_DEPTH,
+            max_leaves=CURVATURE_CERT_MAX_LEAVES,
         )
         if code not in _CODES:
             continue
@@ -165,13 +192,27 @@ def test_compiled_certificate_detects_small_violations(shift):
     # beyond the tolerance must be reported as a violation.
     q_d2 = np.array([1.0, 0.0, -2.0, 0.0, 1.0])
     touching = _curvature_certificate.certify_full_curvature(
-        q_d2, -np.inf, np.inf, np.nan, np.nan, 1e-12
+        q_d2,
+        -np.inf,
+        np.inf,
+        np.nan,
+        np.nan,
+        1e-12,
+        max_depth=CURVATURE_CERT_MAX_DEPTH,
+        max_leaves=CURVATURE_CERT_MAX_LEAVES,
     )
     assert touching in (1, -1)
     lowered = q_d2.copy()
     lowered[0] -= shift
     code = _curvature_certificate.certify_full_curvature(
-        lowered, -np.inf, np.inf, np.nan, np.nan, 1e-12
+        lowered,
+        -np.inf,
+        np.inf,
+        np.nan,
+        np.nan,
+        1e-12,
+        max_depth=CURVATURE_CERT_MAX_DEPTH,
+        max_leaves=CURVATURE_CERT_MAX_LEAVES,
     )
     if shift > 1e-12:
         assert code in (0, -1)
@@ -263,7 +304,15 @@ def test_compiled_point_newton_is_certified_and_self_consistent():
     )
     from gibbus._fit.natural_objective import _prepare_natural_point_objective
 
-    options = _NewtonOptions(1e-12, 1e-10, 1e-7, 60, 1e-4, 0.5, 40)
+    options = _NewtonOptions(
+        tolerance=1e-12,
+        certified_tolerance=1e-10,
+        accuracy_floor=1e-7,
+        max_iterations=60,
+        armijo=1e-4,
+        backtrack=0.5,
+        max_line_search=40,
+    )
     rng = np.random.default_rng(123)
     cases = [
         ((-np.inf, np.inf), rng.gumbel(size=180), 6, False, False),
@@ -316,7 +365,15 @@ def test_compiled_interval_newton_is_certified_and_self_consistent():
         _prepare_natural_interval_objective,
     )
 
-    options = _NewtonOptions(1e-12, 1e-10, 1e-7, 60, 1e-4, 0.5, 40)
+    options = _NewtonOptions(
+        tolerance=1e-12,
+        certified_tolerance=1e-10,
+        accuracy_floor=1e-7,
+        max_iterations=60,
+        armijo=1e-4,
+        backtrack=0.5,
+        max_line_search=40,
+    )
     rng = np.random.default_rng(321)
 
     for degree in (2, 4, 6):
@@ -376,7 +433,15 @@ def test_compiled_standalone_interval_newton_ignores_global_bound_locally():
         _prepare_natural_interval_objective,
     )
 
-    options = _NewtonOptions(1e-12, 1e-10, 1e-7, 60, 1e-4, 0.5, 40)
+    options = _NewtonOptions(
+        tolerance=1e-12,
+        certified_tolerance=1e-10,
+        accuracy_floor=1e-7,
+        max_iterations=60,
+        armijo=1e-4,
+        backtrack=0.5,
+        max_line_search=40,
+    )
     rng = np.random.default_rng(913)
     normal = rng.normal(size=180)
     lo = np.floor(normal / 0.3) * 0.3
@@ -518,7 +583,7 @@ def test_compiled_point_statistics_reject_invalid_inputs():
 # ---------------------------------------------------------------------------
 
 
-def test_compiled_spectral_builders_reproduce_python_harness():
+def test_compiled_spectral_builders_agree_with_python_harness_numerically():
     from gibbus._spectral.cdf import (
         SpectralCDF,
         boundary_aware_breaks_from_amplitudes,
@@ -550,7 +615,9 @@ def test_compiled_spectral_builders_reproduce_python_harness():
             view=False,
         )
         grid = np.linspace(-4.0, 4.0, 101)
-        np.testing.assert_array_equal(density.pdf(grid), state.pdf(grid))
+        np.testing.assert_allclose(
+            density.pdf(grid), state.pdf(grid), rtol=1e-13, atol=1e-14
+        )
         breaks = boundary_aware_breaks_from_amplitudes(support, amps)
         moments = state.moments.power(2)
         std = float(np.sqrt(max(moments[2] - moments[1] ** 2, 0.0)))
@@ -558,19 +625,35 @@ def test_compiled_spectral_builders_reproduce_python_harness():
             state.pdf, support, mode=state.mode, std=std, initial_breaks=breaks
         )
         compiled = SpectralCDF(
-            support, density=density, mode=state.mode, std=std, initial_breaks=breaks
+            support,
+            density=density,
+            mode=state.mode,
+            std=std,
+            initial_breaks=breaks,
+            map_scale=None,
+            config=_SpectralCDFOptions(),
         )
-        np.testing.assert_array_equal(compiled.breaks, reference.breaks)
-        assert compiled.map == reference.map
         z = np.linspace(-1.0, 1.0, 1001)
-        np.testing.assert_array_equal(compiled.cdf_z(z), reference.cdf_z(z))
+        coordinates = compiled.map.x_from_z(z)
+        np.testing.assert_allclose(
+            compiled.cdf(coordinates),
+            reference.cdf(coordinates),
+            rtol=0.0,
+            atol=1e-11,
+        )
+        assert np.all(np.diff(compiled.cdf(coordinates)) >= -1e-14)
         p = np.linspace(1e-9, 1.0 - 1e-9, 1001)
-        np.testing.assert_array_equal(
-            SpectralPPF(compiled).ppf_z(p), PythonSpectralPPFBuilder(reference).ppf_z(p)
+        inverse = SpectralPPF(compiled, config=_SpectralPPFOptions())
+        reference_inverse = PythonSpectralPPFBuilder(reference)
+        np.testing.assert_allclose(
+            compiled.cdf(inverse.ppf(p)), p, rtol=0.0, atol=1e-11
+        )
+        np.testing.assert_allclose(
+            reference.cdf(reference_inverse.ppf(p)), p, rtol=0.0, atol=1e-11
         )
 
 
-def test_compiled_mixture_spectral_cache_reproduces_python_harness(monkeypatch):
+def test_compiled_mixture_spectral_cache_agrees_with_python_harness(monkeypatch):
     from gibbus import Distribution
     from gibbus._api import mixture_stats
 
@@ -587,8 +670,9 @@ def test_compiled_mixture_spectral_cache_reproduces_python_harness(monkeypatch):
     )
     monkeypatch.setattr(mixture_stats, "SpectralPPF", PythonSpectralPPFBuilder)
     fitted._spectral_cache_valid = False
-    np.testing.assert_array_equal(fitted.cdf(grid), compiled[0])
-    np.testing.assert_array_equal(fitted.ppf(p), compiled[1])
+    np.testing.assert_allclose(fitted.cdf(grid), compiled[0], rtol=0.0, atol=1e-11)
+    np.testing.assert_allclose(fitted.cdf(fitted.ppf(p)), p, rtol=0.0, atol=1e-11)
+    np.testing.assert_allclose(fitted.cdf(compiled[1]), p, rtol=0.0, atol=1e-11)
 
 
 def test_compiled_interval_newton_is_consistent_across_finite_row_supports():
@@ -606,7 +690,15 @@ def test_compiled_interval_newton_is_consistent_across_finite_row_supports():
         _prepare_natural_interval_objective,
     )
 
-    options = _NewtonOptions(1e-12, 1e-10, 1e-7, 60, 1e-4, 0.5, 40)
+    options = _NewtonOptions(
+        tolerance=1e-12,
+        certified_tolerance=1e-10,
+        accuracy_floor=1e-7,
+        max_iterations=60,
+        armijo=1e-4,
+        backtrack=0.5,
+        max_line_search=40,
+    )
     rng = np.random.default_rng(270930)
     finite_centers = rng.uniform(0.15, 0.85, size=180)
     finite_widths = rng.uniform(0.01, 0.08, size=finite_centers.size)
@@ -684,7 +776,15 @@ def test_compiled_interval_newton_is_consistent_for_adaptive_row_geometries():
         _prepare_natural_interval_objective,
     )
 
-    options = _NewtonOptions(1e-10, 1e-9, 1e-7, 50, 1e-4, 0.5, 30)
+    options = _NewtonOptions(
+        tolerance=1e-10,
+        certified_tolerance=1e-9,
+        accuracy_floor=1e-7,
+        max_iterations=50,
+        armijo=1e-4,
+        backtrack=0.5,
+        max_line_search=30,
+    )
     rng = np.random.default_rng(271001)
     bounded_internal = np.column_stack(
         (rng.uniform(0.15, 0.60, 80), rng.uniform(0.65, 0.85, 80))

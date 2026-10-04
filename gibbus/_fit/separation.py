@@ -307,11 +307,11 @@ def _curvature_polynomials(q_d2, support, boundary_amplitudes, /):
         or a finite amplitude is supplied for an infinite endpoint.
     """
     p = _trim_exact(q_d2)
-    bounds = np.asarray(support, dtype=np.float64).reshape(-1)
-    amplitudes = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if bounds.size != 2 or np.any(np.isnan(bounds)) or not bounds[0] < bounds[1]:
+    bounds = support
+    amplitudes = boundary_amplitudes
+    if len(bounds) != 2 or np.any(np.isnan(bounds)) or not bounds[0] < bounds[1]:
         raise ValueError("support must contain two increasing non-NaN endpoints")
-    if amplitudes.size != 2:
+    if len(amplitudes) != 2:
         raise ValueError("boundary_amplitudes must have length 2")
 
     lower, upper = map(float, bounds)
@@ -382,11 +382,11 @@ def _exact_curvature_polynomials(q_d2, support, boundary_amplitudes, /):
         Lower/upper logarithmic amplitudes; ``nan`` when absent.
     """
     p_float = _trim_exact(q_d2)
-    bounds = np.asarray(support, dtype=np.float64).reshape(-1)
-    amplitudes = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if bounds.size != 2 or np.any(np.isnan(bounds)) or not bounds[0] < bounds[1]:
+    bounds = support
+    amplitudes = boundary_amplitudes
+    if len(bounds) != 2 or np.any(np.isnan(bounds)) or not bounds[0] < bounds[1]:
         raise ValueError("support must contain two increasing non-NaN endpoints")
-    if amplitudes.size != 2:
+    if len(amplitudes) != 2:
         raise ValueError("boundary_amplitudes must have length 2")
 
     lower, upper = map(float, bounds)
@@ -535,8 +535,8 @@ def _curvature_boundary_values(q_d2, support, boundary_amplitudes, /):
     """
     cleared = _curvature_polynomials(q_d2, support, boundary_amplitudes)
     p = _trim_exact(q_d2)
-    bounds = np.asarray(support, dtype=np.float64).reshape(-1)
-    amplitudes = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
+    bounds = support
+    amplitudes = boundary_amplitudes
     lower, upper = map(float, bounds)
     a_lower, a_upper = map(float, amplitudes)
 
@@ -703,8 +703,8 @@ def _stationary_root_brackets_exact(
         Maximum bisection depth.
     """
     coeffs = _fraction_trim(coefficients)
-    bounds = np.asarray(support, dtype=np.float64).reshape(-1)
-    if bounds.size != 2 or np.any(np.isnan(bounds)) or not bounds[0] < bounds[1]:
+    bounds = support
+    if len(bounds) != 2 or np.any(np.isnan(bounds)) or not bounds[0] < bounds[1]:
         raise ValueError("support must contain two increasing non-NaN endpoints")
     width_limit = float(max_width)
     depth_limit = int(max_depth)
@@ -935,7 +935,7 @@ def _stationary_minimum_locations_exact(
     if isolated.identically_zero:
         return (), True
 
-    bounds = np.asarray(support, dtype=np.float64).reshape(-1)
+    bounds = support
     exact_lower = _as_exact_fraction(bounds[0]) if np.isfinite(bounds[0]) else None
     exact_upper = _as_exact_fraction(bounds[1]) if np.isfinite(bounds[1]) else None
 
@@ -1273,8 +1273,8 @@ def _separate_full_curvature(
         raise ValueError("bernstein_subdivide must be >= 0")
 
     p = _trim_exact(q_d2)
-    bounds = np.asarray(support, dtype=np.float64).reshape(-1)
-    amplitudes = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
+    bounds = support
+    amplitudes = boundary_amplitudes
     boundary = _curvature_boundary_values(p, bounds, amplitudes)
     p_exact = _exact_float_polynomial(p)
     sign_exact, stationary_exact, lower_active, upper_active = (

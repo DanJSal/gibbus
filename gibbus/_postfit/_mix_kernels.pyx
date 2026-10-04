@@ -11,7 +11,19 @@ cnp.import_array()
 
 
 def neg_logsumexp_batch(double[:, ::1] ell0):
-    """Return ``-log(sum_j exp(ell0[j, r]))`` for every trailing point."""
+    """Return ``-log(sum_j exp(ell0[j, r]))`` for every trailing point.
+
+    Parameters
+    ----------
+    ell0 : float64 buffer, shape (K, R)
+        Weighted component log densities, contiguous along the point axis.
+        At least one component is required.
+
+    Returns
+    -------
+    numpy.ndarray, shape (R,)
+        Negative log mixture density in point order.
+    """
     cdef Py_ssize_t K = ell0.shape[0]
     cdef Py_ssize_t R = ell0.shape[1]
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out = np.empty(R, dtype=np.float64)
@@ -39,7 +51,22 @@ def neg_logsumexp_batch(double[:, ::1] ell0):
 
 
 def neg_log_mix_derivs_batch(double[:, :, ::1] ell_jets, int max_order):
-    """Compute mixture negative-log derivative jets with C-level recurrences."""
+    """Compute mixture negative-log derivative jets with C-level recurrences.
+
+    Parameters
+    ----------
+    ell_jets : float64 buffer, shape (K, M, R)
+        Component log-density derivatives, contiguous along the point axis.
+        Order zero includes each component's log weight; higher orders are
+        ordinary derivatives, not factorial-scaled coefficients.
+    max_order : int
+        Highest requested derivative order, with ``M >= max_order + 1``.
+
+    Returns
+    -------
+    numpy.ndarray, shape (max_order + 1, R)
+        Negative log mixture density and its ordinary derivatives.
+    """
     cdef Py_ssize_t K = ell_jets.shape[0]
     cdef Py_ssize_t M = ell_jets.shape[1]
     cdef Py_ssize_t R = ell_jets.shape[2]

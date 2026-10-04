@@ -94,7 +94,17 @@ class _NaturalLayout:
             contains a negative enabled boundary amplitude.
         """
         raw = np.asarray(params, dtype=np.float64).reshape(-1)
-        if raw.size != self.n_params:
+        return self._validate_canonical_params(raw)
+
+    def _validate_canonical_params(self, raw, /):
+        """Check feasibility without reformatting an owned/canonical vector.
+
+        Parameters
+        ----------
+        raw : numpy.ndarray, dtype float64
+            One-dimensional natural vector in this layout's ordering.
+        """
+        if raw.shape != (self.n_params,):
             raise ValueError(
                 f"expected {self.n_params} natural parameters, got {raw.size}"
             )
@@ -120,7 +130,16 @@ class _NaturalLayout:
             boundary array is canonical ``[a_L, a_U]`` and disabled entries
             are ``NaN``.
         """
-        raw = self.validate_params(params)
+        return self._unpack_canonical(self.validate_params(params))
+
+    def _unpack_canonical(self, raw, /):
+        """Extract affine sectors from an already validated natural vector.
+
+        Parameters
+        ----------
+        raw : numpy.ndarray, shape (n_params,), dtype float64
+            Natural vector whose layout feasibility checks have already passed.
+        """
         amplitudes = np.full(2, np.nan, dtype=np.float64)
         if self.lower_a_index is not None:
             amplitudes[0] = raw[self.lower_a_index]
@@ -172,7 +191,7 @@ class _NaturalLayout:
             raw[self.lower_a_index] = amps[0]
         if self.upper_a_index is not None:
             raw[self.upper_a_index] = amps[1]
-        return self.validate_params(raw)
+        return self._validate_canonical_params(raw)
 
     def build_candidate(self, params, /):
         """Build the affine polynomial and boundary representation.
@@ -188,7 +207,7 @@ class _NaturalLayout:
             Candidate potential with exact ordinary polynomial derivatives.
         """
         raw = self.validate_params(params)
-        gamma, curvature, amplitudes = self.unpack(raw)
+        gamma, curvature, amplitudes = self._unpack_canonical(raw)
         q_poly = np.zeros(self.effective_poly_degree + 1, dtype=np.float64)
         q_poly[1] = gamma
         orders = np.arange(curvature.size, dtype=np.float64)

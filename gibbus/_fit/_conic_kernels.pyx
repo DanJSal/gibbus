@@ -33,7 +33,12 @@ consecutive ``k_b * k_b`` matrices starting at ``qoff[b]``.
 import numpy as np
 cimport numpy as cnp
 
-from .._defaults import _reraise_if_debug
+from .._defaults import (
+    CONIC_QP_GAP_TOL,
+    CONIC_QP_MAX_ITER,
+    CONIC_QP_STEP_FRACTION,
+    _reraise_if_debug,
+)
 from libc.math cimport sqrt, fabs, exp, log, copysign, isinf, isfinite, NAN, INFINITY
 from libc.float cimport DBL_MIN
 from libc.stdlib cimport malloc, free
@@ -47,6 +52,10 @@ from .._observations._finite_reductions cimport (
 from .._observations._interval_integrals cimport adaptive_natural_objective_c
 
 cnp.import_array()
+
+cdef double _QP_GAP_TOL = CONIC_QP_GAP_TOL
+cdef int _QP_MAX_ITER = CONIC_QP_MAX_ITER
+cdef double _QP_STEP_FRACTION = CONIC_QP_STEP_FRACTION
 
 cdef extern from * nogil:
     """
@@ -1294,6 +1303,15 @@ cdef void _disown(OwnedRep* own) noexcept nogil:
 
 
 def _as_c(value, dtype=np.float64):
+    """Adapt a compiled-entry buffer to C-contiguous storage.
+
+    Parameters
+    ----------
+    value : array_like
+        Buffer to bind; existing compatible arrays may be reused.
+    dtype : numpy dtype, optional
+        Required element type, defaulting to float64.
+    """
     return np.ascontiguousarray(value, dtype=dtype)
 
 
@@ -1308,6 +1326,25 @@ def solve_conic_qp(
     entry exposes the bare interior-point solve to the tests.
 
     Returns ``(params, blocks_packed, dual, model_value, gap, iterations)``.
+
+    Parameters
+    ----------
+    hessian, gradient, params : array_like
+        Quadratic Hessian ``(n, n)``, gradient ``(n,)`` and starting parameters.
+    b_matrix : array_like, shape (r, n)
+        Parameter-to-constraint row map.
+    a_packed, sizes, a_offsets, q_offsets : array_like
+        Packed cone row operators, Gram block sizes and row/Gram offsets.
+    reference_dual : array_like, shape (r,)
+        Interior reference equality multipliers.
+    start_packed : array_like
+        Positive-definite starting Gram blocks in the solver's packed ordering.
+    gap_tolerance : float
+        Interior-point duality-gap target.
+    max_iterations : int
+        Interior-point iteration budget.
+    step_fraction : float
+        Fraction of the maximal feasible step to take.
 
     Raises
     ------
@@ -1339,57 +1376,75 @@ def solve_conic_qp(
     cdef Hessian hs
     cdef double* hbuf = NULL
     cdef double* hwork = NULL
+    cdef const int* k_ptr = &k[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* aoff_ptr = &aoff[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* qoff_ptr = &qoff[0] if nb > 0 else NULL
+    cdef const double* b_ptr = &b[0, 0] if r > 0 and n > 0 else NULL
+    cdef const double* a_ptr = &a[0] if a.shape[0] > 0 else NULL
+    cdef const double* ref_ptr = &ref[0] if r > 0 else NULL
+    cdef double* hv_ptr = &hv[0, 0] if n > 0 else NULL
+    cdef const double* g_ptr = &g[0] if n > 0 else NULL
+    cdef const double* theta0_ptr = &theta0[0] if n > 0 else NULL
+    cdef const double* start_ptr = &start[0] if qtot > 0 else NULL
+    cdef double* out_params_ptr = &out_params[0] if n > 0 else NULL
+    cdef double* out_blocks_ptr = &out_blocks[0] if qtot > 0 else NULL
+    cdef double* out_dual_ptr = &out_dual[0] if r > 0 else NULL
+    own.storage = NULL
+    own.ints = NULL
     for i in range(nb):
         if k[i] > kmax:
             kmax = k[i]
-    with nogil:
-        status = _own(
-            &own,
-            n,
-            r,
-            nb,
-            kmax,
-            &k[0],
-            &aoff[0],
-            &qoff[0],
-            qtot,
-            &b[0, 0],
-            &a[0],
-            &ref[0],
-            True,
-        )
-        if status == 0:
-            hbuf = <double*> malloc((n * n + n) * sizeof(double))
-            hwork = <double*> malloc((2 * n * n + 2 * n + 8) * sizeof(double))
-            if hbuf == NULL or hwork == NULL:
-                status = -1
-            else:
-                hs.n = n
-                hs.h = &hv[0, 0]
-                hs.vec = hbuf
-                hs.val = hbuf + n * n
-                if _hessian_eigen(&hs, hwork) != 0:
-                    status = -3
-        if status == 0:
-            status = _solve_ipm(
-                &own.rep,
-                &hs,
-                &g[0],
-                &theta0[0],
-                &start[0],
-                gap_tolerance,
-                max_iterations,
-                step_fraction,
-                &out_params[0],
-                &out_blocks[0],
-                &out_dual[0],
-                &model_value,
-                &gap,
-                &iterations,
+    try:
+        with nogil:
+            status = _own(
+                &own,
+                n,
+                r,
+                nb,
+                kmax,
+                k_ptr,
+                aoff_ptr,
+                qoff_ptr,
+                qtot,
+                b_ptr,
+                a_ptr,
+                ref_ptr,
+                True,
             )
-        _disown(&own)
-        free(hbuf)
-        free(hwork)
+            if status == 0:
+                hbuf = <double*> malloc((n * n + n) * sizeof(double))
+                hwork = <double*> malloc((2 * n * n + 2 * n + 8) * sizeof(double))
+                if hbuf == NULL or hwork == NULL:
+                    status = -1
+                else:
+                    hs.n = n
+                    hs.h = hv_ptr
+                    hs.vec = hbuf
+                    hs.val = hbuf + n * n
+                    if _hessian_eigen(&hs, hwork) != 0:
+                        status = -3
+            if status == 0:
+                status = _solve_ipm(
+                    &own.rep,
+                    &hs,
+                    g_ptr,
+                    theta0_ptr,
+                    start_ptr,
+                    gap_tolerance,
+                    max_iterations,
+                    step_fraction,
+                    out_params_ptr,
+                    out_blocks_ptr,
+                    out_dual_ptr,
+                    &model_value,
+                    &gap,
+                    &iterations,
+                )
+    finally:
+        with nogil:
+            _disown(&own)
+            free(hbuf)
+            free(hwork)
     if status == -2:
         raise np.linalg.LinAlgError("starting Gram block is not positive definite")
     if status == -1:
@@ -1401,8 +1456,8 @@ def solve_conic_qp(
 
 def solve_preconditioned(
     hessian, gradient, params, b_matrix, a_packed, sizes, a_offsets, q_offsets,
-    reference_dual, row_degrees, blocks_packed, double gap_tolerance=1e-12,
-    int max_iterations=100, double step_fraction=0.99,
+    reference_dual, row_degrees, blocks_packed, double gap_tolerance,
+    int max_iterations, double step_fraction,
 ):
     """Solve one Newton model in Jacobi/geometric scaled variables.
 
@@ -1411,6 +1466,25 @@ def solve_preconditioned(
     ``sigma^i``, Gram bases by ``v(t / sigma)``, other rows equilibrated;
     the start is the given blocks shifted inward by 1e-3 of their mean
     eigenvalue.
+
+    Parameters
+    ----------
+    hessian, gradient, params : array_like
+        Quadratic Hessian ``(n, n)``, gradient ``(n,)`` and starting parameters.
+    b_matrix : array_like, shape (r, n)
+        Parameter-to-constraint row map.
+    a_packed, sizes, a_offsets, q_offsets : array_like
+        Packed cone row operators, Gram block sizes and row/Gram offsets.
+    reference_dual, row_degrees : array_like, shape (r,)
+        Reference equality multipliers and polynomial powers for row scaling.
+    blocks_packed : array_like
+        Starting Gram blocks in the solver's packed ordering.
+    gap_tolerance : float
+        Interior-point duality-gap target.
+    max_iterations : int
+        Interior-point iteration budget.
+    step_fraction : float
+        Fraction of the maximal feasible step to take.
 
     Returns
     -------
@@ -1432,6 +1506,33 @@ def solve_preconditioned(
     cdef const double[::1] ref = _as_c(reference_dual)
     cdef const Py_ssize_t[::1] deg = _as_c(row_degrees, np.intp)
     cdef const double[::1] blocks = _as_c(blocks_packed)
+    return _solve_preconditioned_buffers(
+        h, g, theta, b, a, k, aoff, qoff, ref, deg, blocks,
+        gap_tolerance, max_iterations, step_fraction,
+    )
+
+
+cdef tuple _solve_preconditioned_buffers(
+    const double[:, ::1] h,
+    const double[::1] g,
+    const double[::1] theta,
+    const double[:, ::1] b,
+    const double[::1] a,
+    const int[::1] k,
+    const Py_ssize_t[::1] aoff,
+    const Py_ssize_t[::1] qoff,
+    const double[::1] ref,
+    const Py_ssize_t[::1] deg,
+    const double[::1] blocks,
+    double gap_tolerance,
+    int max_iterations,
+    double step_fraction,
+):
+    """Solve a quadratic from bound contiguous buffers without recoercion.
+
+    The caller retains the compatible quadratic/cone buffer owners and supplies
+    explicit interior-point controls. Only the result buffers are allocated here.
+    """
     cdef int n = b.shape[1], r = b.shape[0], nb = k.shape[0]
     cdef Py_ssize_t qtot = blocks.shape[0], na = a.shape[0]
     cdef cnp.ndarray[cnp.float64_t, ndim=1] endpoint = np.empty(n)
@@ -1439,30 +1540,44 @@ def solve_preconditioned(
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out_dual = np.empty(r)
     cdef double model_value = 0.0, gap = INFINITY, scaled_model = 0.0
     cdef int iterations = 0, status = 0
+    cdef const int* k_ptr = &k[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* aoff_ptr = &aoff[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* qoff_ptr = &qoff[0] if nb > 0 else NULL
+    cdef const double* h_ptr = &h[0, 0] if n > 0 else NULL
+    cdef const double* g_ptr = &g[0] if n > 0 else NULL
+    cdef const double* theta_ptr = &theta[0] if n > 0 else NULL
+    cdef const double* b_ptr = &b[0, 0] if r > 0 and n > 0 else NULL
+    cdef const double* a_ptr = &a[0] if na > 0 else NULL
+    cdef const double* ref_ptr = &ref[0] if r > 0 else NULL
+    cdef const Py_ssize_t* deg_ptr = &deg[0] if r > 0 else NULL
+    cdef const double* blocks_ptr = &blocks[0] if qtot > 0 else NULL
+    cdef double* endpoint_ptr = &endpoint[0] if n > 0 else NULL
+    cdef double* out_blocks_ptr = &out_blocks[0] if qtot > 0 else NULL
+    cdef double* out_dual_ptr = &out_dual[0] if r > 0 else NULL
     with nogil:
         status = _preconditioned(
             n,
             r,
             nb,
-            &k[0],
-            &aoff[0],
-            &qoff[0],
+            k_ptr,
+            aoff_ptr,
+            qoff_ptr,
             qtot,
             na,
-            &h[0, 0],
-            &g[0],
-            &theta[0],
-            &b[0, 0],
-            &a[0],
-            &ref[0],
-            &deg[0],
-            &blocks[0],
+            h_ptr,
+            g_ptr,
+            theta_ptr,
+            b_ptr,
+            a_ptr,
+            ref_ptr,
+            deg_ptr,
+            blocks_ptr,
             gap_tolerance,
             max_iterations,
             step_fraction,
-            &endpoint[0],
-            &out_blocks[0],
-            &out_dual[0],
+            endpoint_ptr,
+            out_blocks_ptr,
+            out_dual_ptr,
             &model_value,
             &gap,
             &iterations,
@@ -2136,7 +2251,7 @@ cdef int _point_newton_loop(
                 n, r, nb, sizes, aoff, qoff, qtot, na,
                 hessian, gradient, theta, b, a, ref, degrees,
                 blocks if first_solve else cold_blocks,
-                1e-12, 100, 0.99,
+                _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
                 endpoint, endpoint_blocks, endpoint_dual,
                 &candidate_model, &gap, &qp_iterations, &scaled_model,
             )
@@ -2492,7 +2607,7 @@ cdef int _interval_newton_loop(
                 n, r, nb, sizes, aoff, qoff, qtot, na,
                 hessian, gradient, theta, b, a, ref, degrees,
                 blocks if first_solve else cold_blocks,
-                1e-12, 100, 0.99,
+                _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
                 endpoint, endpoint_blocks, endpoint_dual,
                 &candidate_model, &gap, &qp_iterations, &scaled_model,
             )
@@ -2773,7 +2888,7 @@ cdef int _face_newton_loop(
                 n, r, nb, sizes, aoff, qoff, qtot, na,
                 hessian, gradient, theta, b, a, ref, degrees,
                 blocks if first_solve else cold_blocks,
-                1e-12, 100, 0.99,
+                _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
                 endpoint, endpoint_blocks, endpoint_dual,
                 &candidate_model, &gap, &qp_iterations, &scaled_model,
             )
@@ -2927,14 +3042,68 @@ def solve_interval_newton(
     current_fisher, current_missing, double current_smallest,
     double tolerance, double certified_tolerance, double accuracy_floor,
     int max_iterations, double armijo, double backtrack, int max_line_search,
-    int min_steps, bint initialize=False,
-    double epsabs=1.49e-8, double epsrel=1.49e-8, int limit=100,
+    int min_steps, bint initialize,
+    double epsabs, double epsrel, int limit,
 ):
     """Run one natural interval Newton solve entirely in compiled code.
 
     Ordinary finite rows use the fixed Gauss--Legendre reducer; support-boundary
     and one-/two-sided censored rows use the adaptive Gauss--Kronrod reducer.
     Whole-support rows are represented by their aggregate weight.
+
+    Parameters
+    ----------
+    params, blocks_packed : array_like
+        Initial natural parameters and packed positive-definite Gram blocks.
+    b_matrix, a_packed : array_like
+        Fixed-face parameter map and packed cone row operators.
+    sizes, a_offsets, q_offsets : array_like
+        Gram block sizes and offsets into packed row/Gram data.
+    reference_dual, row_degrees : array_like
+        Reference equality multipliers and polynomial row powers.
+    support, data_bounds : array_like, shape (2,)
+        Canonical support and observation bounds.
+    kinds, lengths, coefficients : array_like
+        Partial-statistic kinds, valid polynomial lengths and padded coefficient
+        rows, one descriptor per parameter.
+    controls : array_like, shape (11,)
+        Explicit core-state mode/window and scalar-solve controls.
+    finite_intervals, finite_weights : array_like
+        Prepared finite rows ``(Rf, 2)`` and their likelihood weights ``(Rf,)``.
+    point_lower_distance, point_upper_distance : array_like, shape (Rf,)
+        Preserved support-endpoint distances for exact-point reductions.
+    adaptive_intervals, adaptive_weights : array_like
+        Adaptive censoring rows ``(Ra, 2)`` and their weights ``(Ra,)``.
+    whole_weight : float
+        Aggregate whole-support observation weight.
+    coordinate_scale : float
+        Positive coordinate scale used for likelihood corrections.
+    gl_nodes, gl_log_weights : array_like
+        Shared Gauss-Legendre nodes and logarithmic quadrature weights.
+    width_eps_mult : float
+        Tiny-width threshold multiplier for interval/point reduction.
+    curvature_degree : int
+        Current curvature polynomial degree.
+    lower_index, upper_index : int
+        Natural amplitude indices, with -1 for an excluded side.
+    current_nll, current_smallest : float
+        Initial NLL and information-conditioning diagnostic.
+    current_gradient, current_hessian : array_like
+        Initial gradient and safeguarded Newton metric.
+    current_fisher, current_missing : array_like
+        Initial Fisher and missing-information matrices.
+    tolerance, certified_tolerance, accuracy_floor : float
+        Requested, certified and minimum attainable decrease thresholds.
+    max_iterations, max_line_search, min_steps : int
+        Newton/backtracking budgets and minimum accepted steps.
+    armijo, backtrack : float
+        Sufficient-decrease coefficient and line-search contraction factor.
+    initialize : bool
+        Recompute the start's evaluation before taking Newton steps.
+    epsabs, epsrel : float
+        Absolute and relative adaptive quadrature tolerances.
+    limit : int
+        Adaptive quadrature panel budget.
     """
     cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(
         params, dtype=np.float64
@@ -3014,27 +3183,51 @@ def solve_interval_newton(
     if Ra > 0:
         adaptive_rows_ptr = &adaptive_rows[0, 0]
         adaptive_weights_ptr = &adaptive_row_weights[0]
+    cdef const int* k_ptr = &k[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* aoff_ptr = &aoff[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* qoff_ptr = &qoff[0] if nb > 0 else NULL
+    cdef const double* b_ptr = &b[0, 0] if r > 0 else NULL
+    cdef const double* a_ptr = &a[0] if na > 0 else NULL
+    cdef const double* ref_ptr = &ref[0] if r > 0 else NULL
+    cdef const Py_ssize_t* degrees_ptr = &degrees[0] if r > 0 else NULL
+    cdef const double* supp_ptr = &supp[0]
+    cdef const double* db_ptr = &db[0]
+    cdef const int* pkinds_ptr = &pkinds[0]
+    cdef const int* plengths_ptr = &plengths[0]
+    cdef const double* pcoeff_ptr = &pcoeff[0, 0]
+    cdef Py_ssize_t pcoeff_width = pcoeff.shape[1]
+    cdef const double* ctl_ptr = &ctl[0]
+    cdef Py_ssize_t gl_count = gx.shape[0]
+    cdef const double* gx_ptr = &gx[0]
+    cdef const double* gw_ptr = &gw[0]
+    cdef double* theta_ptr = &theta[0]
+    cdef double* blocks_ptr = &blocks[0] if qtot > 0 else NULL
+    cdef double* gradient_ptr = &gradient[0]
+    cdef double* hessian_ptr = &hessian[0, 0]
+    cdef double* fisher_ptr = &fisher[0, 0]
+    cdef double* missing_ptr = &missing[0, 0]
+    cdef double* dual_ptr = &dual[0] if r > 0 else NULL
     with nogil:
         code = _interval_newton_loop(
             n,
             r,
             nb,
-            &k[0],
-            &aoff[0],
-            &qoff[0],
+            k_ptr,
+            aoff_ptr,
+            qoff_ptr,
             qtot,
             na,
-            &b[0, 0],
-            &a[0],
-            &ref[0],
-            &degrees[0],
-            &supp[0],
-            &db[0],
-            &pkinds[0],
-            &plengths[0],
-            &pcoeff[0, 0],
-            pcoeff.shape[1],
-            &ctl[0],
+            b_ptr,
+            a_ptr,
+            ref_ptr,
+            degrees_ptr,
+            supp_ptr,
+            db_ptr,
+            pkinds_ptr,
+            plengths_ptr,
+            pcoeff_ptr,
+            pcoeff_width,
+            ctl_ptr,
             epsabs,
             epsrel,
             limit,
@@ -3048,22 +3241,22 @@ def solve_interval_newton(
             adaptive_weights_ptr,
             whole_weight,
             log(coordinate_scale),
-            gx.shape[0],
-            &gx[0],
-            &gw[0],
+            gl_count,
+            gx_ptr,
+            gw_ptr,
             width_eps_mult,
             curvature_degree,
             lower_index,
             upper_index,
-            &theta[0],
-            &blocks[0],
+            theta_ptr,
+            blocks_ptr,
             &nll,
-            &gradient[0],
-            &hessian[0, 0],
-            &fisher[0, 0],
-            &missing[0, 0],
+            gradient_ptr,
+            hessian_ptr,
+            fisher_ptr,
+            missing_ptr,
             &smallest,
-            &dual[0],
+            dual_ptr,
             tolerance,
             certified_tolerance,
             accuracy_floor,
@@ -3109,7 +3302,7 @@ def solve_point_newton(
     double current_nll, current_gradient, current_hessian, current_means,
     double tolerance, double certified_tolerance, double accuracy_floor,
     int max_iterations, double armijo, double backtrack, int max_line_search,
-    int min_steps, double epsabs=1.49e-8, double epsrel=1.49e-8, int limit=100,
+    int min_steps, double epsabs, double epsrel, int limit,
 ):
     """Run one fixed-face natural point Newton solve in compiled code.
 
@@ -3117,6 +3310,48 @@ def solve_point_newton(
     for affine point objectives.  Numerically invalid trial points are rejected
     by backtracking inside the compiled traversal rather than restarting the
     solve in Python.
+
+    Parameters
+    ----------
+    params, blocks_packed : array_like
+        Initial natural parameters and packed positive-definite Gram blocks.
+    b_matrix, a_packed : array_like
+        Fixed-face parameter map and packed cone row operators.
+    sizes, a_offsets, q_offsets : array_like
+        Gram block sizes and offsets into packed row/Gram data.
+    reference_dual, row_degrees : array_like
+        Reference equality multipliers and polynomial row powers.
+    support, data_bounds : array_like, shape (2,)
+        Canonical support and observation bounds.
+    lower_basis, upper_basis : bool
+        Enabled canonical boundary-log bases.
+    kinds, lengths, coefficients : array_like
+        Partial-statistic kinds, valid polynomial lengths and padded coefficient
+        rows, one descriptor per parameter.
+    controls : array_like, shape (11,)
+        Explicit core-state mode/window and scalar-solve controls.
+    empirical_means : array_like
+        Weighted empirical partial-statistic means.
+    coordinate_constant : float
+        Additive coordinate correction to the NLL.
+    curvature_degree : int
+        Current curvature polynomial degree.
+    lower_index, upper_index : int
+        Natural amplitude indices, with -1 for an excluded side.
+    current_nll : float
+        Initial NLL.
+    current_gradient, current_hessian, current_means : array_like
+        Initial gradient, Newton metric and model partial-statistic means.
+    tolerance, certified_tolerance, accuracy_floor : float
+        Requested, certified and minimum attainable decrease thresholds.
+    max_iterations, max_line_search, min_steps : int
+        Newton/backtracking budgets and minimum accepted steps.
+    armijo, backtrack : float
+        Sufficient-decrease coefficient and line-search contraction factor.
+    epsabs, epsrel : float
+        Absolute and relative model quadrature tolerances.
+    limit : int
+        Adaptive quadrature panel budget.
     """
     cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(
         params, dtype=np.float64
@@ -3160,17 +3395,38 @@ def solve_point_newton(
         or pcoeff.shape[0] != n or curvature_degree + 3 != pcoeff.shape[1]
     ):
         raise ValueError("invalid compiled point Newton geometry")
+    cdef const int* k_ptr = &k[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* aoff_ptr = &aoff[0] if nb > 0 else NULL
+    cdef const Py_ssize_t* qoff_ptr = &qoff[0] if nb > 0 else NULL
+    cdef const double* b_ptr = &b[0, 0] if r > 0 else NULL
+    cdef const double* a_ptr = &a[0] if na > 0 else NULL
+    cdef const double* ref_ptr = &ref[0] if r > 0 else NULL
+    cdef const Py_ssize_t* degrees_ptr = &degrees[0] if r > 0 else NULL
+    cdef const double* supp_ptr = &supp[0]
+    cdef const double* db_ptr = &db[0]
+    cdef const int* pkinds_ptr = &pkinds[0]
+    cdef const int* plengths_ptr = &plengths[0]
+    cdef const double* pcoeff_ptr = &pcoeff[0, 0]
+    cdef Py_ssize_t pcoeff_width = pcoeff.shape[1]
+    cdef const double* ctl_ptr = &ctl[0]
+    cdef const double* empirical_ptr = &empirical[0]
+    cdef double* theta_ptr = &theta[0]
+    cdef double* blocks_ptr = &blocks[0] if qtot > 0 else NULL
+    cdef double* gradient_ptr = &gradient[0]
+    cdef double* hessian_ptr = &hessian[0, 0]
+    cdef double* means_ptr = &means[0]
+    cdef double* dual_ptr = &dual[0] if r > 0 else NULL
     with nogil:
         code = _point_newton_loop(
-            n, r, nb, &k[0], &aoff[0], &qoff[0], qtot, na,
-            &b[0, 0], &a[0], &ref[0], &degrees[0],
-            &supp[0], &db[0], lower_basis, upper_basis,
-            &pkinds[0], &plengths[0], &pcoeff[0, 0], pcoeff.shape[1],
-            &ctl[0], epsabs, epsrel, limit,
-            &empirical[0], coordinate_constant, curvature_degree,
+            n, r, nb, k_ptr, aoff_ptr, qoff_ptr, qtot, na,
+            b_ptr, a_ptr, ref_ptr, degrees_ptr,
+            supp_ptr, db_ptr, lower_basis, upper_basis,
+            pkinds_ptr, plengths_ptr, pcoeff_ptr, pcoeff_width,
+            ctl_ptr, epsabs, epsrel, limit,
+            empirical_ptr, coordinate_constant, curvature_degree,
             lower_index, upper_index,
-            &theta[0], &blocks[0], &nll, &gradient[0], &hessian[0, 0],
-            &means[0], &dual[0],
+            theta_ptr, blocks_ptr, &nll, gradient_ptr, hessian_ptr,
+            means_ptr, dual_ptr,
             tolerance, certified_tolerance, accuracy_floor,
             max_iterations, armijo, backtrack, max_line_search, min_steps,
             &iterations, &evaluations, &sub_iterations, &bound,
@@ -3202,14 +3458,42 @@ def solve_callback_newton(
     double tolerance, double certified_tolerance, double accuracy_floor,
     int max_iterations, double armijo, double backtrack, int max_line_search,
     int min_steps,
+    double qp_gap_tolerance, int qp_max_iterations, double qp_step_fraction,
 ):
     """Run fixed-face Newton with a Python objective and compiled conic subproblems.
 
-    This is the production traversal for objectives whose likelihood evaluator
-    is still Python-level (currently the joint mixture polish).  Newton control,
+    This traversal serves objectives whose likelihood evaluator remains
+    Python-level. Newton control,
     certificate bookkeeping, line search, and every conic subproblem live here;
     only objective evaluations cross back into Python.  The algorithm mirrors
     the fully fused point/interval loops so there is no second Python solver.
+
+    Parameters
+    ----------
+    objective : callable
+        ``objective(params)`` returns an evaluation with NLL, gradient and Hessian.
+    params : array_like
+        Initial free-face parameter vector.
+    blocks_packed, default_blocks_packed : array_like
+        Initial and cold-restart Gram blocks in the solver's packed ordering.
+    b_matrix, a_packed : array_like
+        Fixed-face parameter map and packed cone row operators.
+    sizes, a_offsets, q_offsets : array_like
+        Gram block sizes and offsets into packed row/Gram data.
+    reference_dual, row_degrees : array_like
+        Reference equality multipliers and polynomial row powers.
+    evaluation : object
+        Objective evaluation at the supplied initial parameters.
+    tolerance, certified_tolerance, accuracy_floor : float
+        Requested, certified and minimum attainable decrease thresholds.
+    max_iterations, max_line_search, min_steps : int
+        Newton/backtracking budgets and minimum accepted steps.
+    armijo, backtrack : float
+        Sufficient-decrease coefficient and line-search contraction factor.
+    qp_gap_tolerance, qp_step_fraction : float
+        Explicit subproblem duality-gap target and feasible-step fraction.
+    qp_max_iterations : int
+        Explicit interior-point iteration budget per subproblem.
 
     Returns
     -------
@@ -3226,8 +3510,17 @@ def solve_callback_newton(
     cdef cnp.ndarray[cnp.float64_t, ndim=1] default_blocks = np.ascontiguousarray(
         default_blocks_packed, dtype=np.float64
     )
+    cdef const double[:, ::1] cone_b = _as_c(b_matrix)
+    cdef const double[::1] cone_a = _as_c(a_packed)
+    cdef const int[::1] cone_sizes = _as_c(sizes, np.intc)
+    cdef const Py_ssize_t[::1] cone_aoff = _as_c(a_offsets, np.intp)
+    cdef const Py_ssize_t[::1] cone_qoff = _as_c(q_offsets, np.intp)
+    cdef const double[::1] cone_ref = _as_c(reference_dual)
+    cdef const Py_ssize_t[::1] cone_degrees = _as_c(row_degrees, np.intp)
+    cdef const double[:, ::1] hessian_view
+    cdef const double[::1] gradient_view, theta_view, start_view
     cdef cnp.ndarray[cnp.float64_t, ndim=1] dual = np.zeros(
-        np.asarray(b_matrix).shape[0], dtype=np.float64
+        cone_b.shape[0], dtype=np.float64
     )
     cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient
     cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian
@@ -3256,16 +3549,22 @@ def solve_callback_newton(
     for iteration in range(max_iterations):
         gradient = np.ascontiguousarray(current.gradient, dtype=np.float64)
         hessian = np.ascontiguousarray(current.hessian, dtype=np.float64)
+        gradient_view = gradient
+        hessian_view = hessian
+        theta_view = theta
         scale = max(1.0, abs(float(current.nll)))
         start_blocks = current_blocks
         warm = True
         while True:
+            start_view = start_blocks
             (
                 endpoint, endpoint_blocks, model_value, gap, qp_iterations,
                 candidate_dual, _scaled_model,
-            ) = solve_preconditioned(
-                hessian, gradient, theta, b_matrix, a_packed, sizes, a_offsets,
-                q_offsets, reference_dual, row_degrees, start_blocks,
+            ) = _solve_preconditioned_buffers(
+                hessian_view, gradient_view, theta_view,
+                cone_b, cone_a, cone_sizes, cone_aoff, cone_qoff,
+                cone_ref, cone_degrees, start_view,
+                qp_gap_tolerance, qp_max_iterations, qp_step_fraction,
             )
             sub_iterations += qp_iterations
             solved_bound = max(0.0, -model_value) + max(0.0, gap)

@@ -14,20 +14,40 @@ from .._defaults import (
     PPF_BISECT_Z_TOL,
     _reraise_if_debug,
 )
-from .._fit.boundary import _amplitude_standard_errors
+from .._fit.boundary import _amplitude_standard_errors, _weakly_identified_sides
 from .._model.coords import _FitCoordinate
 from .._spectral.cdf import (
     SpectralCDF,
     boundary_aware_breaks_from_amplitudes,
     density_spec,
 )
+from .._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 from .._spectral.ppf import SpectralPPF
 from .._spectral.runtime import fallback_ppf_state, pack_cdf_state, pack_ppf_state
 from .analytics import _powaff_moment_from_z_moments, _stats_from_raw_moments
 
 
 def _model_metadata(comp_states, metadata=None):
-    """Validate shared fitted geometry and return detached model metadata."""
+    """Validate shared fitted geometry and return detached model metadata.
+
+    Parameters
+    ----------
+    comp_states : sequence of numpy.void
+        Packed component states sharing support and boundary amplitudes.
+    metadata : Mapping or None, optional
+        Declared model dimensions and shared inference. ``None`` creates
+        derived-state metadata with unavailable inferential errors and p-values.
+
+    Returns
+    -------
+    dict
+        Detached model dimensions, provenance and shared-boundary inference.
+
+    Raises
+    ------
+    ValueError
+        If component geometry or declared metadata is inconsistent.
+    """
     if not comp_states:
         raise ValueError("model state must contain at least one component")
     for state in comp_states:
@@ -127,8 +147,6 @@ def _model_metadata(comp_states, metadata=None):
     if provenance == "derived":
         errors = np.full(2, np.nan)
         p_values = np.full(2, np.nan)
-    from .._fit.boundary import _weakly_identified_sides
-
     return {
         "provenance": provenance,
         "n_parameters": dimensions[0],
@@ -399,10 +417,12 @@ def _pack_natural_state(
         mode=float(state.mode),
         std=z_std,
         initial_breaks=initial_breaks,
+        map_scale=None,
+        config=_SpectralCDFOptions(),
     )
     spectral_state = dict(pack_cdf_state(cdf_rep))
     try:
-        ppf_rep = SpectralPPF(cdf_rep)
+        ppf_rep = SpectralPPF(cdf_rep, config=_SpectralPPFOptions())
     except NUMERIC_FAILURES as exc:
         _reraise_if_debug(exc, "spectral PPF construction", routine=True)
         ppf_rep = None

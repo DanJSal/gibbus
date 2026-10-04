@@ -31,7 +31,11 @@ import scipy.linalg
 from .._defaults import (
     AUTO_POLY_DEGREE_MAX,
     AUTO_POLY_DEGREE_MIN,
+    INTERVAL_W_EPS_MULT,
     NUMERIC_FAILURES,
+    QUAD_EPSABS,
+    QUAD_EPSREL,
+    QUAD_LIMIT,
     _reraise_if_debug,
 )
 from .._model.coords import (
@@ -40,10 +44,16 @@ from .._model.coords import (
     _normalized_nonnegative_weights,
     _safe_scaled_difference,
 )
-from .._model.natural_state import _layout_numerics, _NaturalCoreState
+from .._model.natural_state import _MODE_CONTROLS, _layout_numerics, _NaturalCoreState
 from .._model.spec import _build_model_spec, _ModelSpec
-from .._observations.empirical import _EmpiricalStats, _uniform_interval_empirical_stats
+from .._observations.empirical import (
+    _canonical_weights,
+    _EmpiricalStats,
+    _uniform_interval_empirical_stats,
+)
 from .._observations.intervals import (
+    _GL_LOG_W,
+    _GL_X,
     _build_interval_observations,
     _IntervalObservations,
     _row_grouping,
@@ -52,7 +62,6 @@ from .._observations.points import _PointObservations
 from ._mixture_kernels import empirical_point_stats
 from .conic_newton import _interior_start, _solve_natural_conic
 from .degree import (
-    _DegreeSelectionConfig,
     _interval_omitted_statistic_diagnostic,
     _omitted_statistic_diagnostic,
     _probe_orders_for_degree,
@@ -377,9 +386,6 @@ def _point_kernel_inputs(layout, z_data_bounds, empirical_means, coordinate_cons
     tuple
         The arguments of the compiled point evaluator, in kernel order.
     """
-    from .._defaults import QUAD_EPSABS, QUAD_EPSREL, QUAD_LIMIT
-    from .._model.natural_state import _MODE_CONTROLS
-
     numerics = _layout_numerics(layout)
     return (
         numerics.support,
@@ -458,15 +464,15 @@ def _prepare_natural_point_objective(
     ----------
     support : tuple of (float, float)
         User-coordinate support.
-    point_samples : array_like, shape (N,)
-        Finite point observations in user coordinates.
+    point_samples : numpy.ndarray, shape (N,), dtype float64
+        Boundary-validated finite point observations in user coordinates.
     poly_degree : int
         Requested maximum polynomial degree.
     allow_lower_boundary, allow_upper_boundary : bool
         Whether the finite physical endpoints may carry logarithmic
         amplitudes.
-    weights : array_like or None
-        Nonnegative observation weights.
+    weights : numpy.ndarray or None
+        Boundary-normalized observation weights, or ``None`` for equal weights.
     moment_order : int or None, optional
         Highest empirical power moment to cache.  The default stores at least
         twice the effective fitted degree; automatic degree selection raises
@@ -480,11 +486,9 @@ def _prepare_natural_point_objective(
     Raises
     ------
     ValueError
-        If fewer than two finite samples are given.
+        If ``moment_order`` does not cover the effective fitted degree.
     """
-    x = np.asarray(point_samples, dtype=np.float64).reshape(-1)
-    if x.size < 2 or not np.all(np.isfinite(x)):
-        raise ValueError("point_samples must contain at least two finite values")
+    x = point_samples
     coordinate = _build_fit_coordinate(support, x, weights, None)
     spec = _build_model_spec(
         coordinate,
@@ -522,7 +526,9 @@ def _fit_natural_conic_points(
     /,
     *,
     moment_order=None,
-    **options,
+    initial=None,
+    initial_blocks=None,
+    solver_options=None,
 ):
     """Fit point data with the natural conic Newton solver (default settings).
 
@@ -541,8 +547,12 @@ def _fit_natural_conic_points(
         Nonnegative observation weights.
     moment_order : int or None, optional
         Highest empirical power moment to retain for later diagnostics.
-    **options : dict
-        Passed to :func:`._solve_natural_conic`.
+    initial : numpy.ndarray or None, optional
+        Natural-parameter warm start.
+    initial_blocks : sequence of numpy.ndarray or None, optional
+        Matching Gram blocks for ``initial``.
+    solver_options : _NewtonOptions or None, optional
+        Immutable Newton policy shared by this solve.
 
     Returns
     -------
@@ -561,7 +571,12 @@ def _fit_natural_conic_points(
         weights,
         moment_order=moment_order,
     )
-    return objective, _solve_natural_conic(objective, **options)
+    return objective, _solve_natural_conic(
+        objective,
+        initial=initial,
+        initial_blocks=initial_blocks,
+        solver_options=solver_options,
+    )
 
 
 def _fit_natural_conic_points_auto(
@@ -572,8 +587,8 @@ def _fit_natural_conic_points_auto(
     weights=None,
     /,
     *,
-    degree_config=None,
-    **options,
+    degree_config,
+    solver_options=None,
 ):
     """Select point-data degree with the omitted-information criterion.
 
@@ -591,10 +606,10 @@ def _fit_natural_conic_points_auto(
         Whether finite physical endpoints may use logarithmic amplitudes.
     weights : array_like or None, optional
         Nonnegative observation weights.
-    degree_config : _DegreeSelectionConfig or None, optional
-        Omitted-statistic selection policy.
-    **options : dict
-        Passed to every natural conic solve.
+    degree_config : _DegreeSelectionConfig
+        Explicit omitted-statistic policy shared by all candidates and diagnostics.
+    solver_options : _NewtonOptions or None, optional
+        Immutable Newton policy shared by every candidate solve.
 
     Returns
     -------
@@ -608,8 +623,8 @@ def _fit_natural_conic_points_auto(
     RuntimeError
         If no admissible natural point model produces a usable fit.
     """
-    x = np.asarray(point_samples, dtype=np.float64).reshape(-1)
-    cfg = _DegreeSelectionConfig() if degree_config is None else degree_config
+    x = point_samples
+    cfg = degree_config
     degrees = [
         int(d)
         for d in _admissible_degrees(support, AUTO_POLY_DEGREE_MAX)
@@ -638,7 +653,7 @@ def _fit_natural_conic_points_auto(
                 allow_upper_boundary,
                 weights,
                 moment_order=moment_order,
-                **options,
+                solver_options=solver_options,
             )
         except NUMERIC_FAILURES as exc:
             _reraise_if_debug(
@@ -729,7 +744,7 @@ def _safeguarded_metric(fisher, missing, /):
     scale = np.outer(diagonal, diagonal)
     try:
         values, vectors = scipy.linalg.eigh(observed / scale, f / scale)
-    except (np.linalg.LinAlgError, ValueError) as exc:
+    except np.linalg.LinAlgError as exc:
         # F numerically singular: fall back to the EM metric alone.
         _reraise_if_debug(exc, "interval metric eigenvalues", routine=True)
         return f, -np.inf
@@ -988,15 +1003,6 @@ def _interval_kernel_inputs(
     tuple
         The arguments of the compiled interval evaluator, in kernel order.
     """
-    from .._defaults import (
-        INTERVAL_W_EPS_MULT,
-        QUAD_EPSABS,
-        QUAD_EPSREL,
-        QUAD_LIMIT,
-    )
-    from .._model.natural_state import _MODE_CONTROLS
-    from .._observations.intervals import _GL_LOG_W, _GL_X
-
     numerics = _layout_numerics(layout)
     weights = np.asarray(weights, dtype=np.float64)
     return (
@@ -1048,15 +1054,16 @@ def _prepare_natural_interval_objective(
     ----------
     support : tuple of (float, float)
         User-coordinate support.
-    intervals : array_like, shape (R, 2)
-        Ordered censoring rows in user coordinates; endpoints may be infinite.
+    intervals : numpy.ndarray, shape (R, 2), dtype float64
+        Boundary-validated ordered censoring rows in user coordinates;
+        endpoints may be infinite.
     poly_degree : int
         Requested maximum polynomial degree.
     allow_lower_boundary, allow_upper_boundary : bool
         Whether the finite physical endpoints may carry logarithmic
         amplitudes.
-    weights : array_like or None
-        Nonnegative observation weights.
+    weights : numpy.ndarray or None
+        Boundary-normalized observation weights, or ``None`` for equal weights.
 
     Returns
     -------
@@ -1066,21 +1073,17 @@ def _prepare_natural_interval_objective(
     Raises
     ------
     ValueError
-        If the rows are malformed or carry no finite landmark.
+        If the observations carry no finite landmark.
     """
-    x = np.asarray(intervals, dtype=np.float64)
-    if x.ndim != 2 or x.shape[1] != 2 or x.shape[0] < 1:
-        raise ValueError("intervals must have shape (R, 2)")
-    if np.any(np.isnan(x)) or np.any(x[:, 0] > x[:, 1]):
-        raise ValueError("intervals must be ordered and contain no NaN")
+    x = intervals
     if np.all(np.isfinite(x)):
-        mid = 0.5 * (x[:, 0] + x[:, 1])
+        mid = 0.5 * x[:, 0] + 0.5 * x[:, 1]
         coordinate = _build_fit_coordinate(support, mid, weights, x[:, 1] - x[:, 0])
     else:
         coordinate = _build_interval_fit_coordinate(support, x, weights)
     observations = _build_interval_observations(
         x,
-        weights,
+        _canonical_weights(x.shape[0], weights),
         coordinate=coordinate,
         grouping_cache={"grouping": _row_grouping(x)},
     )
@@ -1143,7 +1146,10 @@ def _fit_natural_conic_intervals(
     allow_upper_boundary=False,
     weights=None,
     /,
-    **options,
+    *,
+    initial=None,
+    initial_blocks=None,
+    solver_options=None,
 ):
     """Fit interval-censored data with the natural conic Newton solver.
 
@@ -1160,8 +1166,13 @@ def _fit_natural_conic_intervals(
         amplitudes.
     weights : array_like or None, optional
         Nonnegative observation weights.
-    **options : dict
-        Passed to ``_solve_natural_conic``.
+    initial : numpy.ndarray or None, optional
+        Natural-parameter warm start. When omitted, a deterministic interval
+        start is constructed.
+    initial_blocks : sequence of numpy.ndarray or None, optional
+        Matching Gram blocks for ``initial``.
+    solver_options : _NewtonOptions or None, optional
+        Immutable Newton policy shared by this solve.
 
     Returns
     -------
@@ -1181,11 +1192,16 @@ def _fit_natural_conic_intervals(
         allow_upper_boundary,
         weights,
     )
-    if "initial" not in options:
-        start, blocks = _natural_interval_start(objective)
-        options["initial"] = start
-        options.setdefault("initial_blocks", blocks)
-    return objective, _solve_natural_conic(objective, **options)
+    if initial is None:
+        initial, blocks = _natural_interval_start(objective)
+        if initial_blocks is None:
+            initial_blocks = blocks
+    return objective, _solve_natural_conic(
+        objective,
+        initial=initial,
+        initial_blocks=initial_blocks,
+        solver_options=solver_options,
+    )
 
 
 def _fit_natural_conic_intervals_auto(
@@ -1196,8 +1212,8 @@ def _fit_natural_conic_intervals_auto(
     weights=None,
     /,
     *,
-    degree_config=None,
-    **options,
+    degree_config,
+    solver_options=None,
 ):
     """Select interval degree from omitted observed information.
 
@@ -1215,10 +1231,10 @@ def _fit_natural_conic_intervals_auto(
         Endpoint logarithmic-amplitude availability.
     weights : array_like or None, optional
         Nonnegative interval weights.
-    degree_config : _DegreeSelectionConfig or None, optional
-        Omitted-statistic score/rank policy.
-    **options : dict
-        Passed to every natural conic solve.
+    degree_config : _DegreeSelectionConfig
+        Explicit omitted-statistic policy shared by all candidates and diagnostics.
+    solver_options : _NewtonOptions or None, optional
+        Immutable Newton policy shared by every candidate solve.
 
     Returns
     -------
@@ -1238,7 +1254,7 @@ def _fit_natural_conic_intervals_auto(
     if np.any(np.isnan(x)) or np.any(x[:, 0] > x[:, 1]):
         raise ValueError("intervals must be ordered and contain no NaN")
 
-    cfg = _DegreeSelectionConfig() if degree_config is None else degree_config
+    cfg = degree_config
     degrees = [
         int(d)
         for d in _admissible_degrees(support, AUTO_POLY_DEGREE_MAX)
@@ -1258,7 +1274,7 @@ def _fit_natural_conic_intervals_auto(
                 allow_lower_boundary,
                 allow_upper_boundary,
                 weights,
-                **options,
+                solver_options=solver_options,
             )
         except NUMERIC_FAILURES as exc:
             _reraise_if_debug(

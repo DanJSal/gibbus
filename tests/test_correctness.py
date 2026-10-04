@@ -4,6 +4,8 @@ These tests assert the defining properties of a probability density
 rather than fixed numbers, so they stay valid as the optimizer changes.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from scipy import stats
@@ -255,15 +257,18 @@ class TestSpectralDegradationIsGraceful:
 
         real_ppf = fitted_state.SpectralPPF
 
-        def constrained_ppf(cdf_rep):
+        def constrained_ppf(cdf_rep, *, config):
             return real_ppf(
                 cdf_rep,
-                degree_options=(2,),
-                fit_tol=0.0,
-                logit_tol=0.0,
-                prob_tol=0.0,
-                coeff_tol=0.0,
-                max_panels=1,
+                config=replace(
+                    config,
+                    degree_options=(2,),
+                    fit_tol=0.0,
+                    logit_tol=0.0,
+                    prob_tol=0.0,
+                    coeff_tol=0.0,
+                    max_panels=1,
+                ),
             )
 
         monkeypatch.setattr(fitted_state, "SpectralPPF", constrained_ppf)
@@ -776,7 +781,7 @@ class TestDegenerateComponentsAreNotSelected:
     @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4, 5])
     def test_unimodal_beta_stays_at_one_component(self, seed):
         data = np.ascontiguousarray(np.random.default_rng(seed).beta(2.0, 5.0, 3000))
-        c = Distribution().fit(data, support=(0.0, 1.0), rng=seed)
+        c = Distribution().fit(data, n_components="auto", support=(0.0, 1.0), rng=seed)
         assert c.n_components == 1
 
     def test_a_genuine_minority_component_is_still_found(self):

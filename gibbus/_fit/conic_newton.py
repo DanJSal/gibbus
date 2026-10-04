@@ -24,7 +24,15 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import nnls
 
-from .._defaults import NUMERIC_FAILURES, _reraise_if_debug
+from .._defaults import (
+    CONIC_QP_GAP_TOL,
+    CONIC_QP_MAX_ITER,
+    CONIC_QP_STEP_FRACTION,
+    CURVATURE_CERT_MAX_DEPTH,
+    CURVATURE_CERT_MAX_LEAVES,
+    NUMERIC_FAILURES,
+    _reraise_if_debug,
+)
 from . import (  # type: ignore[attr-defined]  # compiled
     _conic_kernels,
     _curvature_certificate,
@@ -33,6 +41,7 @@ from .conic_qp import (
     _ConicQPResult,
     _support_representation,
 )
+from .objective import _ObjectiveEvaluation
 from .separation import (
     _separate_full_curvature,
     _SeparationResult,
@@ -74,15 +83,42 @@ class _ConicNewtonResult:
 
 @dataclass(frozen=True)
 class _NewtonOptions:
-    """Fixed settings shared by every Newton run of one fit."""
+    """Immutable Newton policy shared by every solve in one fit.
 
-    tolerance: float
-    certified_tolerance: float
-    accuracy_floor: float
-    max_iterations: int
-    armijo: float
-    backtrack: float
-    max_line_search: int
+    The defaults live here so single-component solves, mixture M-steps and
+    joint polishing cannot silently reconstruct different solver policies.
+    Warm starts and certification requests are per-solve state and therefore
+    are deliberately not part of this object.
+
+    Parameters
+    ----------
+    tolerance : float, optional
+        Relative predicted-decrease target for Newton convergence.
+    certified_tolerance : float, optional
+        Certified bound accepted as full convergence when the subproblem gap
+        reaches its numerical floor.
+    accuracy_floor : float, optional
+        Larger certified bound reported as approximate convergence.
+    face_trigger : float, optional
+        Relative threshold that prompts an exact lower-dimensional face solve.
+    max_iterations : int, optional
+        Newton iteration limit per cone description.
+    armijo : float, optional
+        Armijo sufficient-decrease constant.
+    backtrack : float, optional
+        Backtracking reduction factor.
+    max_line_search : int, optional
+        Line-search trial limit per Newton step.
+    """
+
+    tolerance: float = 1e-12
+    certified_tolerance: float = 1e-10
+    accuracy_floor: float = 1e-7
+    face_trigger: float = 1e-6
+    max_iterations: int = 60
+    armijo: float = 1e-4
+    backtrack: float = 0.5
+    max_line_search: int = 40
 
 
 @dataclass(frozen=True)
@@ -134,6 +170,8 @@ def _certify(layout, params, /):
         float(amplitudes[0]),
         float(amplitudes[1]),
         1e-12,
+        max_depth=CURVATURE_CERT_MAX_DEPTH,
+        max_leaves=CURVATURE_CERT_MAX_LEAVES,
     )
     if code in _CERTIFICATE_STATUS:
         return _SeparationResult(
@@ -348,6 +386,9 @@ def _preconditioned_subproblem(hessian, gradient, params, representation, blocks
             representation.reference_dual,
             representation.row_degrees,
             representation.pack_blocks(blocks),
+            gap_tolerance=CONIC_QP_GAP_TOL,
+            max_iterations=CONIC_QP_MAX_ITER,
+            step_fraction=CONIC_QP_STEP_FRACTION,
         )
     )
     endpoint_blocks = representation.unpack_blocks(packed)
@@ -358,7 +399,7 @@ def _preconditioned_subproblem(hessian, gradient, params, representation, blocks
         model_value=float(scaled_model),
         gap=float(gap),
         iterations=int(iterations),
-        converged=bool(gap <= 1e-12 * max(1.0, abs(float(scaled_model)))),
+        converged=bool(gap <= CONIC_QP_GAP_TOL * max(1.0, abs(float(scaled_model)))),
     )
     return result, endpoint, endpoint_blocks, float(model_value)
 
@@ -578,6 +619,7 @@ def _newton_on_representation(
         if status == "invalid_start":
             return None
         if evaluation is None:
+            # Natural objectives import this solver; defer the reverse dependency.
             from .natural_objective import _NaturalIntervalEvaluation
 
             evaluation_type = _NaturalIntervalEvaluation
@@ -683,8 +725,6 @@ def _newton_on_representation(
             sub_iterations,
             bound,
         ) = compiled
-        from .objective import _ObjectiveEvaluation
-
         final = _ObjectiveEvaluation(
             nll=nll,
             gradient=gradient,
@@ -726,6 +766,9 @@ def _newton_on_representation(
         options.backtrack,
         options.max_line_search,
         min_steps,
+        CONIC_QP_GAP_TOL,
+        CONIC_QP_MAX_ITER,
+        CONIC_QP_STEP_FRACTION,
     )
     (
         status,
@@ -841,14 +884,7 @@ def _solve_natural_conic(
     *,
     initial=None,
     initial_blocks=None,
-    tolerance=1e-12,
-    certified_tolerance=1e-10,
-    accuracy_floor=1e-7,
-    face_trigger=1e-6,
-    max_iterations=60,
-    armijo=1e-4,
-    backtrack=0.5,
-    max_line_search=40,
+    solver_options=None,
     certify=True,
 ):
     """Fit a natural objective over the exact full-curvature cone.
@@ -870,32 +906,9 @@ def _solve_natural_conic(
     initial_blocks : sequence of numpy.ndarray or None, optional
         Gram blocks to warm-start the first subproblem (an earlier result's
         ``blocks``); ignored when shaped for a different face.
-    tolerance : float, optional
-        Stopping target: iterate until predicted decrease plus certified
-        subproblem gap is at most ``tolerance * max(1, |nll|)``.
-    certified_tolerance : float, optional
-        When the subproblem can no longer certify progress (its gap floor is
-        about ``1e-11`` at unit scale), a certified bound within
-        ``certified_tolerance * max(1, |nll|)`` still counts as converged, so
-        ``converged`` always means certified within this bound.
-    accuracy_floor : float, optional
-        A larger certified bound, up to ``accuracy_floor * max(1, |nll|)``, is
-        reported as ``converged_approximately`` with the bound in
-        ``final_decrease_bound``.  This happens at degenerate optima, for
-        example degree 10 on 30 points, where the optimal Gram matrix is rank
-        one and contacts are weakly active.
-    face_trigger : float, optional
-        Size below which a boundary amplitude, or (relative to the largest
-        curvature coefficient) a leading curvature coefficient on a support
-        with an infinite tail, prompts an exact face solve: the amplitude
-        fixed to zero, or the degree lowered.  A face is accepted only if its
-        optimum matches the current optimum within ``tolerance``.
-    max_iterations : int, optional
-        Newton iteration limit per cone description.
-    armijo, backtrack : float, optional
-        Armijo sufficient-decrease constant and backtracking factor.
-    max_line_search : int, optional
-        Line-search trial limit per Newton step.
+    solver_options : _NewtonOptions or None, optional
+        Immutable Newton policy. ``None`` uses :class:`_NewtonOptions` defaults,
+        shared with mixture M-steps and joint polishing.
     certify : bool, optional
         Run the exact separator on the returned parameters.
 
@@ -912,15 +925,9 @@ def _solve_natural_conic(
         can be normalized.
     """
     layout = objective.layout
-    options = _NewtonOptions(
-        tolerance=float(tolerance),
-        certified_tolerance=float(certified_tolerance),
-        accuracy_floor=float(accuracy_floor),
-        max_iterations=int(max_iterations),
-        armijo=float(armijo),
-        backtrack=float(backtrack),
-        max_line_search=int(max_line_search),
-    )
+    options = _NewtonOptions() if solver_options is None else solver_options
+    if not isinstance(options, _NewtonOptions):
+        raise TypeError("solver_options must be _NewtonOptions or None")
     n = layout.n_params
     enabled = {"lower": layout.lower_a_index, "upper": layout.upper_a_index}
     # Infinite censoring rows can make an enabled boundary amplitude converge
@@ -939,7 +946,8 @@ def _solve_natural_conic(
         else:
             initial_array = np.asarray(initial, dtype=np.float64).reshape(-1)
             active = {
-                side: index is not None and float(initial_array[index]) > face_trigger
+                side: index is not None
+                and float(initial_array[index]) > options.face_trigger
                 for side, index in enabled.items()
             }
     effective = int(layout.curvature_degree)
@@ -1071,7 +1079,7 @@ def _solve_natural_conic(
         for side, index in enabled.items():
             if not active[side] or side in released:
                 continue
-            collapsed = float(run.params[index]) <= face_trigger
+            collapsed = float(run.params[index]) <= options.face_trigger
             # Near a = 0 the full description is degenerate (a double root of
             # the product polynomial at the endpoint), so the interior point
             # may stop at a small positive amplitude with only an approximate
@@ -1122,7 +1130,7 @@ def _solve_natural_conic(
             and degree_step
             and effective >= degree_step
             and abs(float(curvature[effective]))
-            <= face_trigger * max(1.0, float(np.max(np.abs(curvature))))
+            <= options.face_trigger * max(1.0, float(np.max(np.abs(curvature))))
         ):
             face_run = solve_face(
                 effective - degree_step, active, run.params, None, metric_at(run), 1

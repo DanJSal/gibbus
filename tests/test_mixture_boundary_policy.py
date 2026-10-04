@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from gibbus._api import fitting
+from gibbus._fit.degree import _DegreeSelectionConfig
 
 
 def _context():
@@ -18,6 +20,7 @@ def _context():
         em_tol=1e-5,
         log_boundary_lower="auto",
         log_boundary_upper=False,
+        degree_config=_DegreeSelectionConfig(alpha=0.02),
     )
 
 
@@ -50,8 +53,9 @@ def test_boundary_removal_locks_degrees_and_preserves_shared_numerical_seed(
         return result
 
     monkeypatch.setattr(fitting, "_fit_natural_mixture", fit)
+    context = _context()
     fitted, p_values = fitting._fit_mixture_with_boundary_policy(
-        _context(), 2, 6, None, (("direct", "raw"),)
+        context, 2, (6, 6), None, (("direct", "raw"),), initial_fit=None
     )
     assert len(calls) == 2
     assert calls[1][0][3] == (4, 6)
@@ -59,10 +63,15 @@ def test_boundary_removal_locks_degrees_and_preserves_shared_numerical_seed(
     assert calls[1][0][4:6] == (False, False)
     assert fitted is calls[1][2]
     assert p_values[0] > 0.05
+    assert all(
+        kwargs["degree_config"] is context.degree_config for _, kwargs, _ in calls
+    )
 
 
+@pytest.mark.parametrize("policy", [("auto", "auto"), (4, "auto")])
 def test_automatic_degrees_are_reselected_only_after_nested_boundary_comparison(
     monkeypatch,
+    policy,
 ):
     calls = []
 
@@ -72,15 +81,20 @@ def test_automatic_degrees_are_reselected_only_after_nested_boundary_comparison(
         return result
 
     monkeypatch.setattr(fitting, "_fit_natural_mixture", fit)
+    context = _context()
     fitted, _ = fitting._fit_mixture_with_boundary_policy(
-        _context(), 2, "auto", None, (("direct", "raw"),)
+        context, 2, policy, None, (("direct", "raw"),), initial_fit=None
     )
     assert len(calls) == 3
     assert calls[1][0][3] == (4, 6)
-    assert calls[2][0][3] == "auto"
+    assert calls[0][0][3] is policy
+    assert calls[2][0][3] is policy
     assert calls[2][0][4:6] == (False, False)
     assert calls[2][1]["initial_fit"] is calls[1][2]
     assert fitted is calls[2][2]
+    assert all(
+        kwargs["degree_config"] is context.degree_config for _, kwargs, _ in calls
+    )
 
 
 def test_explicit_boundary_policy_performs_no_nested_selection(monkeypatch):
@@ -95,7 +109,7 @@ def test_explicit_boundary_policy_performs_no_nested_selection(monkeypatch):
 
     monkeypatch.setattr(fitting, "_fit_natural_mixture", fit)
     fitted, p_values = fitting._fit_mixture_with_boundary_policy(
-        context, 2, "auto", None, (("direct", "raw"),), initial_fit=initial
+        context, 2, ("auto", "auto"), None, (("direct", "raw"),), initial_fit=initial
     )
     assert len(calls) == 1
     assert calls[0][1]["initial_fit"] is initial
@@ -117,6 +131,7 @@ def test_selection_receives_full_data_policy_and_hides_completed_payload(monkeyp
         k_max=3,
         auto_k_subsample=10,
         poly_degree=6,
+        degree_config=context.degree_config,
     )
     payload = {"fit": object()}
     received = {}
@@ -133,9 +148,11 @@ def test_selection_receives_full_data_policy_and_hides_completed_payload(monkeyp
     monkeypatch.setattr(fitting, "_propose_n_components", lambda *a, **k: (1, 3))
     monkeypatch.setattr(fitting, "select_n_components", select)
     initialized = fitting._initialize_mixture(request, context)
-    assert received["lower_boundary"] == "auto"
-    assert received["upper_boundary"] is False
-    assert received["degree_policy"] == 6
+    assert received["policy"].lower_boundary == "auto"
+    assert received["policy"].upper_boundary is False
+    assert received["policy"].degree_policy == 6
+    assert received["policy"].subsample_size == 10
+    assert received["degree_config"] is context.degree_config
     assert callable(received["refine_candidate"])
     assert initialized.completed_fit is payload
     assert "_selected_fit" not in initialized.selection_diagnostics
@@ -175,7 +192,9 @@ def test_full_data_single_winner_is_installed_without_another_fit(monkeypatch):
     monkeypatch.setattr(fitting, "_pack_natural_fit", pack)
     monkeypatch.setattr(fitting, "_Component", lambda state: component)
     monkeypatch.setattr(fitting, "_single_fit_metadata", lambda state: metadata)
-    result = fitting._run_mixture_fit(SimpleNamespace())
+    result = fitting._run_mixture_fit(
+        SimpleNamespace(degree_config=_DegreeSelectionConfig())
+    )
     assert result.components == [component]
     assert result.fit_metadata is metadata
     assert result.selection_diagnostics == {"reuse_selected_fit": True}
@@ -220,7 +239,12 @@ def test_subsample_winner_does_not_reuse_observation_dependent_continuation(
     )
     monkeypatch.setattr(fitting, "_mixture_fit_metadata", lambda *args: {})
     context.samples_rk = np.arange(20.0)[:, None]
-    request = SimpleNamespace(seed_components=None, poly_degree=2, progressive=False)
+    request = SimpleNamespace(
+        seed_components=None,
+        poly_degree=2,
+        progressive=False,
+        degree_config=context.degree_config,
+    )
     result = fitting._run_mixture_fit(request)
     assert calls[0][0][3] is full_responsibilities
     assert calls[0][1].get("initial_fit") is None

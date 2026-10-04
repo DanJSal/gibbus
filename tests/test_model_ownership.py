@@ -430,7 +430,9 @@ def test_seed_polynomial_is_reexpressed_in_target_conditioning():
         captured.update(gamma=gamma, curvature=curvature, boundary=boundary)
         return np.r_[gamma, curvature, boundary]
 
-    layout = SimpleNamespace(curvature_degree=0, pack=pack)
+    layout = SimpleNamespace(
+        curvature_degree=0, lower_a_index=2, upper_a_index=3, pack=pack
+    )
     seed = {
         "q_poly": np.array([0.0, 2.0, 3.0]),
         "fit_direction": -1.0,

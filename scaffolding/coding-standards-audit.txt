@@ -9,8 +9,8 @@ No library, test, build, or repository documentation files were changed.
 Locations are relative to the repository and refer to the reviewed working tree.
 This is a static conventions audit, not a proof of numerical correctness.
 
-An AST inventory covered all 57 library Python files. Its raw results are in
-coding-standards-inventory.jsonl alongside this report. It found:
+An AST inventory covered all 57 library Python files. The raw JSONL inventory
+was not retained in this checkout; the summarized counts used by this report were:
   145 non-nested definitions with signature defaults (INCLUDING public APIs);
     4 nested definitions with signature defaults;
    17 definitions accepting **kwargs (including intentional compatibility APIs);
@@ -230,10 +230,6 @@ gibbus\_spectral\tail.py
 Exceptions / lower priority:
 gibbus\_defaults.py:180 _reraise_if_debug(routine=False) is a central developer
   diagnostics policy, not a buried user-facing numerical default.
-gibbus\_api\frozen.py:224 FrozenDistribution.expect(**_kwargs) is publicly
-  reachable SciPy compatibility, not internal numerical kwargs propagation.
-  It deliberately ignores arbitrary compatibility keywords; whether unsupported
-  quadrature options should instead be rejected deserves a separate API decision.
 Public Distribution methods, .base/.exp methods and component evaluation methods
   reached through Distribution.components are intentionally not counted as
   hidden-helper signature violations merely because their classes start with "_".
@@ -738,3 +734,547 @@ Keep rather than mechanically remove:
 
 This report compiles the discovered cases, not an assertion that a static review
 found every possible violation or that every candidate should be changed.
+
+12. REMEDIATION CHECKPOINT - BATCH 3 (2026-10-04)
+----------------------------------------------
+Applied the cumulative through-batch-2 patch to the working tree, then resolved
+18 additional "Worthwhile refactor" register entries:
+  F007, F008, F011, F014, F015, F030, F031, F033,
+  F046, F047, F048, F049, F051, F053, F055, F056, F058, F063.
+
+Probability/statistics boundary work:
+  - Exp-space PPF delegates user normalization and rejection to the base public
+    boundary once; _raw_ppf consumes canonical probabilities without recoercion.
+  - Cumulant recurrence consumes the order validated by the public entry point.
+  - Goodness-of-fit prepares the statistic key and sorted/clipped PIT once,
+    evaluates the observation CDF once, and reuses the statistic for KS calibration.
+    SciPy still owns its own CvM calibration implementation.
+  - Resampling counts/coverage are validated in the public controller before
+    computational work; private aggregation does not revalidate them.
+  - Resampling failure budgets and expectation breakpoints are explicit at
+    internal call sites. Expectation tolerances and distinct scalar/vectorized
+    panel budgets retain their old values in _defaults.py.
+
+Maintenance:
+  - Consolidated the listed component/analytics/fitted-state/survival inline
+    imports at module boundaries.
+  - Documented component summary/support helpers, refinement inputs, model
+    metadata and shared-inference contracts.
+  - Corrected five stale positional _NewtonOptions test constructors omitted
+    from the supplied patch; the inserted face_trigger field otherwise shifted
+    their iteration limits and other controls.
+  - Formatted changed Python with Ruff and manually wrapped the PPF builder
+    call whose indentation in the supplied patch exceeded the line limit.
+
+The workbook now records 59 resolved and 134 open findings; 82 worthwhile
+refactors remain open. Its status and module summary formula caches were updated.
+The original through-batch-2 patch is retained unchanged as historical scaffolding.
+The source changes and register update are not staged or committed.
+
+Validation:
+  - Rebuilt patched Cython extensions with isolated official CPython 3.14.2 build
+    headers/import libraries because this interpreter installation lacks them.
+  - Final affected postfit/API, fitting and compiled regression coverage:
+    674 passed. Focused GIBBUS_DEBUG=1 postfit coverage: 98 passed.
+  - Changed Python formatting is clean. Ruff's remaining findings are the
+    existing TRY004 exception-style and RUF022 __all__ ordering warnings.
+  - Ruff retains nine known TRY004/RUF022 findings. Cython lint retains seven
+    existing long-line reports; no new findings were introduced. The missing
+    subprocess PATH was corrected for the lint run.
+
+13. REMEDIATION CHECKPOINT - BATCH 4 (2026-10-04)
+----------------------------------------------
+Resolved one linked canonical-observation contract batch rather than independent
+isolated coercion edits. Register entries closed:
+  F110, F111, F113, F114, F115, F116, F117, F118, F119, F120, F121.
+
+Contract changes:
+  - Original samples enter numerical preparation as boundary-validated float64
+    arrays: (R,1)/(R,2) for mixtures, (R,) for point-objective preparation.
+  - Original support is classified without another user-level validity check.
+    Point/interval preparation, coordinate construction and observation building
+    no longer repeat the same raw sample layout, NaN and endpoint-order checks.
+  - Original normalized weights are reused by identity. _canonical_weights
+    describes them without conversion or normalization; _WeightSummary carries
+    normalized masses, original total weight and original-row Kish effective size.
+  - _normalized_weights is reserved for newly derived responsibility masses or
+    selected subsets. Interval builders consume prepared summaries directly.
+    Duplicate aggregation therefore does not normalize grouped mass again or
+    silently reinterpret reliability weights as frequency counts.
+  - Valley/nested-scale initialization, weighted bandwidth, duplicate interval
+    aggregation and effective-size diagnostics consume their canonical contracts.
+    Component inference explicitly prepares its newly formed responsibility mass.
+
+Preserved numerical work:
+  - Robust coordinate scaling and informative-landmark weighting.
+  - Affine support mapping and preserved sub-ULP boundary distances.
+  - Component/shell positive-mass and seed-geometry guards.
+  - Compiled buffer adaptation and transformed sufficient-statistic checks.
+  - Original-row effective sample size after duplicate compression.
+  - Necessary normalization of component responsibilities and selected subsets.
+  Finite interval midpoint construction halves before addition to avoid overflow
+  introduced by otherwise valid finite endpoints.
+
+Oversight and coverage:
+  - Private-helper fixtures now prepare raw inputs at the boundary instead of
+    depending on removed numerical-layer normalization.
+  - Added identity/no-reprocessing regressions and a bounded duplicate-row
+    compact-M-step case that verifies original reliability metadata.
+  - Final affected observation/fitting/selection/API coverage: 602 passed.
+    GIBBUS_DEBUG=1 observation/fitting coverage: 387 passed.
+  - Changed Python remains Black-compatible; Ruff retains the same nine known
+    TRY004/RUF022 findings. No Cython source was changed in this batch.
+
+The workbook now records 70 resolved and 123 open findings, including 71 open
+worthwhile refactors. F016 remains open: its full-weight/subset handling improved,
+but selection sample coercion and raw subsample-policy ownership are not yet
+fully addressed. F112 degree-policy ownership and other unrelated cases also
+remain open. Nothing was staged or committed.
+
+14. REMEDIATION CHECKPOINT - BATCH 5 (2026-10-04)
+----------------------------------------------
+Resolved the remaining automatic-component-selection boundary contract and its
+linked callback/default/documentation findings:
+  F016, F027, F028, F029, F054, F060.
+
+Contract changes:
+  - inputs.py resolves selection limits, the screening-degree portfolio and the
+    raw subsample policy into an immutable _ComponentSelectionPolicy before the
+    numerical search. Existing automatic sample budgets and K limits are retained.
+  - select_n_components consumes canonical sample arrays and original normalized
+    weights without recoercion. Actual subsets still receive their required
+    normalization, and original-row Kish effective size still sets the BIC scale.
+  - Refinement callbacks consume an explicit _SelectionCandidate record instead
+    of arbitrary keyword mappings. Payload metadata is attached explicitly.
+  - Internal selection controls and the boundary-fit initial_fit argument have
+    no hidden defaults; every caller supplies the intended policy or sentinel.
+  - Documented selection records, helper parameters and callback contracts.
+
+Oversight and coverage:
+  - Added boundary-policy cases for disabled, explicit, capped and automatic
+    subsampling, invalid controls and inadmissible screening degrees.
+  - Added full-data identity coverage for rows, representatives and weights;
+    existing subset, endpoint, weighted-BIC and candidate-failure cases remain.
+  - Affected selection/boundary/validation coverage: 190 passed.
+    GIBBUS_DEBUG=1 selection/boundary coverage: 37 passed.
+  - Changed Python is Black-formatted. Ruff retains the same nine pre-existing
+    TRY004/RUF022 findings. No Cython source changed in this batch.
+
+The workbook now records 76 resolved and 117 open findings, including 65 open
+worthwhile refactors. Summary formula caches were refreshed. Deeper mixture
+degree-policy ownership (F112) and shared diagnostic configuration (F142/F148)
+remain open rather than being closed on the strength of selection-only work.
+Nothing was staged or committed.
+
+15. REMEDIATION CHECKPOINT - BATCH 6 (2026-10-04)
+----------------------------------------------
+Resolved shared degree-policy ownership and its linked documentation findings:
+  F112, F142, F148, F178, F181.
+
+Contract changes:
+  - Raw scalar/string/sequence degree forms normalize in inputs.py. Mixture
+    fitting, EM initialization and warm continuation consume canonical tuples,
+    including homogeneous policies and derived fixed-degree ladder rungs.
+  - _FitRequest creates one immutable _DegreeSelectionConfig. Single-component
+    fitting, selection screens, finalist refinement, shared degree growth,
+    component diagnostics and boundary-removal refits receive that same object.
+    A selected K=1 subsample winner also reuses it during the full-data refit.
+  - Numerical degree helpers require explicit configuration rather than
+    reconstructing defaults from None at each stage.
+  - Fixed per-component precedence, automatic growth eligibility, derived probe
+    guards, observed-information rank/curvature checks and likelihood-preserving
+    warm-refit checks remain intact.
+  - Documented all five scoped mixture-degree helpers and the joint diagnostic
+    record, along with the new canonical-policy/configuration contracts.
+
+Requested public behavior change:
+  - Distribution.fit now defaults to n_components=1. Automatic component-count
+    selection remains available explicitly via n_components="auto".
+  - init_from still inherits the seed's component count.
+  - Updated the fit docstring, README navigation, default-value table and all
+    automatic-selection examples, including k_max examples.
+
+Oversight and coverage:
+  - Adapted private-helper tests to explicit canonical tuples and configuration.
+  - Added fixed/automatic/mixed degree, direct/ladder, config-identity and boundary
+    refit regressions. Added separated bimodal default-versus-opt-in selection
+    coverage and selected-single full-data/subsample policy-identity coverage.
+  - Adapted degree/mixture/selection coverage: 373 passed; additional focused
+    tuple/rung cases passed before the final debug run.
+  - Additional public API/validation/resampling/correctness coverage: 459 passed.
+    GIBBUS_DEBUG=1 degree-policy/degree/boundary/selection coverage: 133 passed.
+  - Changed Python is Black-formatted. Ruff retains the same nine pre-existing
+    TRY004/RUF022 findings. No Cython source changed in this batch.
+
+The workbook now records 81 resolved and 112 open findings, including 60 open
+worthwhile refactors. Summary formula caches were refreshed. Other helper
+defaults and unrelated policy/representation findings remain open.
+Nothing was staged or committed.
+
+16. REMEDIATION CHECKPOINT - BATCH 7 (2026-10-04)
+----------------------------------------------
+Combined low-risk contract, import and documentation work without repeated
+runtime regression runs. Register entries closed:
+  F022, F024, F025, F026, F035, F041, F050, F085, F086, F087, F088,
+  F091, F092, F093, F095, F097, F098, F099, F179, F182, F183, F193.
+
+Explicit internal contracts:
+  - Truncation callers supply both bounds, including explicit None when keeping
+    an existing bound.
+  - Component, mixture and Distribution tail adapters require an explicit side.
+  - Hybrid survival/CDF and inversion helpers require explicit support endpoints
+    and scalar/batch tail adapters. Tail inversion/refinement requires an
+    explicit side/adapter rather than silently selecting a lower-tail fallback.
+  - All public signatures and numerical algorithm bodies remain unchanged.
+    Three direct tail-helper test cases now supply their prior policy explicitly.
+
+Imports and documentation:
+  - Consolidated PPF builder/table, build-script tempfile, moment/state libc
+    cimports and curvature-certificate NumPy imports at module scope.
+  - Documented moment contractions, prepared quadrature, vector evaluation,
+    mixture derivative jets, all five panel kernels and compiled tail queries.
+  - Documented mixture coordinate-map/face construction and reusable methods.
+  - The standards file now explicitly identifies itself as temporary legacy
+    guidance, matching the audit's non-authoritative treatment.
+  - Compiled adapter work-budget defaults and unrelated validation/representation
+    findings remain open; documentation does not imply they were refactored.
+
+Oversight without runtime test execution:
+  - AST review covered 39 direct tail/survival call sites, plus truncation calls,
+    confirming explicit policy arguments throughout library and test sources.
+  - Package/relocated spectral imports load successfully.
+  - Cython translation succeeded for the three files with moved executable
+    imports; no extension rebuild was needed for this source-only batch.
+  - Changed Python is Black-formatted. Ruff retains the same nine known
+    TRY004/RUF022 findings. Cython lint retains five existing long-line reports
+    in the scoped files, with no new reports.
+  - No pytest invocation was made. Consolidated runtime regression testing and
+    eventual extension rebuilding remain deferred; register notes record this.
+
+The workbook now records 103 resolved and 90 open findings, including 38 open
+worthwhile refactors. Summary formula caches were refreshed.
+Nothing was staged or committed.
+
+17. REMEDIATION CHECKPOINT - BATCH 8 (2026-10-04)
+----------------------------------------------
+Resolved one combined API-query and initializer-policy batch:
+  F009, F010, F017, F018, F019, F020, F021,
+  F143, F147, F149, F150, F163.
+
+API ownership and canonical inputs:
+  - Probability/log-probability and region-level preparation lives in the new
+    API validation module. Survival inversion consumes canonical float64 arrays;
+    interval/HPD and HPD fallback consume the already-prepared probability mass.
+    Existing NaN, endpoint and logarithmic-probability semantics are preserved.
+  - Refined component PPF evaluation has a private canonical-input path.
+    Survival inversion uses it instead of reentering public PPF validation.
+  - Oriented and exp-space potential evaluation consumes prepared arrays/orders
+    and installed geometry. The nonzero/finite derived affine-scale guard remains.
+  - Spectral endpoint seeds unpack canonical support/amplitudes directly.
+  - Every private _Component._fit option is explicit; public fit defaults remain
+    owned by Distribution.fit and its request controller.
+
+Initializer and numerical policy:
+  - Gaussian seed EM tolerances, iteration limits, variance floor, KDE grid
+    margin, Turnbull budgets and boundary-test alpha live in _defaults.py.
+    Their previous numerical values are unchanged.
+  - Gaussian EM, Turnbull bounds and boundary selection receive controls
+    explicitly. KDE counting requires the caller's prepared RNG and verbosity;
+    deterministic seeding remains owned by the fit boundary.
+  - Mode wrappers declare vectorized capability explicitly. Scalar-only
+    callbacks still work via vectorized=False. Declared array-evaluator errors
+    propagate, and malformed output shapes are rejected rather than silently
+    retried as scalar evaluations.
+
+Oversight with consolidated runtime tests deferred:
+  - AST call-site review covered 21 explicit numerical-policy calls and all
+    12 public survival/region query boundaries.
+  - Package and new API validation imports load successfully.
+  - Added regressions for canonical probabilities/geometry, early public
+    rejection, private survival PPF dispatch, flat HPD fallback, propagated
+    vectorized errors and invalid vectorized output shape.
+  - Existing private-helper fixtures now pass RNG, budgets, alpha, component
+    options and scalar/vectorized capability explicitly.
+  - No pytest invocation was made; new and adapted regressions are queued for
+    the later combined runtime pass. No Cython source changed in this batch.
+  - Changed Python is Black-formatted; Ruff retains the same nine known
+    TRY004/RUF022 findings.
+
+The workbook now records 115 resolved and 78 open findings, including 26 open
+worthwhile refactors. Summary formula caches were refreshed.
+Nothing was staged or committed.
+
+18. REMEDIATION CHECKPOINT - BATCH 9 (2026-10-04)
+----------------------------------------------
+Resolved the complete scoped nogil-buffer batch and remaining compiled callable
+documentation clusters:
+  F071, F072, F073, F074, F075, F076, F089, F090, F094, F096.
+
+Buffer binding:
+  - Conic QP/Newton adapters, shared/joint mixture adapters, point statistics,
+    moment/state integration and panel evaluation bind buffer pointers before
+    releasing the GIL.
+  - Polynomial widths and quadrature counts needed by released-GIL traversals
+    are captured beforehand rather than fetched through arrays inside them.
+  - Owners remain alive for each traversal. Optional/empty cone, descriptor and
+    point buffers use size-guarded NULL bindings rather than indexing element
+    zero unconditionally.
+  - State/statistics pointer binding occurs before C workspace allocation so
+    failed checked-build buffer access cannot skip workspace cleanup.
+  - Numerical loops, argument ordering, allocation cleanup and control values
+    are otherwise unchanged.
+
+Documentation:
+  - Completed parameter contracts for the contiguous adapter, bare/scaled conic
+    QPs, point/interval/callback Newton entries, coupled M-step/joint callable
+    methods, adaptive interval constructor/reductions and inverse construction.
+  - Removed the stale claim that callback Newton is the current joint-mixture
+    polish path; the compiled shared/joint path is documented separately.
+  - Compiled numerical default ownership and repeated rebinding (F080-F084)
+    remain open rather than being treated as solved by documentation.
+
+Oversight without runtime test execution:
+  - All eight changed Cython modules translated successfully with bounds,
+    wraparound, none and initialized checks enabled.
+  - Static scans covered all 17 explicit nogil blocks in the six scoped kernel
+    modules: no buffer address extraction, typed-ndarray indexing or ndarray
+    shape access remains within those blocks.
+  - Cython lint retains four existing long-line reports in the scoped files.
+    Ruff retains the same nine known Python TRY004/RUF022 findings.
+  - Added empty-point/empty-coefficient panel regressions for the later combined
+    run. No pytest invocation or extension rebuild was made.
+  - Generated translation artifacts were removed; extension rebuilding and
+    accumulated runtime regressions remain deferred.
+
+The workbook now records 125 resolved and 68 open findings, including 16 open
+worthwhile refactors. Summary formula caches were refreshed.
+Nothing was staged or committed.
+
+19. REMEDIATION CHECKPOINT - BATCH 10 (2026-10-04)
+-----------------------------------------------
+Resolved compiled-control ownership and canonical model/statistic handling:
+  F080, F081, F082, F083, F084, F123, F124, F126.
+
+Explicit compiled policy and stable bindings:
+  - Shared defaults own QP gap/iteration/step controls, full-curvature certificate
+    subdivision budgets and scaled-tail quadrature controls. Previous numerical
+    values are unchanged.
+  - Compiled point/interval Newton, adaptive interval construction, tail queries
+    and curvature certification require explicit controls. Python fit/query
+    owners and direct test callers now supply them.
+  - The public compiled preconditioned-QP adapter delegates to an already-bound
+    memoryview helper. Callback Newton binds fixed cone buffers once and binds
+    each new gradient/Hessian/parameter state once per evaluation, rather than
+    recoercing them through the Python adapter on warm/cold retries.
+  - Callback Newton receives explicit QP controls; fused point/interval/shared
+    kernels cache the same centrally owned defaults as C scalars for nogil use.
+  - Native extensions must be rebuilt before the consolidated runtime pass.
+
+Canonical model/statistic representation:
+  - Layout feasibility checks share one canonical-vector checker. Candidate
+    construction no longer revalidates during unpacking; packing and core-state
+    construction avoid reformatting vectors they have just constructed/owned.
+  - Core-state/candidate ownership copies, finite-value/length checks and enabled
+    amplitude sign checks remain intact.
+  - Quadrature/vector geometry helpers unpack canonical amplitudes directly.
+  - Uniform interval pseudo-statistics reuse canonical rows/weights; stricter
+    finite geometry, endpoint-distance, active-boundary and moment-overflow guards
+    remain unchanged.
+
+Oversight with runtime coverage deferred:
+  - All four changed Cython modules translated with bounds, wraparound, none and
+    initialized checks enabled.
+  - Static review checked 19 compiled call sites against required controls and
+    their complete positional/keyword signatures.
+  - Added queued regressions for single candidate validation with owned output,
+    and no repeated formatting of canonical uniform-statistic inputs.
+  - Changed Python is Black-formatted. Ruff retains the same nine known findings;
+    Cython lint retains four existing long-line reports in the scoped files.
+  - No pytest invocation or extension rebuild was made. Generated translation
+    artifacts were removed; accumulated regressions remain queued.
+
+The workbook now records 133 resolved and 60 open findings, including 8 open
+worthwhile refactors. Summary formula caches were refreshed.
+Nothing was staged or committed.
+
+20. REMEDIATION CHECKPOINT - BATCH 11 (2026-10-04)
+-----------------------------------------------
+Resolved the linked spectral policy/evaluation/oracle batch:
+  F037, F038, F064, F065, F108.
+
+Construction ownership:
+  - Forward/inverse construction takes explicit immutable spectral policy
+    records. Forward map mode/scale proxies, explicit map-scale selection and
+    seed breaks are also required at callers.
+  - All existing degree/tolerance/depth/panel/certification defaults retain their
+    values in _defaults.py. Forward budget degradation and inverse budget failure
+    semantics remain distinct and documented.
+  - Cached builder tables require both forward and inverse degree sets; forward
+    construction explicitly passes an empty inverse set.
+  - Fitted-state, truncated-component and mixture representation owners resolve
+    policies. Test-only builders consume those records rather than inspecting
+    production constructor keyword defaults.
+
+One numerical evaluation path:
+  - Physical/compact CDF calls delegate to the packed compiled evaluator; the
+    duplicate Python panel-search/antiderivative loop is removed.
+  - Physical/compact PPF calls share compiled dispatch. A compact-coordinate
+    entry point uses the same kernel traversal without physical remapping;
+    duplicate Python inverse-panel evaluation/search is removed.
+  - Construction-time inversion helpers remain because they seed/fit panels,
+    rather than implement a competing runtime evaluator.
+
+Oversight with runtime coverage deferred:
+  - Builder/cache comparisons now exercise physical CDF values, monotonicity and
+    inverse probability residuals with explicit numerical tolerances, not exact
+    partitions or bitwise packed/evaluated arrays.
+  - The Python construction harness remains clearly labeled non-independent;
+    analytic-distribution and external-quadrature oracles remain elsewhere.
+  - Adapted the constrained-inverse fallback test to the explicit policy record.
+    Added queued tests for required policy arguments and shared compiled dispatch.
+  - Static review covered all nine direct spectral construction calls and the
+    explicit cached-table degree arguments.
+  - The new PPF entry point translated with checked-build directives enabled.
+    Native extensions still require rebuilding before runtime regression.
+  - Python is Black-formatted; Ruff retains the same nine known findings.
+    Scoped Cython lint retains the existing builders.pyx long-line report.
+  - No pytest invocation or extension rebuild was made. The generated translation
+    artifact was removed.
+
+The workbook now records 138 resolved and 55 open findings, including 3 open
+worthwhile refactors: F012, F013 and F125. Summary caches were refreshed.
+Nothing was staged or committed.
+
+21. REMEDIATION CHECKPOINT - BATCH 12 (2026-10-04)
+-----------------------------------------------
+Implemented the final worthwhile source-refactor entries:
+  F012, F013, F125.
+
+Analytic preparation:
+  - Scalar root/quadrature callbacks share a prepared potential context with
+    canonical geometry, endpoint activity and first/second derivative arrays.
+    Derivative reconstruction and array coercion no longer run per sample.
+  - Stored moment/geometry arrays and boundary-validated moment orders are
+    consumed directly. Orientation copies and newly tilted coefficient copies
+    remain where they represent ownership or genuinely derived values.
+  - Active-endpoint infinities, tail-rate/saddle logic, convexity and finite-mass
+    guards retain their prior behavior.
+
+Separation:
+  - Private layers reuse canonical support/amplitude containers instead of
+    repeatedly coercing/flattening them.
+  - Support ordering, amplitude sign/endpoint rules, exact binary64-to-rational
+    conversion, root bounds and certification tests remain in place.
+
+Oversight:
+  - Added queued regressions for one-time derivative preparation, endpoint
+    singularities and no repeated separation-geometry conversion.
+  - Python is Black-formatted; Ruff retains the same nine known findings.
+  - The consolidated native rebuild and full existing pytest suite have now
+    been started. Completion/failure details will be recorded separately.
+
+The workbook now records 141 resolved and 52 open findings, with zero open
+worthwhile refactors. This is source-remediation status, not a claim that the
+consolidated runtime checkpoint has passed. Summary caches were refreshed.
+Nothing was staged or committed.
+
+22. CONSOLIDATED NATIVE/RUNTIME CHECKPOINT (2026-10-04)
+---------------------------------------------------
+Rebuilt all 16 Cython extensions in place with MSVC against CPython 3.14.2
+development headers and a compatible python314 import library.
+
+One complete normal-mode pytest invocation:
+  1370 passed, 16 failed (1386 collected cases).
+
+The failures exposed two stale private-helper fixtures, not a need to weaken
+solver assertions or change the numerical algorithm:
+  - Fifteen randomized interval cases passed unnormalized relative weights into
+    the canonical numerical preparation helper. The fixture now normalizes
+    through the existing input-boundary weight helper before numerical dispatch.
+    The generator retains raw weights for its other public-boundary consumers.
+  - One warm-seed polynomial fixture omitted the layout's boundary indices.
+    Added the two indices required by the current layout contract.
+
+After these fixture-only adaptations, reran both complete affected modules:
+  tests/test_interval_solver_properties.py
+  tests/test_model_ownership.py
+  70 passed, including every previously failing case.
+
+The full run plus focused rerun cover all 1386 cases successfully; this is not
+represented as a second full-suite run. No remaining failure from the
+consolidated checkpoint is outstanding.
+
+Bookkeeping and environment:
+  - Appended checkpoint outcomes to all 60 deferred batch-7-through-12 register
+    notes. Finding statuses and counts are unchanged.
+  - Removed the temporary machine-specific setup.cfg used by the native build.
+    Native extensions remain rebuilt in place.
+  - The native build used MSVC's vcvars64 environment and the existing
+    setup.py build_ext --inplace command. Future builds can supply the prepared
+    development-header directory through build_ext --include-dirs rather than
+    adding a machine-specific repository configuration.
+  - Removed the isolated temporary CPython source/download extraction. Prepared
+    development headers and the import library remain available for rebuilding.
+  - Fixture changes remain Black-formatted and lint-clean. The existing nine
+    repository-wide Ruff TRY004/RUF022 findings remain unchanged.
+
+Final source/runtime state: 141 resolved, 52 open; zero open worthwhile
+refactors. The other open findings comprise 13 "Document as exception" and
+39 "Probably leave alone" items.
+Nothing was staged or committed.
+
+23. LOWER-PRIORITY EXCEPTION/REGISTER FOLLOW-UP (2026-10-04)
+---------------------------------------------------------
+Reconciled stale bookkeeping and documented narrow, deliberate exceptions:
+  F032, F101, F102, F106, F107, F128, F136.
+
+  - F032 had already been superseded by explicit region-mode policy in batch 8.
+  - SIMD allocation fallbacks document safe scalar degradation and why
+    noexcept/nogil code cannot enter the Python failure ledger.
+  - Test-only solver/construction references document the specific translation,
+    callable-density and failure-injection coverage they retain, including
+    their limits as independent mathematical oracles.
+  - Reduction adapters explain why scalar/full/compact derived-statistic forms
+    are intentional; raw observation representation remains canonical.
+  - The integration/ledger adapter documents its narrow QUADPACK kwargs surface
+    and explicit caller-owned numerical policy.
+  - Retired an obsolete finding and its module-summary row after the associated
+    compatibility surface was discarded. Existing finding IDs remain stable.
+
+Removed four obsolete compatibility-specific tests and retained the remaining
+API extension coverage: 110 passed. No broader regression run or native rebuild
+was needed for removal of Python-only code and comment/docstring changes.
+Python remains Black-formatted; Ruff retains the nine known findings. Scoped
+Cython lint reports the existing CDF-evaluator long line.
+
+The register now contains 192 findings: 148 resolved and 44 open, consisting
+of 6 "Document as exception" and 38 "Probably leave alone" items.
+Zero worthwhile refactors remain open. Table bounds, formulas and all summary
+formula caches were adjusted after row retirement.
+Nothing was staged or committed.
+
+24. FINAL LOW-RISK DOCUMENTATION/IMPORT FOLLOW-UP (2026-10-04)
+-----------------------------------------------------------
+Closed the remaining useful documentation and import-rationale entries:
+  F040, F052, F057, F059, F061, F062, F168, F169, F170, F171, F172.
+
+  - Documented compact/physical map invariants, forward/inverse panel coordinate
+    systems, diagnostics and degree/width properties.
+  - Corrected a stale forward-panel doc reference after compiled construction
+    superseded the old Python mass-recertification method.
+  - Documented the equivalent compiled-dispatch default and the active-space,
+    copy, presentation-version and statistical property contracts.
+  - Checked module-level dependencies before hoisting acyclic evaluation,
+    serialization, model-helper and quadrature-table imports.
+  - Retained/documented the natural-objective/solver and reciprocal
+    mixture/degree runtime imports instead of introducing a dependency cycle.
+  - No algorithm, numerical guard, sentinel, ownership or public behavior changed.
+
+Focused import/degree/boundary/spectral coverage: 60 passed.
+Changed Python is Black-formatted; the same nine known Ruff findings remain.
+No native rebuild or repeat full-suite run was needed.
+
+The register now records 159 resolved and 33 open findings. Every remaining open
+entry is classified "Probably leave alone"; no worthwhile refactor or
+documentation-exception item remains open. Summary caches were refreshed.
+Nothing was staged or committed.

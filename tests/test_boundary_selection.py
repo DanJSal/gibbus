@@ -5,6 +5,7 @@ import pytest
 from scipy.stats import chi2
 
 from gibbus import Distribution
+from gibbus._defaults import BOUNDARY_ALPHA
 from gibbus._fit.boundary import (
     AUTO,
     _boundary_p_value,
@@ -43,6 +44,7 @@ def test_selection_drops_the_least_significant_side_first_and_stops():
         AUTO,
         AUTO,
         400.0,
+        alpha=BOUNDARY_ALPHA,
     )
     assert flags == (False, True)
     assert model["flags"] == (False, True)
@@ -63,6 +65,7 @@ def test_explicit_flags_are_never_tested():
         True,
         False,
         100.0,
+        alpha=BOUNDARY_ALPHA,
     )
     assert flags == (True, False) and calls == [(True, False)]
     assert np.all(np.isnan(p_values))

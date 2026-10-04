@@ -15,20 +15,6 @@ from .._defaults import (
 from .logspace import log_mass_between
 
 
-def validate_level(level, /):
-    """Validate and return a probability-region level.
-
-    Parameters
-    ----------
-    level : float
-        Requested probability mass in ``(0, 1]``.
-    """
-    value = float(level)
-    if not np.isfinite(value) or not (0.0 < value <= 1.0):
-        raise ValueError("level must be in (0, 1]")
-    return value
-
-
 def interval(ppf, isf, support, level, /):
     """Return an equal-tailed interval.
 
@@ -39,9 +25,8 @@ def interval(ppf, isf, support, level, /):
     support : array_like, shape (2,)
         Distribution support.
     level : float
-        Requested probability mass.
+        Boundary-validated probability mass in ``(0, 1]``.
     """
-    level = validate_level(level)
     if level == 1.0:
         lo, hi = map(float, support)
         return (lo, hi)
@@ -64,7 +49,7 @@ def _mass(logcdf, logsf, a, b):
         return float(np.exp(lm))
 
 
-def hpd(logpdf, logcdf, logsf, ppf, isf, support, level, /, *, modes=()):
+def hpd(logpdf, logcdf, logsf, ppf, isf, support, level, /, *, modes):
     """Compute a highest-density region as disjoint intervals.
 
     Parameters
@@ -76,11 +61,10 @@ def hpd(logpdf, logcdf, logsf, ppf, isf, support, level, /, *, modes=()):
     support : array_like, shape (2,)
         Distribution support.
     level : float
-        Requested probability mass.
-    modes : sequence of float, optional
+        Boundary-validated probability mass in ``(0, 1]``.
+    modes : sequence of float
         Known local modes, used to enrich the crossing grid.
     """
-    level = validate_level(level)
     lo, hi = map(float, support)
     if level == 1.0:
         return np.array([[lo, hi]], dtype=np.float64)

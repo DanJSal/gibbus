@@ -32,7 +32,15 @@ cdef inline double _chebval_one(double x, const double[::1] coeff) noexcept nogi
 
 
 def lobatto_coefficients(const double[::1] values, const double[:, ::1] transform):
-    """Apply one cached Lobatto value-to-coefficient transform."""
+    """Apply one cached Lobatto value-to-coefficient transform.
+
+    Parameters
+    ----------
+    values : contiguous float64 buffer, shape (N,)
+        Function values at the transform's Lobatto nodes.
+    transform : float64 buffer, shape (N, N)
+        Cached value-to-coefficient matrix, contiguous along its last axis.
+    """
     cdef Py_ssize_t n = values.shape[0]
     cdef Py_ssize_t i, j
     cdef double total
@@ -49,12 +57,22 @@ def lobatto_coefficients(const double[::1] values, const double[:, ::1] transfor
 
 
 def chebval_many(const double[::1] x, const double[::1] coeff):
-    """Evaluate one Chebyshev series at many points with scalar Clenshaw loops."""
+    """Evaluate one Chebyshev series at many points with scalar Clenshaw loops.
+
+    Parameters
+    ----------
+    x : contiguous float64 buffer
+        Evaluation coordinates in the series' Chebyshev domain.
+    coeff : contiguous float64 buffer
+        Increasing-order Chebyshev coefficients; an empty series is zero.
+    """
     cdef Py_ssize_t i, n = x.shape[0]
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out = np.empty(n, dtype=np.float64)
+    cdef const double* x_ptr = &x[0] if n > 0 else NULL
+    cdef double* out_ptr = &out[0] if n > 0 else NULL
     with nogil:
         for i in range(n):
-            out[i] = _chebval_one(x[i], coeff)
+            out_ptr[i] = _chebval_one(x_ptr[i], coeff)
     return out
 
 
@@ -64,7 +82,26 @@ def cdf_panel_metrics(
     const double[:, ::1] transform,
     const double[::1] validation_nodes,
 ):
-    """Return coefficients and error diagnostics for one forward CDF panel."""
+    """Return coefficients and error diagnostics for one forward CDF panel.
+
+    Parameters
+    ----------
+    values : contiguous float64 buffer, shape (N,)
+        Function values at Lobatto fit nodes.
+    exact : contiguous float64 buffer, shape (M,)
+        Reference function values at the validation nodes.
+    transform : float64 buffer, shape (N, N)
+        Value-to-coefficient matrix, contiguous along its last axis.
+    validation_nodes : contiguous float64 buffer, shape (M,)
+        Validation coordinates in the Chebyshev domain.
+
+    Returns
+    -------
+    tuple
+        Coefficients, maximum validation error, maximum sampled magnitude,
+        maximum magnitude of the last four coefficients and maximum coefficient
+        magnitude.
+    """
     cdef Py_ssize_t n = values.shape[0]
     cdef Py_ssize_t m = exact.shape[0]
     cdef Py_ssize_t i, j
@@ -115,7 +152,21 @@ def cdf_panel_metrics(
 
 
 def chebint_scaled(const double[::1] coeff, double scl=1.0):
-    """Integrate one Chebyshev series once, matching ``numpy.chebint`` at lbnd=0."""
+    """Integrate one Chebyshev series once, matching ``numpy.chebint`` at lbnd=0.
+
+    Parameters
+    ----------
+    coeff : contiguous float64 buffer
+        Increasing-order Chebyshev coefficients.
+    scl : float, optional
+        Multiplicative integration scale, typically a panel-coordinate Jacobian.
+
+    Returns
+    -------
+    tuple
+        Antiderivative coefficients with value zero at zero and the integral
+        between Chebyshev coordinates -1 and 1.
+    """
     cdef Py_ssize_t n = coeff.shape[0]
     cdef Py_ssize_t j
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out
@@ -143,7 +194,13 @@ def chebint_scaled(const double[::1] coeff, double scl=1.0):
 
 
 def chebder(const double[::1] coeff):
-    """Differentiate one Chebyshev series once."""
+    """Differentiate one Chebyshev series once.
+
+    Parameters
+    ----------
+    coeff : contiguous float64 buffer
+        Increasing-order Chebyshev coefficients.
+    """
     cdef Py_ssize_t n = coeff.shape[0]
     cdef Py_ssize_t j
     cdef cnp.ndarray[cnp.float64_t, ndim=1] out

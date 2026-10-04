@@ -3,6 +3,11 @@
 ``_conic_kernels.solve_conic_qp`` and ``solve_preconditioned`` are C
 translations of the solver below; the tests compare them against it.  Nothing
 in the package imports this module.
+
+This is a narrow test-only duplication exception: independent NumPy execution
+catches native translation, indexing and linear-algebra regressions. Sharing
+the solver's mathematics does not independently prove the algorithm correct;
+separate feasibility and certificate assertions provide that coverage.
 """
 
 from dataclasses import dataclass

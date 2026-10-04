@@ -220,12 +220,20 @@ def empirical_point_stats(const double[::1] z, weights, int max_order, double lo
     cdef cnp.ndarray[cnp.float64_t, ndim=1] boundary = np.empty(2)
     cdef double total = 0.0, n_eff = 0.0
     cdef int status
+    cdef const double* z_ptr = &z[0]
+    cdef const double* raw_ptr = &raw[0]
+    cdef double* w_ptr = &w[0]
+    cdef double* moments_ptr = &moments[0]
+    cdef double* participation_ptr = &participation[0]
+    cdef double* boundary_ptr = &boundary[0]
     cdef double* work = <double*> malloc(2 * n * sizeof(double))
     if work == NULL:
         raise MemoryError("point statistics workspace")
     with nogil:
-        status = _point_stats(&z[0], &raw[0], weighted, n, max_order, lower, upper,
-                              has_lower, has_upper, &w[0], work, &moments[0],
-                              &participation[0], &boundary[0], &total, &n_eff)
+        status = _point_stats(
+            z_ptr, raw_ptr, weighted, n, max_order, lower, upper,
+            has_lower, has_upper, w_ptr, work, moments_ptr,
+            participation_ptr, boundary_ptr, &total, &n_eff,
+        )
     free(work)
     return status, moments, participation, boundary, total, n_eff

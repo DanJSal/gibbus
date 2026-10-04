@@ -26,9 +26,17 @@ as a 1-D float64 array of length *R*.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import numpy as np
 
+from .._defaults import (
+    AUTO_LC_SUBSAMPLE_MIN_N,
+    AUTO_LC_SUBSAMPLE_PER_K,
+    AUTO_LC_SUBSAMPLE_SIZE,
+    AUTO_LC_SWEEP_MAX_K,
+    AUTO_LC_VALIDATION_DEGREES,
+)
 from .boundary import AUTO
 
 # Fitted-state fields a warm-start seed must provide.
@@ -39,6 +47,104 @@ _SEED_FIELDS = (
     "support",
     "requested_poly_degree",
 )
+
+
+@dataclass(frozen=True)
+class _ComponentSelectionPolicy:
+    """Resolved component-count search controls.
+
+    Parameters
+    ----------
+    ceiling, initial_hi : int
+        Maximum candidate count and upper end of the initial screening sweep.
+    subsample_size : int
+        Number of canonical observation rows used for selection.
+    degrees : tuple of int
+        Admissible fixed degrees used for screening.
+    degree_policy : int or str
+        Requested refinement degree, with automatic selection spelled ``"auto"``.
+    lower_boundary, upper_boundary : bool or str
+        Boundary policies after full-data endpoint exclusions.
+    """
+
+    ceiling: int
+    initial_hi: int
+    subsample_size: int
+    degrees: tuple[int, ...]
+    degree_policy: int | str
+    lower_boundary: bool | str
+    upper_boundary: bool | str
+
+
+def _prepare_component_selection_policy(
+    n_rows,
+    support,
+    k_modes,
+    effective_k_max,
+    subsample,
+    degree_policy,
+    lower_boundary,
+    upper_boundary,
+    /,
+):
+    """Resolve raw selection controls before entering the numerical search.
+
+    Parameters
+    ----------
+    n_rows : int
+        Full canonical observation count.
+    support : tuple of float
+        Validated physical support.
+    k_modes, effective_k_max : int
+        Mode proposal and its component-count limit.
+    subsample : str, int or bool
+        Public selection-sample policy.
+    degree_policy : int, str or None
+        Public polynomial-degree policy.
+    lower_boundary, upper_boundary : bool or str
+        Prepared full-data boundary policies.
+    """
+    ceiling = max(1, min(effective_k_max, AUTO_LC_SWEEP_MAX_K, max(n_rows // 50, 2)))
+    initial_hi = min(ceiling, max(2 * k_modes, 1))
+    if degree_policy is None or degree_policy == "auto":
+        degree_policy = "auto"
+        degrees = tuple(
+            d
+            for d in AUTO_LC_VALIDATION_DEGREES
+            if _is_poly_degree_admissible(d, support)
+        )
+    else:
+        degree_policy = _coerce_poly_degree(degree_policy)
+        degrees = (degree_policy,)
+        if not _is_poly_degree_admissible(degree_policy, support):
+            raise ValueError("requested screening degree is not admissible on support")
+    if not degrees:
+        raise ValueError("no admissible screening degrees")
+    if subsample is False or subsample == 0:
+        size = n_rows
+    elif isinstance(subsample, str):
+        if subsample != "auto":
+            raise ValueError(
+                f"subsample must be 'auto', an int, or False, got {subsample!r}."
+            )
+        size = (
+            max(AUTO_LC_SUBSAMPLE_SIZE, initial_hi * AUTO_LC_SUBSAMPLE_PER_K)
+            if n_rows > AUTO_LC_SUBSAMPLE_MIN_N
+            else n_rows
+        )
+    else:
+        size = int(subsample)
+        if size < 2:
+            raise ValueError(f"subsample must be at least 2, got {size}.")
+    return _ComponentSelectionPolicy(
+        ceiling,
+        initial_hi,
+        min(size, n_rows),
+        degrees,
+        degree_policy,
+        lower_boundary,
+        upper_boundary,
+    )
 
 
 def _to_generator(rng, /):
@@ -61,6 +167,78 @@ def _to_generator(rng, /):
     if isinstance(rng, np.random.RandomState):
         return np.random.default_rng(rng.randint(0, 2**32 - 1))
     return np.random.default_rng(rng)
+
+
+def _normalize_degree_policies(degree, count, /):
+    """Canonicalize a raw shared or per-component polynomial-degree policy.
+
+    Parameters
+    ----------
+    degree : int, str, None or sequence
+        Shared degree policy or one entry per component. ``None`` and
+        case-insensitive ``"auto"`` select automatic degree growth.
+    count : int
+        Prepared positive component count.
+
+    Returns
+    -------
+    tuple of int or str
+        Exactly one integral degree or canonical ``"auto"`` per component.
+    """
+    if degree is None or isinstance(degree, str) or np.isscalar(degree):
+        values = (degree,) * count
+    else:
+        values = tuple(degree)
+        if len(values) != count:
+            raise ValueError(
+                "per-component degree policies must match the component count"
+            )
+    policies = []
+    for value in values:
+        if value is None:
+            policies.append("auto")
+        elif isinstance(value, str):
+            if value.lower() != "auto":
+                raise ValueError("degree policy must be an integer or 'auto'")
+            policies.append("auto")
+        else:
+            policies.append(_coerce_poly_degree(value))
+    return tuple(policies)
+
+
+def _coerce_poly_degree(poly_degree, /):
+    """Return one finite integral polynomial degree of at least two.
+
+    Parameters
+    ----------
+    poly_degree : object
+        Candidate polynomial degree supplied at a user-input boundary.
+
+    Returns
+    -------
+    int
+        Canonical integral degree.
+
+    Raises
+    ------
+    ValueError
+        If the value is boolean, non-numeric, non-finite, non-integral, or less
+        than two.
+    """
+    if isinstance(poly_degree, bool):
+        raise ValueError(f"poly_degree must be an integer >= 2, got {poly_degree!r}")
+    try:
+        value = float(poly_degree)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"poly_degree must be an integer >= 2, got {poly_degree!r}"
+        ) from None
+    if not np.isfinite(value) or value != int(value):
+        raise ValueError(f"poly_degree must be an integer >= 2, got {poly_degree!r}")
+    degree = int(value)
+    if degree < 2:
+        raise ValueError("poly_degree must be >= 2")
+    return degree
 
 
 def _normalize_sample_weights_1d(R, w, /):
@@ -95,7 +273,9 @@ def _normalize_sample_weights_1d(R, w, /):
         raise ValueError(
             "sample_weights must be non-negative, finite, length R, and not all zero."
         )
-    return w / np.sum(w)
+    scale = float(np.max(w))
+    scaled = w / scale
+    return scaled / np.sum(scaled)
 
 
 def _check_spread(S, /):
@@ -148,7 +328,9 @@ def _canon_univariate_samples(samples, /, *, min_samples=2):
     Parameters
     ----------
     samples : array_like
-        Candidate univariate observations, flattened to a validated finite one-dimensional array.
+        Candidate univariate point or interval observations. Point observations
+        must be finite; interval endpoints may be infinite for censoring but
+        must not contain NaN.
     min_samples : int, optional
         Minimum accepted row count. Fitting uses two; scoring may use one.
 
@@ -284,8 +466,11 @@ def _validate_support(support, /):
     ValueError
         If either endpoint is NaN or if ``lower >= upper``.
     """
-    L = float(support[0])
-    U = float(support[1])
+    raw = np.asarray(support, dtype=np.float64).reshape(-1)
+    if raw.size != 2:
+        raise ValueError("support must contain exactly two endpoints")
+    L = float(raw[0])
+    U = float(raw[1])
     if np.isnan(L) or np.isnan(U):
         raise ValueError("support endpoints must not be NaN")
     if L >= U:
@@ -546,15 +731,14 @@ def _normalize_univariate_fit_inputs(
                 "init_from must be a fitted state; missing fields: "
                 + ", ".join(missing)
             )
-        seed_degree = int(seed["requested_poly_degree"])
-        if seed_degree < 2:
-            raise ValueError("seed has invalid polynomial degree (<2)")
+        try:
+            seed_degree = _coerce_poly_degree(seed["requested_poly_degree"])
+        except ValueError as exc:
+            raise ValueError("seed has invalid polynomial degree") from exc
         if poly_degree is None:
             poly_degree = seed_degree
         elif not is_auto_degree:
-            poly_degree = int(poly_degree)
-            if poly_degree < 2:
-                raise ValueError("poly_degree must be >= 2")
+            poly_degree = _coerce_poly_degree(poly_degree)
 
         supp = _validate_support(_seed_user_support(seed))
         allowed = np.asarray(seed["boundary_allowed"], dtype=bool).reshape(-1)
@@ -572,9 +756,7 @@ def _normalize_univariate_fit_inputs(
             poly_degree = "auto"
             is_auto_degree = True
         elif not is_auto_degree:
-            poly_degree = int(poly_degree)
-            if poly_degree < 2:
-                raise ValueError("poly_degree must be >= 2")
+            poly_degree = _coerce_poly_degree(poly_degree)
         supp = (
             _default_univariate_support()
             if support is None
@@ -729,7 +911,7 @@ def _normalize_mixture_fit_inputs(
         # creates the list once K has been determined.
     else:
         if component_options is None:
-            component_options = [{}] * n_components
+            component_options = [{} for _ in range(n_components)]
         else:
             component_options = list(component_options)
 
@@ -739,26 +921,34 @@ def _normalize_mixture_fit_inputs(
                 f"({n_components}), got {len(component_options)}."
             )
 
-        _forbidden_keys = {
-            "support",
-            "sample_weights",
-            "init_from",
-            "log_boundary_lower",
-            "log_boundary_upper",
-        }
+        _allowed_keys = {"poly_degree"}
+        normalized_options = []
         for i, opts in enumerate(component_options):
             if not isinstance(opts, dict):
                 raise ValueError(
                     f"component_options[{i}] must be a dict, got {type(opts).__name__}."
                 )
-            bad = _forbidden_keys & set(opts)
-            if bad:
+            unknown = set(opts) - _allowed_keys
+            if unknown:
                 raise ValueError(
-                    f"component_options[{i}] must not contain {bad}; "
-                    f"boundary flags are global, 'support' is shared, "
-                    f"'sample_weights' is managed by the EM loop, and "
-                    f"'init_from' is handled at the Distribution level."
+                    f"component_options[{i}] must not contain unsupported keys {unknown}; "
+                    "only 'poly_degree' may be set per component."
                 )
+            normalized = dict(opts)
+            if "poly_degree" in normalized:
+                value = normalized["poly_degree"]
+                if isinstance(value, str) and value.lower() == "auto":
+                    normalized["poly_degree"] = "auto"
+                else:
+                    degree = _coerce_poly_degree(value)
+                    if not _is_poly_degree_admissible(degree, supp):
+                        raise ValueError(
+                            f"component_options[{i}].poly_degree={degree} is odd, "
+                            "which is inadmissible on support infinite at both ends."
+                        )
+                    normalized["poly_degree"] = degree
+            normalized_options.append(normalized)
+        component_options = normalized_options
 
     w = (
         None

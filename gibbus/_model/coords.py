@@ -60,27 +60,41 @@ def _safe_scaled_difference(values, center, scale, /):
 
 
 def _normalized_nonnegative_weights(weights, n, /):
-    """Return relative weights normalized by their maximum then their sum.
+    """Return canonical non-negative weights or ``None`` for unweighted data.
 
     Parameters
     ----------
     weights : array_like or None
-        Candidate non-negative weights, or ``None`` for unweighted data.
+        Non-negative finite weights, or ``None`` for genuinely unweighted data.
     n : int
         Expected number of weights.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Weights normalized to sum to one, or ``None`` only when ``weights`` is
+        ``None``.
+
+    Raises
+    ------
+    ValueError
+        If a supplied weight vector has the wrong length, contains a negative or
+        non-finite value, or has zero total mass.
     """
     if weights is None:
         return None
     w = np.asarray(weights, dtype=np.float64).reshape(-1)
-    if w.size != int(n) or not np.all(np.isfinite(w)) or np.any(w < 0.0):
-        return None
+    if w.size != int(n):
+        raise ValueError(f"weights must have length {int(n)}, got {w.size}")
+    if not np.all(np.isfinite(w)) or np.any(w < 0.0):
+        raise ValueError("weights must be finite and non-negative")
     wmax = float(np.max(w))
     if not (wmax > 0.0):
-        return None
+        raise ValueError("weights must have positive total mass")
     scaled = w / wmax
     total = float(np.sum(scaled, dtype=np.float64))
     if not (total > 0.0 and np.isfinite(total)):
-        return None
+        raise ValueError("weights must have positive finite total mass")
     return scaled / total
 
 
@@ -182,8 +196,8 @@ def _weighted_median(values, weights, /, *, order=None):
     values : numpy.ndarray, shape (R,)
         Finite sample values.
     weights : numpy.ndarray, shape (R,) or None
-        Non-negative weights.  ``None`` or a zero/non-finite total falls
-        back to the ordinary median.
+        Non-negative finite weights. ``None`` selects the ordinary unweighted
+        median; malformed supplied weights are contract errors.
     order : numpy.ndarray or None, optional
         An ascending order of ``values`` when the caller already has one.
         Ties may be ordered either way: the result is the value at which the
@@ -241,9 +255,8 @@ def _interval_scale_floor(widths, weights=None, /, *, order=None):
     else:
         raw = np.asarray(weights, dtype=np.float64).reshape(-1)
         if raw.size != finite.size:
-            typical = float(np.median(width))
-        else:
-            typical = _weighted_median(width, raw[finite], order=order)
+            raise ValueError(f"weights must have length {finite.size}, got {raw.size}")
+        typical = _weighted_median(width, raw[finite], order=order)
     return UNIFORM_WIDTH_TO_SIGMA * typical
 
 
@@ -265,17 +278,8 @@ def _support_kind(support, /):
         One of ``real_line``, ``lower_half_line``, ``upper_half_line``,
         or ``bounded``.
 
-    Raises
-    ------
-    ValueError
-        If the support is malformed, contains NaN, or is not increasing.
     """
-    raw = np.asarray(support, dtype=np.float64).reshape(-1)
-    if raw.size != 2 or np.any(np.isnan(raw)):
-        raise ValueError("support must contain two non-NaN endpoints")
-    lower, upper = float(raw[0]), float(raw[1])
-    if not lower < upper:
-        raise ValueError("support lower endpoint must be smaller than upper")
+    lower, upper = support
 
     lower_finite = np.isfinite(lower)
     upper_finite = np.isfinite(upper)
@@ -305,7 +309,8 @@ def _build_fit_coordinate(
     support : tuple of (float, float)
         Validated support in user coordinates.
     point_samples : numpy.ndarray, shape (R,)
-        Point samples or interval midpoints in user coordinates.
+        Canonical finite point samples or derived finite interval midpoints
+        in user coordinates.
     weights : numpy.ndarray, shape (R,) or None, optional
         Mixture responsibilities or sample weights.  They affect both the
         robust center and robust scale on every support type.
@@ -330,14 +335,11 @@ def _build_fit_coordinate(
     Raises
     ------
     ValueError
-        If the support is invalid, samples are empty/non-finite, or no
-        positive data-derived scale is available.
+        If no positive data-derived scale is available.
     """
     kind = _support_kind(support)
     lower, upper = map(float, support)
-    samples = np.asarray(point_samples, dtype=np.float64).reshape(-1)
-    if samples.size == 0 or not np.all(np.isfinite(samples)):
-        raise ValueError("point_samples must be a non-empty finite array")
+    samples = point_samples
 
     center = _weighted_median(samples, weights, order=order)
     # Compute absolute deviations in a relative coordinate first so opposite
@@ -418,10 +420,12 @@ def _build_interval_fit_coordinate(support, intervals, weights=None, /):
     ----------
     support : tuple of (float, float)
         Density support in user coordinates.
-    intervals : array_like, shape (R, 2)
-        Ordered censoring intervals.  Infinite endpoints are permitted.
-    weights : array_like, shape (R,) or None, optional
-        Nonnegative observation weights used for the robust center and scale.
+    intervals : numpy.ndarray, shape (R, 2), dtype float64
+        Boundary-validated ordered censoring intervals. Infinite endpoints
+        are permitted.
+    weights : numpy.ndarray, shape (R,) or None, optional
+        Canonical nonnegative row masses used for the robust center and scale.
+        Their informative-landmark subset is normalized by the coordinate builder.
 
     Returns
     -------
@@ -431,24 +435,15 @@ def _build_interval_fit_coordinate(support, intervals, weights=None, /):
     Raises
     ------
     ValueError
-        If interval geometry is invalid or contains insufficient finite
+        If interval geometry contains insufficient finite
         information to define a numerical affine coordinate.
     """
-    x = np.asarray(intervals, dtype=np.float64)
-    if x.ndim != 2 or x.shape[1] != 2 or x.shape[0] < 1:
-        raise ValueError("intervals must have shape (R, 2) with R >= 1")
-    if np.any(np.isnan(x)) or np.any(x[:, 0] > x[:, 1]):
-        raise ValueError("intervals must be ordered and contain no NaN")
-
+    x = intervals
     n = x.shape[0]
     if weights is None:
         w = np.ones(n, dtype=np.float64)
     else:
-        w = np.asarray(weights, dtype=np.float64).reshape(-1)
-        if w.size != n or np.any(~np.isfinite(w)) or np.any(w < 0.0):
-            raise ValueError("weights must be finite, nonnegative, and match intervals")
-        if not float(np.max(w)) > 0.0:
-            raise ValueError("weights must have positive total")
+        w = weights
 
     finite_lo = np.isfinite(x[:, 0])
     finite_hi = np.isfinite(x[:, 1])

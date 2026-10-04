@@ -18,7 +18,7 @@ It wraps the Cython kernels ``_state_kernels._valley_q1_shift`` and
 directly.
 """
 
-from math import comb
+from math import comb, factorial
 
 import numpy as np
 from scipy.integrate import quad
@@ -163,7 +163,7 @@ def _central_moment_from_raw(get_raw, k, mean, /):
     mean : float
         Mean in the same coordinate system as the raw moments.
     """
-    kk = int(k)
+    kk = k
     m = float(mean)
     out = 0.0
     for i in range(kk + 1):
@@ -180,7 +180,7 @@ def _cumulant_from_centered(get_centered, k, mean, /):
     get_centered : callable
         Callable returning the centered moment of a positive integer order.
     k : int
-        Positive cumulant order.
+        Already-validated positive integer cumulant order.
     mean : float
         First cumulant.
 
@@ -189,14 +189,8 @@ def _cumulant_from_centered(get_centered, k, mean, /):
     float
         The *k*-th cumulant.
 
-    Raises
-    ------
-    ValueError
-        If *k* is not a positive integer.
     """
-    if isinstance(k, bool) or int(k) != k or k < 1:
-        raise ValueError(f"k must be a positive integer, got {k!r}")
-    kk = int(k)
+    kk = k
     if kk == 1:
         return float(mean)
 
@@ -279,7 +273,7 @@ def _powaff_moment_from_z_moments(z_mom, alpha, beta, k, /):
     -------
     float
     """
-    kk = int(k)
+    kk = k
     s = 0.0
     for i in range(kk + 1):
         s += comb(kk, i) * (alpha**i) * (beta ** (kk - i)) * float(z_mom[i])
@@ -387,7 +381,7 @@ def _raw_moment_identity(
     -------
     float
     """
-    kk = int(k)
+    kk = k
     if kk == 0:
         return 1.0
 
@@ -421,8 +415,8 @@ def _polyval_scalar(c, x, /):
 
     Parameters
     ----------
-    c : array_like, shape (d+1,)
-        Polynomial coefficients, constant term first.
+    c : numpy.ndarray, shape (d+1,), dtype float64
+        Canonical polynomial coefficients, constant term first.
     x : float
         Scalar point at which to evaluate the polynomial.
 
@@ -430,8 +424,8 @@ def _polyval_scalar(c, x, /):
     -------
     float
     """
-    cc = np.asarray(c, dtype=np.float64).ravel()
-    n = int(cc.size)
+    cc = c
+    n = cc.size
     if n == 0:
         return 0.0
     z = float(x)
@@ -441,121 +435,102 @@ def _polyval_scalar(c, x, /):
     return out
 
 
-def _q0_scalar(x, support, q_poly, boundary_amplitudes, /):
-    """Evaluate the full zero-offset potential at one scalar point.
+class _ScalarPotential:
+    """Prepared canonical geometry for scalar root/quadrature callbacks.
 
     Parameters
     ----------
-    x : float
-        Canonical evaluation point.
-    support : array_like, shape (2,)
-        Canonical support.
-    q_poly : array_like, shape (d+1,)
-        Polynomial potential coefficients.
-    boundary_amplitudes : array_like, shape (2,)
-        Canonical lower/upper amplitudes.
-
-    Returns
-    -------
-    float
-        Potential value, or ``inf`` at an active endpoint singularity.
+    support : sequence of float, length 2
+        Canonical support bounds.
+    q_poly : numpy.ndarray, dtype float64
+        Installed increasing-power potential coefficients.
+    boundary_amplitudes : numpy.ndarray, shape (2,), dtype float64
+        Installed canonical lower/upper log amplitudes.
     """
-    z = float(x)
-    L, U = map(float, support)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if amps.size != 2:
-        raise ValueError("boundary_amplitudes must have length 2")
-    aL, aU = map(float, amps)
-    out = float(_polyval_scalar(q_poly, z))
-    if np.isfinite(L) and np.isfinite(aL) and aL > 0.0:
-        dL = z - L
-        if dL <= 0.0:
-            return np.inf
-        out -= aL * np.log(dL)
-    if np.isfinite(U) and np.isfinite(aU) and aU > 0.0:
-        dU = U - z
-        if dU <= 0.0:
-            return np.inf
-        out -= aU * np.log(dU)
-    return out
 
+    def __init__(self, support, q_poly, boundary_amplitudes, /):
+        """Snapshot scalar geometry and prepare derivative coefficients once."""
+        self.q = q_poly
+        self.d1 = np.polynomial.polynomial.polyder(q_poly, 1)
+        self.d2 = np.polynomial.polynomial.polyder(q_poly, 2)
+        self.lower, self.upper = map(float, support)
+        self.a_lower, self.a_upper = map(float, boundary_amplitudes)
+        self.has_lower = (
+            np.isfinite(self.lower) and np.isfinite(self.a_lower) and self.a_lower > 0.0
+        )
+        self.has_upper = (
+            np.isfinite(self.upper) and np.isfinite(self.a_upper) and self.a_upper > 0.0
+        )
 
-def _q1_scalar(x, support, q_poly, boundary_amplitudes, /):
-    """Evaluate the first derivative of the full canonical potential.
+    def value(self, x):
+        """Evaluate the scalar potential, including active endpoint guards.
 
-    Parameters
-    ----------
-    x : float
-        Canonical evaluation point.
-    support : array_like, shape (2,)
-        Canonical support ``[L, U]``.
-    q_poly : array_like
-        Ascending polynomial-potential coefficients.
-    boundary_amplitudes : array_like, shape (2,)
-        Canonical lower/upper logarithmic-boundary amplitudes.
+        Parameters
+        ----------
+        x : float
+            Canonical evaluation coordinate.
+        """
+        z = float(x)
+        out = _polyval_scalar(self.q, z)
+        if self.has_lower:
+            distance = z - self.lower
+            if distance <= 0.0:
+                return np.inf
+            out -= self.a_lower * np.log(distance)
+        if self.has_upper:
+            distance = self.upper - z
+            if distance <= 0.0:
+                return np.inf
+            out -= self.a_upper * np.log(distance)
+        return out
 
-    Returns
-    -------
-    float
-        Potential derivative, including signed infinities at active singular
-        endpoints.
-    """
-    z = float(x)
-    L, U = map(float, support)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    aL, aU = map(float, amps)
-    dq = np.polynomial.polynomial.polyder(np.asarray(q_poly, dtype=np.float64))
-    out = float(np.polynomial.polynomial.polyval(z, dq)) if dq.size else 0.0
-    if np.isfinite(L) and np.isfinite(aL) and aL > 0.0:
-        dL = z - L
-        if dL <= 0.0:
-            return -np.inf
-        out -= aL / dL
-    if np.isfinite(U) and np.isfinite(aU) and aU > 0.0:
-        dU = U - z
-        if dU <= 0.0:
-            return np.inf
-        out += aU / dU
-    return out
+    def gradient(self, x):
+        """Evaluate the scalar first derivative using prepared coefficients.
 
+        Parameters
+        ----------
+        x : float
+            Canonical evaluation coordinate.
+        """
+        z = float(x)
+        out = (
+            float(np.polynomial.polynomial.polyval(z, self.d1)) if self.d1.size else 0.0
+        )
+        if self.has_lower:
+            distance = z - self.lower
+            if distance <= 0.0:
+                return -np.inf
+            out -= self.a_lower / distance
+        if self.has_upper:
+            distance = self.upper - z
+            if distance <= 0.0:
+                return np.inf
+            out += self.a_upper / distance
+        return out
 
-def _q2_scalar(x, support, q_poly, boundary_amplitudes, /):
-    """Evaluate the second derivative of the full canonical potential.
+    def curvature(self, x):
+        """Evaluate scalar curvature using prepared coefficients.
 
-    Parameters
-    ----------
-    x : float
-        Canonical evaluation point.
-    support : array_like, shape (2,)
-        Canonical support ``[L, U]``.
-    q_poly : array_like
-        Ascending polynomial-potential coefficients.
-    boundary_amplitudes : array_like, shape (2,)
-        Canonical lower/upper logarithmic-boundary amplitudes.
-
-    Returns
-    -------
-    float
-        Full potential curvature, or positive infinity at an active singular
-        endpoint.
-    """
-    z = float(x)
-    L, U = map(float, support)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    aL, aU = map(float, amps)
-    d2 = np.polynomial.polynomial.polyder(np.asarray(q_poly, dtype=np.float64), 2)
-    out = float(np.polynomial.polynomial.polyval(z, d2)) if d2.size else 0.0
-    if np.isfinite(L) and np.isfinite(aL) and aL > 0.0:
-        dL = z - L
-        if dL <= 0.0:
-            return np.inf
-        out += aL / (dL * dL)
-    if np.isfinite(U) and np.isfinite(aU) and aU > 0.0:
-        dU = U - z
-        if dU <= 0.0:
-            return np.inf
-        out += aU / (dU * dU)
-    return out
+        Parameters
+        ----------
+        x : float
+            Canonical evaluation coordinate.
+        """
+        z = float(x)
+        out = (
+            float(np.polynomial.polynomial.polyval(z, self.d2)) if self.d2.size else 0.0
+        )
+        if self.has_lower:
+            distance = z - self.lower
+            if distance <= 0.0:
+                return np.inf
+            out += self.a_lower / (distance * distance)
+        if self.has_upper:
+            distance = self.upper - z
+            if distance <= 0.0:
+                return np.inf
+            out += self.a_upper / (distance * distance)
+        return out
 
 
 def _poly_degree_exact(q_poly, /):
@@ -563,8 +538,8 @@ def _poly_degree_exact(q_poly, /):
 
     Parameters
     ----------
-    q_poly : array_like
-        Ascending polynomial coefficients.
+    q_poly : numpy.ndarray, dtype float64
+        Canonical ascending polynomial coefficients.
 
     Returns
     -------
@@ -572,7 +547,7 @@ def _poly_degree_exact(q_poly, /):
         Highest index whose coefficient is not exactly zero, or zero if all
         coefficients vanish.
     """
-    q = np.asarray(q_poly, dtype=np.float64).reshape(-1)
+    q = q_poly
     nz = np.flatnonzero(q != 0.0)
     return int(nz[-1]) if nz.size else 0
 
@@ -589,8 +564,8 @@ def _tail_rate_from_geometry(base_support, q_poly, mu_eff, sigma_eff, side, /):
     ----------
     base_support : array_like, shape (2,)
         Canonical support of the stored potential.
-    q_poly : array_like
-        Ascending canonical polynomial-potential coefficients.
+    q_poly : numpy.ndarray, dtype float64
+        Canonical ascending polynomial-potential coefficients.
     mu_eff, sigma_eff : float
         Effective affine parameters satisfying ``z = sigma_eff*x + mu_eff``.
     side : {'lower', 'upper'}
@@ -605,8 +580,8 @@ def _tail_rate_from_geometry(base_support, q_poly, mu_eff, sigma_eff, side, /):
     key = str(side).lower()
     if key not in {"lower", "upper"}:
         raise ValueError("side must be 'lower' or 'upper'")
-    support = np.asarray(base_support, dtype=np.float64).reshape(2)
-    q = np.asarray(q_poly, dtype=np.float64).reshape(-1)
+    support = base_support
+    q = q_poly
     sigma_eff = float(sigma_eff)
     if not np.isfinite(sigma_eff) or sigma_eff == 0.0:
         raise RuntimeError("invalid fitted affine scale for tail-rate evaluation")
@@ -641,8 +616,8 @@ def _expanded_tilted_log_moment(
     ----------
     base_support : array_like, shape (2,)
         Canonical support.
-    q_poly : array_like
-        Ascending canonical polynomial-potential coefficients.
+    q_poly : numpy.ndarray, dtype float64
+        Canonical ascending polynomial-potential coefficients.
     boundary_amplitudes : array_like, shape (2,)
         Canonical lower/upper logarithmic-boundary amplitudes.
     window : array_like, shape (2,)
@@ -658,16 +633,17 @@ def _expanded_tilted_log_moment(
         Log raw moment, positive infinity for a divergent moment, or NaN when
         the expanded saddle construction is not applicable.
     """
-    support = np.asarray(base_support, dtype=np.float64).reshape(2)
-    q = np.asarray(q_poly, dtype=np.float64).reshape(-1)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(2)
+    support = base_support
+    q = q_poly
+    amps = boundary_amplitudes
+    potential = _ScalarPotential(support, q, amps)
     L, U = map(float, support)
     kk = float(k) / float(sigma_eff)
 
     def g(z):
-        return _q1_scalar(z, support, q, amps) - kk
+        return potential.gradient(z) - kk
 
-    left, right = map(float, np.asarray(window, dtype=np.float64).reshape(2))
+    left, right = map(float, window)
     gl, gr = float(g(left)), float(g(right))
 
     # q' is monotone by construction.  Expand only toward an infinite side
@@ -715,14 +691,12 @@ def _expanded_tilted_log_moment(
     z_star = float(
         brentq(g, left, right, xtol=1e-10, rtol=4 * np.finfo(float).eps, maxiter=200)
     )
-    curvature = float(_q2_scalar(z_star, support, q, amps))
+    curvature = float(potential.curvature(z_star))
     if not np.isfinite(curvature) or curvature <= 0.0:
         return np.nan
     local_scale = float(1.0 / np.sqrt(curvature))
 
     # Taylor coefficients of the polynomial part about the tilted mode.
-    from math import factorial
-
     deriv_coeff = [
         float(
             np.polynomial.polynomial.polyval(
@@ -809,7 +783,7 @@ def _expanded_tilted_log_moment(
     if not np.isfinite(relative_mass) or relative_mass <= 0.0:
         return np.nan
 
-    q_star = _q0_scalar(z_star, support, q, amps)
+    q_star = potential.value(z_star)
     tilted_star = float(q_star - kk * z_star + kk * float(mu_eff))
     return float(-tilted_star + np.log(relative_mass))
 
@@ -838,7 +812,7 @@ def _log_raw_moment_exp(
     terms : object
         Precomputed quadrature boundary terms.
     """
-    kk_int = int(k)
+    kk_int = k
     if kk_int == 0:
         return 0.0
 
@@ -862,10 +836,9 @@ def _log_raw_moment_exp(
     # unbounded side, the tilted saddle lies outside the stored material
     # window and the ordinary quadrature would silently omit its dominant
     # mass.  Re-solve and integrate on the full support in that case.
-    slope_miss = float(
-        _q1_scalar(z_star, base_support, q_poly, boundary_amplitudes) - kk
-    )
-    wL, wU = map(float, np.asarray(window, dtype=np.float64).reshape(2))
+    potential = _ScalarPotential(base_support, q_poly, boundary_amplitudes)
+    slope_miss = float(potential.gradient(z_star) - kk)
+    wL, wU = map(float, window)
     support_L, support_U = map(float, base_support)
     at_left = abs(z_star - wL) <= 16.0 * abs(np.spacing(wL))
     at_right = abs(z_star - wU) <= 16.0 * abs(np.spacing(wU))
@@ -890,12 +863,12 @@ def _log_raw_moment_exp(
             "exp-space moment could not resolve the tilted tail outside the fitted window"
         )
 
-    q0z = _q0_scalar(z_star, base_support, q_poly, boundary_amplitudes)
+    q0z = potential.value(z_star)
     m = float((kk_int * (z_star - mu_eff) / sigma_eff) - q0z)
     if not np.isfinite(m):
         m = 0.0
 
-    q_poly_tilt = np.asarray(q_poly, dtype=np.float64).copy()
+    q_poly_tilt = q_poly.copy()
     if q_poly_tilt.size < 2:
         q_poly_tilt = np.pad(q_poly_tilt, (0, 2 - q_poly_tilt.size))
     q_poly_tilt[0] += kk * float(mu_eff)
@@ -948,16 +921,15 @@ def _relative_centered_moment_exp(
     k : int
         Centered-moment order.
     """
-    kk = int(k)
-    support = np.asarray(base_support, dtype=np.float64)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64)
+    kk = k
+    potential = _ScalarPotential(base_support, q_poly, boundary_amplitudes)
 
     # The centered relative variable can be O(1e-8) or smaller in the exact
     # regime where this helper is needed.  Integrating u**k directly would
     # place the whole integral far below QUAD_EPSABS for k=2..4.  Scale u by
     # its material-window magnitude so the adaptive quadrature sees an O(1)
     # integrand, then restore the dimensional relative moment afterwards.
-    endpoints = np.asarray(window, dtype=np.float64).reshape(2)
+    endpoints = window
     x_end = (endpoints - float(mu_eff)) / float(sigma_eff)
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
         u_end = np.expm1(x_end - float(log_mean))
@@ -966,7 +938,7 @@ def _relative_centered_moment_exp(
         u_scale = 1.0
 
     def integrand(z):
-        q = _q0_scalar(z, support, q_poly, amps)
+        q = potential.value(z)
         if not np.isfinite(q):
             return 0.0
         x = (float(z) - float(mu_eff)) / float(sigma_eff)
@@ -992,15 +964,15 @@ def _internal_geometry(struct, /):
     Parameters
     ----------
     struct : numpy.void or Mapping
-        Packed fitted state.
+        Validated fitted state whose field arrays are already canonical.
 
     Returns
     -------
     tuple
         ``(support, canonical_boundary_amplitudes, mu_eff, sigma_eff)``.
     """
-    support = np.asarray(struct["canonical_support"], dtype=np.float64)
-    amps = np.asarray(struct["boundary_amplitudes"], dtype=np.float64).reshape(2)
+    support = struct["canonical_support"]
+    amps = struct["boundary_amplitudes"]
     direction = float(struct["fit_direction"])
     canonical = amps.copy() if direction > 0.0 else amps[::-1].copy()
     center = float(struct["fit_center"])
@@ -1018,15 +990,13 @@ def _univariate_canonical_raw_moment(struct, k, /):
     struct : numpy.void or mapping
         Packed fitted univariate state.
     k : int
-        Non-negative canonical raw-moment order.
+        Boundary-validated nonnegative canonical raw-moment order.
     """
-    kk = int(k)
-    if kk < 0:
-        raise ValueError("k must be a non-negative integer")
+    kk = k
     if kk == 0:
         return 1.0
-    window = np.asarray(struct["window"], dtype=np.float64)
-    q_poly = np.asarray(struct["q_poly"], dtype=np.float64)
+    window = struct["window"]
+    q_poly = struct["q_poly"]
     support, boundary_amplitudes, _mu_eff, _sigma_eff = _internal_geometry(struct)
     terms = _terms_for_quad(support, boundary_amplitudes)
     return float(
@@ -1055,25 +1025,19 @@ def _univariate_raw_moment(struct, k, /):
     struct : numpy.void or Mapping
         Packed fitted state.
     k : int
-        Moment order (non-negative).
+        Boundary-validated nonnegative moment order.
 
     Returns
     -------
     float
 
-    Raises
-    ------
-    ValueError
-        If *k* is negative.
     """
-    kk = int(k)
-    if kk < 0:
-        raise ValueError("k must be a non-negative integer")
+    kk = k
     if kk == 0:
         return 1.0
 
-    window = np.asarray(struct["window"], dtype=np.float64)
-    q_poly = np.asarray(struct["q_poly"], dtype=np.float64)
+    window = struct["window"]
+    q_poly = struct["q_poly"]
     base_support, boundary_amplitudes, mu_eff, sigma_eff = _internal_geometry(struct)
     return float(
         _raw_moment_identity(

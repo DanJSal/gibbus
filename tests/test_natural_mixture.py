@@ -6,21 +6,74 @@ import numpy as np
 import pytest
 
 import gibbus._fit.natural_mixture as natural_mixture_module
+from gibbus._fit.degree import _DegreeSelectionConfig
 from gibbus._fit.natural_mixture import (
     _CompiledJointMixture,
     _ComponentProblem,
     _e_step,
+    _EMOptions,
     _fit_natural_mixture,
+    _MixtureSearchOptions,
+    _observation_weights,
     _run_natural_em,
 )
 from gibbus._model.coords import _build_fit_coordinate
+from gibbus._observations import intervals as intervals_module
+from gibbus._observations.empirical import _normalized_weights
 
 _REAL_LINE = (-np.inf, np.inf)
+
+
+def test_mixture_original_weights_are_not_normalized_again():
+    weights = np.array([0.2, 0.3, 0.5])
+    weights.setflags(write=False)
+    assert _observation_weights(3, weights) is weights
+    np.testing.assert_array_equal(_observation_weights(3, None), np.full(3, 1.0 / 3.0))
+
+
+def test_compact_m_step_preserves_original_reliability_without_reprocessing(
+    monkeypatch,
+):
+    rows = np.array([[0.1, 0.3], [0.1, 0.3], [0.4, 0.8], [0.4, 0.8]])
+    observation_weights = np.array([0.1, 0.2, 0.3, 0.4])
+    problem = _ComponentProblem((0.0, 1.0), rows, 4, False, False, observation_weights)
+    _, inverse = problem.distinct_rows
+    responsibilities = np.array([0.2, 0.8])
+    expected = _normalized_weights(
+        len(rows), observation_weights * responsibilities[inverse], "component"
+    )
+    assert problem._compact_observation_template is None
+
+    def unexpected_preparation(*args):
+        raise AssertionError("grouped component weights were normalized again")
+
+    monkeypatch.setattr(
+        natural_mixture_module, "_normalized_weights", unexpected_preparation
+    )
+    monkeypatch.setattr(intervals_module, "_canonical_weights", unexpected_preparation)
+    objective = problem.compact_objective(responsibilities, observation_weights)
+    observations = objective.observations
+    assert observations.n_observations == len(rows)
+    assert observations.total_weight == pytest.approx(expected.total_weight)
+    assert observations.effective_n == pytest.approx(expected.effective_n)
+    grouped = np.bincount(inverse, weights=expected.weights)
+    np.testing.assert_allclose(observations.weights, grouped)
 
 
 def _binned(x, width, /):
     lower = np.floor(x / width) * width
     return np.column_stack([lower, lower + width])
+
+
+def test_point_estimability_uses_typed_candidate_rejection():
+    rows = np.array([[0.0], [0.0], [1.0], [1.0]])
+    weights = np.full(4, 0.25)
+    responsibilities = np.array([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]])
+
+    with pytest.raises(natural_mixture_module._PointMixtureEstimabilityFailure):
+        natural_mixture_module._check_point_estimability(
+            rows, weights, responsibilities
+        )
 
 
 def _mixture_sample(seed, n, /):
@@ -40,13 +93,13 @@ def test_joint_mixture_objective_has_exact_derivatives(censored):
     fit = _run_natural_em(
         _REAL_LINE,
         rows,
-        4,
+        (4, 4),
         False,
         False,
         w,
         responsibilities,
-        max_rounds=1,
-        max_em_steps=2,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=2, max_rounds=1),
     )
     problems = [
         _ComponentProblem(_REAL_LINE, rows, 4, False, False, w * responsibilities[:, k])
@@ -93,10 +146,12 @@ def test_mixture_fit_is_certified_and_beats_production(censored):
     from gibbus import Distribution
 
     x = _mixture_sample(8, 400)
-    rows = _binned(x, 0.5) if censored else x
+    rows = _binned(x, 0.5) if censored else x[:, None]
     production = Distribution().fit(rows, n_components=2, poly_degree=4, rng=0)
     reference = production._em_diagnostics["final_log_likelihood"]
-    fit = _fit_natural_mixture(_REAL_LINE, rows, 2, 4, rng=0)
+    fit = _fit_natural_mixture(
+        _REAL_LINE, rows, 2, (4, 4), rng=0, degree_config=_DegreeSelectionConfig()
+    )
     assert fit.status in ("converged", "converged_approximately")
     assert fit.separator_certified
     assert fit.log_likelihood >= reference - 1e-9 * (1.0 + abs(reference))
@@ -119,14 +174,13 @@ def test_mixture_auto_degree_grows_private_blocks_in_joint_geometry():
 
     fit = _fit_natural_mixture(
         _REAL_LINE,
-        x,
+        x[:, None],
         2,
-        "auto",
+        ("auto", "auto"),
+        degree_config=_DegreeSelectionConfig(),
         responsibilities=responsibilities,
-        paths=(("direct", "raw"),),
-        finalists=1,
-        max_em_steps=3,
-        max_rounds=1,
+        search_options=_MixtureSearchOptions(paths=(("direct", "raw"),), finalists=1),
+        em_options=_EMOptions(max_steps=3, max_rounds=1),
     )
 
     assert [c.spec.requested_poly_degree for c in fit.components] == [2, 4]
@@ -152,14 +206,14 @@ def test_em_reuses_the_evaluated_input_posterior(monkeypatch):
     _run_natural_em(
         _REAL_LINE,
         rows,
-        4,
+        (4, 4),
         False,
         False,
         w,
         responsibilities,
+        degree_config=_DegreeSelectionConfig(),
+        em_options=_EMOptions(max_steps=1, accelerate=False),
         polish=False,
-        accelerate=False,
-        max_em_steps=1,
     )
 
     # Initial component fits are evaluated once, then the one EM map evaluates
@@ -171,14 +225,21 @@ def test_default_finalist_continuation_matches_restart():
     """Reusing an explored finalist is equivalent to rerunning that EM phase."""
     x = _mixture_sample(5, 240)
     kwargs = {
+        "degree_config": _DegreeSelectionConfig(),
         "responsibilities": np.column_stack([x < 0.0, x >= 0.0]).astype(float),
-        "paths": (("direct", "raw"),),
-        "finalists": 1,
+        "search_options": _MixtureSearchOptions(
+            paths=(("direct", "raw"),), finalists=1
+        ),
     }
-    for degree in (4, "auto"):
-        continued = _fit_natural_mixture(_REAL_LINE, x, 2, degree, **kwargs)
+    for degree in ((4, 4), ("auto", "auto")):
+        continued = _fit_natural_mixture(_REAL_LINE, x[:, None], 2, degree, **kwargs)
         restarted = _fit_natural_mixture(
-            _REAL_LINE, x, 2, degree, max_em_steps=20, **kwargs
+            _REAL_LINE,
+            x[:, None],
+            2,
+            degree,
+            em_options=_EMOptions(max_steps=20),
+            **kwargs,
         )
 
         assert continued.log_likelihood == pytest.approx(
@@ -269,7 +330,9 @@ def test_duplicate_interval_coordinate_matches_expanded_weighted_geometry():
 def test_public_mixture_responsibilities_expand_duplicate_rows():
     x = _mixture_sample(23, 300)
     rows = _binned(x, 0.5)
-    fit = _fit_natural_mixture(_REAL_LINE, rows, 2, 4, rng=0)
+    fit = _fit_natural_mixture(
+        _REAL_LINE, rows, 2, (4, 4), rng=0, degree_config=_DegreeSelectionConfig()
+    )
     assert fit.responsibilities.shape == (rows.shape[0], 2)
     np.testing.assert_allclose(fit.responsibilities.sum(axis=1), 1.0, atol=1e-14)
     _, inverse = np.unique(rows, axis=0, return_inverse=True)
@@ -304,14 +367,13 @@ def test_joint_polish_uses_fused_compiled_objective(monkeypatch):
     monkeypatch.setattr(_conic_kernels, "solve_callback_newton", forbidden)
     fit = _fit_natural_mixture(
         _REAL_LINE,
-        x,
+        x[:, None],
         2,
-        4,
+        (4, 4),
+        degree_config=_DegreeSelectionConfig(),
         rng=0,
-        paths=(("direct", "raw"),),
-        finalists=1,
-        max_em_steps=4,
-        max_rounds=1,
+        search_options=_MixtureSearchOptions(paths=(("direct", "raw"),), finalists=1),
+        em_options=_EMOptions(max_steps=4, max_rounds=1),
     )
     assert calls >= 1
     assert fit.status in ("converged", "converged_approximately")

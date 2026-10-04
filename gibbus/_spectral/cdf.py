@@ -21,14 +21,6 @@ from dataclasses import dataclass, replace
 import numpy as np
 from numpy.polynomial import chebyshev as C
 
-from .._defaults import (
-    SPECTRAL_CDF_ABS_TOL,
-    SPECTRAL_CDF_COEFF_TOL,
-    SPECTRAL_CDF_MAX_DEPTH,
-    SPECTRAL_CDF_MAX_PANELS,
-    SPECTRAL_CDF_REL_TOL,
-    SPECTRAL_DEGREE_OPTIONS,
-)
 from . import _builders  # type: ignore[attr-defined]  # compiled extension
 from ._cdf_eval import SpectralEvaluator
 from .chebyshev import (
@@ -37,6 +29,7 @@ from .chebyshev import (
     lobatto_nodes,
     midpoint_nodes,
 )
+from .config import _SpectralCDFOptions
 
 _RECERTIFY_GAUSS_N = 24
 """Gauss-Legendre nodes per subinterval when the builder re-measures the mass
@@ -54,7 +47,7 @@ _KIND_CODE = {
 _TABLES: dict = {}
 
 
-def _builder_tables(cdf_degrees, ppf_degrees=(), /):
+def _builder_tables(cdf_degrees, ppf_degrees, /):
     """Return the compiled builders' view of the cached reference tables.
 
     Parameters
@@ -62,7 +55,7 @@ def _builder_tables(cdf_degrees, ppf_degrees=(), /):
     cdf_degrees : tuple of int
         Forward degree options (their Lobatto/validation/Bernstein tables, plus
         the degree-20 scale-selection tables).
-    ppf_degrees : tuple of int, optional
+    ppf_degrees : tuple of int
         Inverse degree options.
     """
     key = (tuple(cdf_degrees), tuple(ppf_degrees))
@@ -124,6 +117,19 @@ resolution through the body of the density.
 
 @dataclass(frozen=True)
 class _Map:
+    """Monotone map between compact and physical support coordinates.
+
+    Parameters
+    ----------
+    kind : str
+        Finite, half-line, real-line or centered half-line map variant.
+    L, U : float
+        Physical support bounds, allowing infinite endpoints.
+    center, scale : float
+        Map location and positive resolution scale. Centered variants retain
+        the exact finite endpoint while resolving the density's body.
+    """
+
     kind: str
     L: float
     U: float
@@ -264,6 +270,26 @@ class _Map:
 
 @dataclass
 class _Panel:
+    """Forward density panel and its integrated probability contribution.
+
+    Parameters
+    ----------
+    a, b : float
+        Panel bounds in compact coordinates.
+    coeff, icoeff : numpy.ndarray
+        Local Chebyshev density and scaled antiderivative coefficients.
+    mass : float
+        Unnormalized panel probability mass.
+    fit_error, error_mass, tail_ratio : float
+        Density-fit, mass-error and coefficient-tail diagnostics.
+    lift : float
+        Positivity correction applied to the local density polynomial.
+    depth : int
+        Adaptive subdivision depth.
+    certified : bool
+        Whether the panel met its error/positivity acceptance criteria.
+    """
+
     a: float
     b: float
     coeff: np.ndarray
@@ -279,16 +305,18 @@ class _Panel:
 
     ``False`` marks a panel accepted at the depth, width or budget limit
     rather than on merit.  Its polynomial is not a trustworthy
-    approximation, so :meth:`SpectralCDF._recertify_panel_masses` refuses
-    to use its analytic integral in the global normalizer.
+    approximation, so builders recertify its mass by quadrature before using
+    it in the global normalizer.
     """
 
     @property
     def width(self):
+        """Return the panel's compact-coordinate span."""
         return self.b - self.a
 
     @property
     def degree(self):
+        """Return the local density polynomial degree, not the integral degree."""
         # icoeff is one order higher after integration; coeff is the local PDF.
         return int(self.coeff.size - 1)
 
@@ -301,16 +329,11 @@ class SpectralCDF:
         support,
         *,
         density,
-        mode=None,
-        std=None,
-        degree_options=SPECTRAL_DEGREE_OPTIONS,
-        rel_tol=SPECTRAL_CDF_REL_TOL,
-        abs_tol=SPECTRAL_CDF_ABS_TOL,
-        coeff_tol=SPECTRAL_CDF_COEFF_TOL,
-        max_depth=SPECTRAL_CDF_MAX_DEPTH,
-        max_panels=SPECTRAL_CDF_MAX_PANELS,
-        map_scale=None,
-        initial_breaks=None,
+        config: _SpectralCDFOptions,
+        mode,
+        std,
+        map_scale,
+        initial_breaks,
     ):
         """Build an adaptive spectral CDF for a density described by data.
 
@@ -321,28 +344,15 @@ class SpectralCDF:
         density : _builders.DensitySpec
             Data description of the density (see :func:`density_spec`); the
             whole construction runs in the compiled builder.
-        mode : float or None, optional
+        config : _SpectralCDFOptions
+            Explicit degree/tolerance/depth/panel policy.
+        mode : float or None
             Density mode, used to center a doubly-infinite map.
-        std : float or None, optional
+        std : float or None
             Scale proxy used to choose the map scale.
-        degree_options : sequence of int or None, optional
-            Degrees tried in order before an interval is bisected.
-        rel_tol, abs_tol : float, optional
-            Relative and absolute panel error tolerances.
-        coeff_tol : float, optional
-            Relative Chebyshev coefficient-tail tolerance.
-        max_depth : int, optional
-            Maximum bisection depth.  On reaching it the best panel so
-            far is accepted rather than raising.
-        max_panels : int, optional
-            Strict leaf budget for the complete adaptive partition.  Depth
-            alone does not bound the work: a density that misses tolerance
-            across a wide region can bisect a full tree.  When the leaf
-            budget is full, unresolved leaves are retained as-is and exposed
-            through the spectral diagnostics.
-        map_scale : float or None, optional
+        map_scale : float or None
             Explicit map scale, bypassing automatic selection.
-        initial_breaks : array_like or None, optional
+        initial_breaks : array_like or None
             Seed breaks in compact coordinates, typically from
             :func:`boundary_aware_breaks_from_amplitudes`.
 
@@ -361,12 +371,12 @@ class SpectralCDF:
             support,
             mode,
             std,
-            degree_options,
-            rel_tol,
-            abs_tol,
-            coeff_tol,
-            max_depth,
-            max_panels,
+            config.degree_options,
+            config.rel_tol,
+            config.abs_tol,
+            config.coeff_tol,
+            config.max_depth,
+            config.max_panels,
             map_scale,
             initial_breaks,
             density,
@@ -534,7 +544,7 @@ class SpectralCDF:
         mp = self.map
         scale, rows, ints, coeff, icoeff, exhausted, fixed = _builders.build_cdf(
             self.density,
-            _builder_tables(self.degree_options),
+            _builder_tables(self.degree_options, ()),
             _KIND_CODE[mp.kind],
             float(mp.L),
             float(mp.U),
@@ -654,29 +664,7 @@ class SpectralCDF:
         numpy.ndarray
             CDF values in ``[0, 1]``.
         """
-        arr = np.asarray(z, dtype=np.float64)
-        scalar = arr.ndim == 0
-        flat = np.atleast_1d(arr).reshape(-1)
-        out = np.empty_like(flat)
-        out[flat <= -1.0] = 0.0
-        out[flat >= 1.0] = 1.0
-        midmask = (flat > -1.0) & (flat < 1.0)
-        if np.any(midmask):
-            zz = flat[midmask]
-            idx = np.searchsorted(self.breaks, zz, side="right") - 1
-            idx = np.clip(idx, 0, len(self.panels) - 1)
-            yy = np.empty_like(zz)
-            for j in np.unique(idx):
-                m = idx == j
-                p = self.panels[int(j)]
-                u = (2.0 * zz[m] - (p.a + p.b)) / (p.b - p.a)
-                local = C.chebval(u, p.icoeff) - C.chebval(-1.0, p.icoeff)
-                yy[m] = self.cum_mass[j] + local / self.total_mass
-            # Roundoff guard only; monotonicity comes from panel density.
-            out[midmask] = np.clip(yy, 0.0, 1.0)
-        if scalar:
-            return float(out[0])
-        return out.reshape(arr.shape)
+        return self._cython_evaluator.eval_compact(z)
 
     def cdf(self, x):
         """Evaluate the normalized CDF at physical coordinates.
@@ -691,16 +679,7 @@ class SpectralCDF:
         numpy.ndarray
             CDF values in ``[0, 1]``.
         """
-        arr = np.asarray(x, dtype=np.float64)
-        scalar = arr.ndim == 0
-        L, U = self.support
-        z = self.map.z_from_x(arr)
-        out = np.asarray(self.cdf_z(z), dtype=np.float64)
-        if np.isfinite(L):
-            out = np.where(arr <= L, 0.0, out)
-        if np.isfinite(U):
-            out = np.where(arr >= U, 1.0, out)
-        return float(out) if scalar else out
+        return self.cdf_cython(x)
 
     # ------------------------------------------------------------------
     # Diagnostics
@@ -824,7 +803,7 @@ def boundary_aware_breaks_from_amplitudes(support, boundary_amplitudes):
     ----------
     support : sequence of (float, float)
         Canonical support endpoints.
-    boundary_amplitudes : array_like, shape (2,)
+    boundary_amplitudes : numpy.ndarray, shape (2,), dtype float64
         Canonical lower/upper zero-offset amplitudes.
 
     Returns
@@ -832,12 +811,8 @@ def boundary_aware_breaks_from_amplitudes(support, boundary_amplitudes):
     list of float
         Sorted unique seed breaks in compact coordinates.
     """
-    supp = np.asarray(support, dtype=np.float64).reshape(2)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if amps.size != 2:
-        raise ValueError("boundary_amplitudes must have length 2")
-    L, U = map(float, supp)
-    aL, aU = map(float, amps)
+    L, U = support
+    aL, aU = boundary_amplitudes
     offsets = (1e-3, 8e-3, 6.4e-2, 0.25)
     breaks = []
     if np.isfinite(L) and np.isfinite(aL) and aL > 0.0:

@@ -29,21 +29,28 @@ from .._defaults import (
     AUTO_KDE_BW_HI,
     AUTO_KDE_BW_LO,
     AUTO_KDE_BW_STEPS,
+    AUTO_KDE_GRID_MARGIN,
     AUTO_KDE_GRID_POINTS,
     AUTO_KDE_MIN_LOCAL_PROMINENCE,
     AUTO_KDE_MIN_PROMINENCE,
     AUTO_KDE_SUBSAMPLE_N,
     AUTO_KDE_WEAK_CELL_MASS,
     EM_RESP_FLOOR,
+    GMM_SEED_MAX_ITER,
     GMM_SEED_MAX_POINTS,
+    GMM_SEED_TOL,
+    GMM_SEED_VARIANCE_FLOOR,
     MODE_DERIV_TOL,
     MODE_XTOL,
     NUMERIC_FAILURES,
     TINY_FLOAT,
+    TURNBULL_GAP_TOL,
+    TURNBULL_MAX_ITER,
     _reraise_if_debug,
 )
 from .._model.coords import _weighted_median
 from .._observations.intervals import _row_grouping
+from .._postfit.fitted_state import _model_metadata
 
 
 def _interval_initial_representatives(intervals, support, /):
@@ -58,8 +65,8 @@ def _interval_initial_representatives(intervals, support, /):
 
     Parameters
     ----------
-    intervals : array_like, shape (R, 2)
-        Ordered interval observations.
+    intervals : numpy.ndarray, shape (R, 2), dtype float64
+        Boundary-validated ordered interval observations.
     support : tuple of (float, float)
         Shared density support.
 
@@ -68,15 +75,13 @@ def _interval_initial_representatives(intervals, support, /):
     numpy.ndarray, shape (R,)
         Finite representative values.
     """
-    x = np.asarray(intervals, dtype=np.float64)
-    if x.ndim != 2 or x.shape[1] != 2:
-        raise ValueError("intervals must have shape (R, 2)")
+    x = intervals
     lo, hi = x[:, 0], x[:, 1]
     finite_lo = np.isfinite(lo)
     finite_hi = np.isfinite(hi)
     out = np.empty(x.shape[0], dtype=np.float64)
     both = finite_lo & finite_hi
-    out[both] = 0.5 * (lo[both] + hi[both])
+    out[both] = 0.5 * lo[both] + 0.5 * hi[both]
     left = (~finite_lo) & finite_hi
     out[left] = hi[left]
     right = finite_lo & (~finite_hi)
@@ -130,7 +135,7 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
     n_components : int
         Number of mixture components.
     weights : numpy.ndarray, shape (R,) or None, optional
-        Non-negative observation weights.
+        Boundary-normalized observation weights.
 
     Returns
     -------
@@ -140,17 +145,10 @@ def _valley_init_responsibilities(samples_1d, n_components, /, *, weights=None):
         cells -- nested components sharing a location have no valley at
         any bandwidth -- and the caller should fall back.
     """
-    x = np.ascontiguousarray(samples_1d, dtype=np.float64).reshape(-1)
+    x = samples_1d
     n = int(x.shape[0])
     k = int(n_components)
-    w = (
-        np.full(n, 1.0 / n, dtype=np.float64)
-        if weights is None
-        else np.ascontiguousarray(weights, dtype=np.float64).reshape(-1)
-    )
-    if w.sum() <= 0.0:
-        return None, None
-    w = w / w.sum()
+    w = np.full(n, 1.0 / n, dtype=np.float64) if weights is None else weights
 
     if k <= 1:
         return np.ones((n, 1), dtype=np.float64), np.ones(1, dtype=np.float64)
@@ -270,9 +268,9 @@ def _nested_scale_init_responsibilities(samples_1d, n_components, /, *, weights=
     n_components : int
         Number of concentric scale components to initialize.
     weights : numpy.ndarray or None
-        Optional sample weights.
+        Boundary-normalized sample weights, or ``None`` for equal weights.
     """
-    x = np.ascontiguousarray(samples_1d, dtype=np.float64).reshape(-1)
+    x = samples_1d
     n = int(x.size)
     k = int(n_components)
     if n < k or k <= 1 or not np.all(np.isfinite(x)):
@@ -281,14 +279,7 @@ def _nested_scale_init_responsibilities(samples_1d, n_components, /, *, weights=
     if weights is None:
         w = np.full(n, 1.0 / n, dtype=np.float64)
     else:
-        raw = np.ascontiguousarray(weights, dtype=np.float64).reshape(-1)
-        if raw.shape != (n,) or np.any(raw < 0.0) or not np.all(np.isfinite(raw)):
-            return None, None
-        wmax = float(np.max(raw))
-        if not (wmax > 0.0):
-            return None, None
-        w = raw / wmax
-        w /= float(np.sum(w))
+        w = weights
 
     center = float(_weighted_median(x, w))
     radius = np.abs(x - center)
@@ -368,7 +359,7 @@ def _initial_responsibility_candidates(
     try:
         resp, mix = _gmm_init_responsibilities(samples_1d, n_components, rng)
         candidates.append(("gmm", resp, mix))
-    except (*NUMERIC_FAILURES, ValueError, OverflowError) as exc:
+    except NUMERIC_FAILURES as exc:
         _reraise_if_debug(exc, "GMM mixture initialization", routine=True)
 
     resp, mix = _nested_scale_init_responsibilities(
@@ -468,7 +459,13 @@ def _gmm_init_responsibilities(samples_1d, n_components, rng, /):
     best = None
     for _ in range(int(AUTO_GMM_N_INIT)):
         centers = _kmeans_plusplus_1d(fit_x, k, rng)
-        params = _gaussian_mixture_em_1d(fit_x, centers)
+        params = _gaussian_mixture_em_1d(
+            fit_x,
+            centers,
+            tol=GMM_SEED_TOL,
+            max_iter=GMM_SEED_MAX_ITER,
+            reg=GMM_SEED_VARIANCE_FLOOR,
+        )
         if params is not None and (best is None or params[3] > best[3]):
             best = params
     if best is None:
@@ -535,7 +532,7 @@ def _gaussian_log_posterior_1d(x, means, variances, weights, /):
     return log_p - log_norm[:, None], float(np.mean(log_norm))
 
 
-def _gaussian_mixture_em_1d(x, centers, /, *, tol=1e-3, max_iter=100, reg=1e-6):
+def _gaussian_mixture_em_1d(x, centers, /, *, tol, max_iter, reg):
     """EM for a one-dimensional Gaussian mixture from hard nearest-center labels.
 
     Parameters
@@ -544,18 +541,19 @@ def _gaussian_mixture_em_1d(x, centers, /, *, tol=1e-3, max_iter=100, reg=1e-6):
         Samples.
     centers : numpy.ndarray, shape (K,)
         Initial centers.
-    tol : float, optional
+    tol : float
         Stop when the average log likelihood rises by less than this.
-    max_iter : int, optional
+    max_iter : int
         EM iteration limit.
-    reg : float, optional
+    reg : float
         Variance floor added to every component.
 
     Returns
     -------
     tuple or None
-        ``(means, variances, weights, average log likelihood)``, or ``None``
-        when a component loses all its mass.
+        ``(means, variances, weights, average log likelihood)`` from the last
+        valid iteration.  Returns ``None`` only when no valid parameter update
+        was completed before a component lost all its mass.
     """
     k = centers.size
     labels = np.argmin(np.abs(x[:, None] - centers[None, :]), axis=1)
@@ -612,7 +610,7 @@ def _silverman_bandwidth(samples_1d, /, *, n_effective=None, weights=None):
         Lets a caller working on the full data reproduce the bandwidth
         scale of a capped sweep (see ``AUTO_KDE_SUBSAMPLE_N``).
     weights : numpy.ndarray, shape (R,) or None, optional
-        Non-negative sample weights for the standard deviation.
+        Boundary-normalized sample weights for the standard deviation.
 
     Returns
     -------
@@ -626,8 +624,7 @@ def _silverman_bandwidth(samples_1d, /, *, n_effective=None, weights=None):
     if weights is None:
         sd = float(np.std(samples_1d, ddof=1))
     else:
-        w = np.ascontiguousarray(weights, dtype=np.float64)
-        w = w / w.sum()
+        w = weights
         m = float(np.dot(w, samples_1d))
         ss = float(np.dot(w, (samples_1d - m) ** 2))
 
@@ -725,7 +722,7 @@ def _binned_kde_sweep(samples_1d, grid, bandwidths, /, *, weights=None):
     return dens / dx
 
 
-def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
+def _count_modes_kde(samples_1d, /, *, verbose, rng):
     """Count the number of modes via a bandwidth-swept Gaussian KDE.
 
     A Gaussian KDE is evaluated at ``AUTO_KDE_GRID_POINTS`` equally
@@ -748,11 +745,11 @@ def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
         the quantity being estimated is a small integer.  Stratified
         thinning preserves the shape of the empirical distribution, so
         a low-weight mode is not lost.
-    verbose : int, optional
+    verbose : int
         Verbosity.  ``>= 2`` prints per-bandwidth mode counts.
-    rng : numpy.random.Generator or None, optional
-        Used only for the thinning draw.  ``None`` uses a fixed seed so
-        that mode counting stays deterministic.
+    rng : numpy.random.Generator
+        Explicit stream used for thinning. Deterministic seeding is resolved
+        by the fit boundary rather than supplied by this helper.
 
     Returns
     -------
@@ -761,8 +758,7 @@ def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
     """
     R = int(samples_1d.shape[0])
     if R > AUTO_KDE_SUBSAMPLE_N:
-        gen = np.random.default_rng(0) if rng is None else rng
-        idx = _stratified_subsample(samples_1d, AUTO_KDE_SUBSAMPLE_N, gen)
+        idx = _stratified_subsample(samples_1d, AUTO_KDE_SUBSAMPLE_N, rng)
         samples_1d = np.ascontiguousarray(samples_1d[idx])
         if verbose >= 1:
             print(
@@ -779,7 +775,7 @@ def _count_modes_kde(samples_1d, /, *, verbose=0, rng=None):
     hi = float(samples_1d.max())
     if not (np.isfinite(lo) and np.isfinite(hi) and lo < hi):
         return 1
-    margin = 0.1 * (hi - lo)
+    margin = AUTO_KDE_GRID_MARGIN * (hi - lo)
     grid = np.linspace(lo - margin, hi + margin, AUTO_KDE_GRID_POINTS)
 
     multipliers = np.logspace(
@@ -1175,19 +1171,13 @@ def _aggregate_interval_weights(intervals, obs_weights=None, /):
     weights : numpy.ndarray, shape (B,)
         Aggregated row weights, normalized to sum to one.
     """
-    x = np.asarray(intervals, dtype=np.float64)
+    x = intervals
     first, inverse, _ = _row_grouping(x)
     unique = x[first]
     if obs_weights is None:
         row_w = np.full(x.shape[0], 1.0 / float(x.shape[0]), dtype=np.float64)
     else:
-        row_w = np.asarray(obs_weights, dtype=np.float64).reshape(-1)
-        if row_w.shape[0] != x.shape[0]:
-            raise ValueError("obs_weights length does not match intervals")
-        total = float(np.sum(row_w))
-        if not (total > 0.0 and np.isfinite(total)):
-            raise ValueError("obs_weights must have positive finite total")
-        row_w = row_w / total
+        row_w = obs_weights
     weights = np.bincount(inverse, weights=row_w, minlength=unique.shape[0]).astype(
         np.float64
     )
@@ -1267,15 +1257,16 @@ def _interval_observable_dimension(intervals, support, /):
 
 
 def _interval_nonparametric_loglik_bound(
-    intervals, support, /, obs_weights=None, max_iter=5000, tol=1e-13
+    intervals, support, /, obs_weights=None, *, max_iter, tol
 ):
-    """Compute the nonparametric maximum interval log-likelihood.
+    """Return a rigorous upper bound on the nonparametric interval log-likelihood.
 
     The censoring endpoints partition the support into atomic intervals.  The
-    unrestricted likelihood is concave in their probability masses.  A
-    Turnbull-style EM update therefore provides a cheap, deterministic upper
-    bound for every parametric density fitted to the same observations.  For
-    disjoint bins this reduces exactly to the saturated multinomial value.
+    unrestricted likelihood is concave in their probability masses.  At a
+    feasible mass vector ``p``, the Frank-Wolfe duality gap
+    ``max_j dl/dp_j - p . grad l`` bounds all remaining ascent.  Because the
+    aggregated observation weights sum to one, ``p . grad l = 1`` and the
+    upper bound is the current log-likelihood plus ``max(cover) - 1``.
 
     Parameters
     ----------
@@ -1285,16 +1276,17 @@ def _interval_nonparametric_loglik_bound(
         Model support.
     obs_weights : numpy.ndarray, shape (R,) or None, optional
         Normalized relative observation weights.
-    max_iter : int, optional
+    max_iter : int
         Maximum Turnbull iterations.
-    tol : float, optional
-        Relative log-likelihood convergence tolerance.
+    tol : float
+        Stop once the Frank-Wolfe duality gap is at most this value.
 
     Returns
     -------
     float
-        Maximum weighted mean interval log-likelihood over all probability
-        distributions on the endpoint-induced atoms.
+        Rigorous upper bound on the maximum weighted mean interval
+        log-likelihood over all probability distributions on the
+        endpoint-induced atoms.
     """
     unique, row_w = _aggregate_interval_weights(intervals, obs_weights)
     lo_s, hi_s = map(float, support)
@@ -1308,8 +1300,7 @@ def _interval_nonparametric_loglik_bound(
         return 0.0
 
     p = np.full(n_atoms, 1.0 / float(n_atoms), dtype=np.float64)
-    prev_ll = -np.inf
-    ll = -np.inf
+    best_upper = np.inf
     for _ in range(int(max_iter)):
         prefix = np.empty(n_atoms + 1, dtype=np.float64)
         prefix[0] = 0.0
@@ -1318,24 +1309,31 @@ def _interval_nonparametric_loglik_bound(
         if np.any(masses <= 0.0) or not np.all(np.isfinite(masses)):
             break
         ll = float(np.dot(row_w, np.log(masses)))
-        if np.isfinite(prev_ll) and abs(ll - prev_ll) <= tol * (1.0 + abs(ll)):
-            break
 
-        # Turnbull EM: each row distributes its observed mass across the
-        # atoms lying inside that interval in proportion to the current p.
         coeff = row_w / masses
         delta = np.zeros(n_atoms + 1, dtype=np.float64)
         np.add.at(delta, starts, coeff)
         np.add.at(delta, ends, -coeff)
         cover = np.cumsum(delta[:-1])
+        gap = max(float(np.max(cover)) - 1.0, 0.0)
+        best_upper = min(best_upper, ll + gap)
+        if gap <= tol:
+            break
+
+        # Turnbull EM: each row distributes its observed mass across the
+        # atoms lying inside that interval in proportion to the current p.
         p_new = p * cover
         total = float(np.sum(p_new))
         if not (total > 0.0 and np.isfinite(total)):
             break
         p = p_new / total
-        prev_ll = ll
 
-    return float(ll)
+    if not np.isfinite(best_upper):
+        return float(best_upper)
+    # Round upward so floating-point evaluation cannot turn the certificate
+    # into a numerical under-bound.
+    margin = 64.0 * np.finfo(float).eps * (1.0 + abs(best_upper))
+    return float(best_upper + margin)
 
 
 def _interval_identifiability_diagnostic(
@@ -1384,7 +1382,13 @@ def _interval_identifiability_diagnostic(
     if n_params <= observable_dim:
         return None
 
-    bound = _interval_nonparametric_loglik_bound(x, support, obs_weights=obs_weights)
+    bound = _interval_nonparametric_loglik_bound(
+        x,
+        support,
+        obs_weights=obs_weights,
+        max_iter=TURNBULL_MAX_ITER,
+        tol=TURNBULL_GAP_TOL,
+    )
     if not np.isfinite(bound):
         return None
 
@@ -1461,8 +1465,6 @@ def _pack_mixture_struct(
     numpy.void
         Single structured scalar holding the whole mixture.
     """
-    from .._postfit.fitted_state import _model_metadata
-
     metadata = _model_metadata(comp_states, fit_metadata)
     K = len(comp_states)
     field_names = list(comp_states[0].dtype.names)
@@ -1682,7 +1684,9 @@ def _sort_components_by_mode(components, weights, /):
 # ======================================================================
 
 
-def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *, space):
+def _find_mixture_modes(
+    neg_log_base_func, component_seed_modes, /, *, space, vectorized
+):
     """Find all modes of a mixture PDF, in base or exp coordinates.
 
     A base-space mode is a local maximum of the PDF: a point where
@@ -1713,6 +1717,9 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *, space):
         searches they are the component roots of ``q'(x) + 1 = 0``.
     space : {"base", "exp"}
         Coordinate space of the returned modes.
+    vectorized : bool
+        Explicitly declare whether the potential accepts an array of scan
+        coordinates. False uses scalar evaluations without exception probing.
 
     Returns
     -------
@@ -1735,9 +1742,7 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *, space):
         return float(neg_log_base_func(x, 1)) + offset
 
     def g_many(x):
-        return (
-            np.asarray(neg_log_base_func(x, 1), dtype=np.float64).reshape(-1) + offset
-        )
+        return np.asarray(neg_log_base_func(x, 1), dtype=np.float64) + offset
 
     def height(x):
         """Value to minimize when breaking ties between near-duplicate roots.
@@ -1797,7 +1802,7 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *, space):
             brackets[i],
             brackets[i + 1],
             candidates,
-            g_many,
+            g_many if vectorized else None,
         )
 
     # ---- refine each candidate with brentq ----
@@ -1855,7 +1860,7 @@ def _find_mixture_modes(neg_log_base_func, component_seed_modes, /, *, space):
     return tuple(out(r) for r in deduped)
 
 
-def _find_mixture_modes_base(neg_log_func, component_base_modes, /):
+def _find_mixture_modes_base(neg_log_func, component_base_modes, /, *, vectorized):
     """Find all base-space modes of a mixture PDF.
 
     Thin wrapper over :func:`_find_mixture_modes`; see that function
@@ -1868,16 +1873,20 @@ def _find_mixture_modes_base(neg_log_func, component_base_modes, /):
         negative-log-density in base space.
     component_base_modes : sequence of float
         Per-component base-space modes used as root-search seeds.
+    vectorized : bool
+        Whether the supplied potential supports array-valued scan coordinates.
 
     Returns
     -------
     tuple of float
         Sorted base-space mode locations.
     """
-    return _find_mixture_modes(neg_log_func, component_base_modes, space="base")
+    return _find_mixture_modes(
+        neg_log_func, component_base_modes, space="base", vectorized=vectorized
+    )
 
 
-def _find_mixture_modes_exp(neg_log_base_func, component_log_modes, /):
+def _find_mixture_modes_exp(neg_log_base_func, component_log_modes, /, *, vectorized):
     """Find all exp-space modes of a mixture PDF.
 
     Thin wrapper over :func:`_find_mixture_modes`; see that function
@@ -1890,16 +1899,20 @@ def _find_mixture_modes_exp(neg_log_base_func, component_log_modes, /):
         negative-log-density in **base** space.
     component_log_modes : sequence of float
         Per-component exp-space modes expressed in base/log coordinates.
+    vectorized : bool
+        Whether the supplied base potential supports array-valued scan coordinates.
 
     Returns
     -------
     tuple of float
         Sorted exp-space mode locations.
     """
-    return _find_mixture_modes(neg_log_base_func, component_log_modes, space="exp")
+    return _find_mixture_modes(
+        neg_log_base_func, component_log_modes, space="exp", vectorized=vectorized
+    )
 
 
-def _collect_roots_bisection_func(g_func, a, b, candidates, g_many=None, /):
+def _collect_roots_bisection_func(g_func, a, b, candidates, g_many, /):
     """Find sign-change roots of ``g_func`` by deterministic scanning.
 
     Recursive endpoint/midpoint sign tests can miss an even number of roots in
@@ -1918,10 +1931,9 @@ def _collect_roots_bisection_func(g_func, a, b, candidates, g_many=None, /):
         Upper scan endpoint.
     candidates : array_like
         Candidate scan points inside the interval.
-    g_many : callable or None, optional
-        Vectorized ``g_func`` (same values elementwise); when given and the
-        underlying evaluator accepts arrays, the scan grid is evaluated in one
-        call.  Scalar-only evaluators fall back to the per-point scan.
+    g_many : callable or None
+        Explicit vectorized ``g_func`` contract, with matching grid shape.
+        ``None`` selects a scalar scan. Supplied evaluator errors propagate.
     """
     a = float(a)
     b = float(b)
@@ -1929,16 +1941,12 @@ def _collect_roots_bisection_func(g_func, a, b, candidates, g_many=None, /):
         return
 
     grid = np.linspace(a, b, 1025, dtype=np.float64)
-    vals = None
-    if g_many is not None:
-        try:
-            vals = np.asarray(g_many(grid), dtype=np.float64).reshape(-1)
-        except (TypeError, ValueError):
-            vals = None
-        if vals is not None and vals.shape != grid.shape:
-            vals = None
-    if vals is None:
+    if g_many is None:
         vals = np.array([float(g_func(x)) for x in grid], dtype=np.float64)
+    else:
+        vals = np.asarray(g_many(grid), dtype=np.float64)
+        if vals.shape != grid.shape:
+            raise ValueError("vectorized root evaluator must match the scan grid shape")
 
     for x, fx in zip(grid, vals, strict=True):
         if np.isfinite(fx) and abs(fx) <= MODE_XTOL:

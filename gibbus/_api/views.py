@@ -17,7 +17,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .._defaults import PROB_EPS, _reraise_if_debug
+from .._defaults import (
+    PROB_EPS,
+    TAIL_QUAD_EPSABS,
+    TAIL_QUAD_LIMIT,
+    _reraise_if_debug,
+)
 from .._fit.inputs import _coerce_sample_size, _to_generator
 from .._model.numerics import _terms_for_quad
 from .._postfit import analytics as _pf
@@ -48,6 +53,11 @@ from .._postfit.survival import logppf as _logppf
 from .._postfit.survival import mean_residual_life as _mean_residual_life
 from .._postfit.survival import residual_entropy as _residual_entropy
 from .._spectral.tail import refine_tail_quantiles
+from .validation import (
+    _validate_level,
+    _validate_log_probabilities,
+    _validate_probabilities,
+)
 
 if TYPE_CHECKING:  # avoids the views <-> component import cycle at runtime
     from .component import _Component
@@ -280,10 +290,19 @@ class _BaseSpaceView:
         """
         self._p._ensure_fitted()
         p = np.asarray(p, dtype=np.float64)
-        scalar = p.ndim == 0
         if np.any(~np.isfinite(p) | (p < 0.0) | (p > 1.0)):
             raise ValueError("ppf is defined for finite p in [0, 1]")
+        return self._ppf(p)
 
+    def _ppf(self, p):
+        """Evaluate refined quantiles from canonical probability arrays.
+
+        Parameters
+        ----------
+        p : numpy.ndarray, dtype float64
+            Prepared finite probabilities in ``[0, 1]``.
+        """
+        scalar = p.ndim == 0
         out = np.atleast_1d(self._raw_ppf(p)).astype(np.float64, copy=True)
 
         # Refine at the component/view boundary so every public quantile path
@@ -299,8 +318,18 @@ class _BaseSpaceView:
             log_tail_mass=self._exact_tail_log_mass,
         )
 
-        out = out.reshape(np.asarray(p).shape)
+        out = out.reshape(p.shape)
         return float(out) if scalar else out
+
+    def _ppf_for_extensions(self, p):
+        """Adapt derived survival probabilities without repeating user validation.
+
+        Parameters
+        ----------
+        p : float or numpy.ndarray
+            Probabilities produced by the internal survival inversion.
+        """
+        return self._ppf(np.asarray(p, dtype=np.float64))
 
     def _raw_ppf(self, p):
         """The unrefined spectral inverse in base coordinates.
@@ -310,15 +339,14 @@ class _BaseSpaceView:
 
         Parameters
         ----------
-        p : float or array_like
-            Probabilities in ``[0, 1]``.
+        p : float or numpy.ndarray
+            Canonical float64 probabilities in ``[0, 1]``.
 
         Returns
         -------
         float or numpy.ndarray
             Unrefined quantiles in base coordinates.
         """
-        p = np.asarray(p, dtype=np.float64)
         mu_eff, sigma_eff = self._p._mu_sigma_eff()
         internal_p = p if sigma_eff > 0.0 else (1.0 - p)
         z = self._p._base_ppf(internal_p)
@@ -374,7 +402,7 @@ class _BaseSpaceView:
             out = np.where(active, out, np.nan)
         return float(out) if scalar else out
 
-    def _exact_tail_log_mass(self, x, endpoint, /, *, upper=False):
+    def _exact_tail_log_mass(self, x, endpoint, /, *, upper):
         """Evaluate one exact tail mass with the reusable compiled callback.
 
         Parameters
@@ -383,7 +411,7 @@ class _BaseSpaceView:
             Tail anchor in this view's coordinates.
         endpoint : float
             Support endpoint in the requested tail direction.
-        upper : bool, optional
+        upper : bool
             Select the upper tail instead of the lower tail.
         """
         self._p._ensure_fitted()
@@ -396,13 +424,15 @@ class _BaseSpaceView:
             self._p._data["boundary_amplitudes"],
             float(mu_eff),
             float(sigma_eff),
+            epsabs=TAIL_QUAD_EPSABS,
+            limit=TAIL_QUAD_LIMIT,
         )
         if message is not None:
             side = "upper" if upper else "lower"
             _reraise_if_debug(RuntimeError(message), f"{side}-tail compiled quadrature")
         return float(value)
 
-    def _exact_tail_log_masses(self, x, endpoint, /, *, upper=False):
+    def _exact_tail_log_masses(self, x, endpoint, /, *, upper):
         """Evaluate many exact tail masses in one compiled call.
 
         Parameters
@@ -411,7 +441,7 @@ class _BaseSpaceView:
             Tail anchors in this view's coordinates.
         endpoint : float
             Support endpoint in the requested tail direction.
-        upper : bool, optional
+        upper : bool
             Select the upper tail instead of the lower tail.
         """
         self._p._ensure_fitted()
@@ -424,6 +454,8 @@ class _BaseSpaceView:
             self._p._data["boundary_amplitudes"],
             float(mu_eff),
             float(sigma_eff),
+            epsabs=TAIL_QUAD_EPSABS,
+            limit=TAIL_QUAD_LIMIT,
         )
         if failed:
             side = "upper" if upper else "lower"
@@ -508,9 +540,9 @@ class _BaseSpaceView:
         """
         return _isf(
             self.neg_log,
-            self.ppf,
+            self._ppf_for_extensions,
             self.support,
-            p,
+            _validate_probabilities(p, "isf"),
             log_tail_mass=self._exact_tail_log_mass,
         )
 
@@ -524,9 +556,9 @@ class _BaseSpaceView:
         """
         return _logppf(
             self.neg_log,
-            self.ppf,
+            self._ppf_for_extensions,
             self.support,
-            log_p,
+            _validate_log_probabilities(log_p, "logppf"),
             log_tail_mass=self._exact_tail_log_mass,
         )
 
@@ -540,9 +572,9 @@ class _BaseSpaceView:
         """
         return _logisf(
             self.neg_log,
-            self.ppf,
+            self._ppf_for_extensions,
             self.support,
-            log_p,
+            _validate_log_probabilities(log_p, "logisf"),
             log_tail_mass=self._exact_tail_log_mass,
         )
 
@@ -629,7 +661,7 @@ class _BaseSpaceView:
         level : float
             Probability mass in ``(0, 1]``.
         """
-        return _interval(self.ppf, self.isf, self.support, level)
+        return _interval(self.ppf, self.isf, self.support, _validate_level(level))
 
     def hpd(self, level):
         """Return the highest-density region as an ``(m, 2)`` array.
@@ -646,7 +678,7 @@ class _BaseSpaceView:
             self.ppf,
             self.isf,
             self.support,
-            level,
+            _validate_level(level),
             modes=(self.mode,),
         )
 
@@ -1154,13 +1186,8 @@ class _ExpSpaceView:
         -------
         float or numpy.ndarray
         """
-        self._p._ensure_fitted()
-        p = np.asarray(p, dtype=np.float64)
-        scalar = p.ndim == 0
-        if np.any(~np.isfinite(p) | (p < 0.0) | (p > 1.0)):
-            raise ValueError("ppf is defined for finite p in [0, 1]")
         out = np.exp(self._p.base.ppf(p))
-        return float(out) if scalar else out
+        return float(out) if np.ndim(out) == 0 else out
 
     def neg_log(self, y, n: int = 0):
         """Evaluate the potential or its derivatives in exp coordinates.
@@ -1365,7 +1392,7 @@ class _ExpSpaceView:
         level : float
             Probability mass in ``(0, 1]``.
         """
-        return _interval(self.ppf, self.isf, self.support, level)
+        return _interval(self.ppf, self.isf, self.support, _validate_level(level))
 
     def hpd(self, level):
         """Return the exp-space highest-density region.
@@ -1382,7 +1409,7 @@ class _ExpSpaceView:
             self.ppf,
             self.isf,
             self.support,
-            level,
+            _validate_level(level),
             modes=(self.mode,),
         )
 

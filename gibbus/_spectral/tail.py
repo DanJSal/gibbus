@@ -36,6 +36,8 @@ from .._defaults import (
     TAIL_ASYMPTOTIC_P,
     TAIL_BRACKET_GROWTH,
     TAIL_BRACKET_MAX_EXPAND,
+    TAIL_QUAD_EPSABS,
+    TAIL_QUAD_LIMIT,
     TAIL_RATE_TOL,
     TAIL_SOLVE_MAX_ITER,
     TAIL_SOLVE_TOL,
@@ -70,7 +72,13 @@ def _tail_quad(func, /, *, epsrel, context):
         Failure-ledger context for reported integration problems.
     """
     result = quad(
-        func, 0.0, np.inf, epsabs=1e-12, epsrel=epsrel, limit=200, full_output=1
+        func,
+        0.0,
+        np.inf,
+        epsabs=TAIL_QUAD_EPSABS,
+        epsrel=epsrel,
+        limit=TAIL_QUAD_LIMIT,
+        full_output=1,
     )
     if len(result) > 3:
         _reraise_if_debug(RuntimeError(str(result[3])), context)
@@ -98,7 +106,7 @@ def needs_asymptotic_tail(p, /):
     return lower, upper
 
 
-def tail_log_cdf(potential, x, endpoint, /, *, upper=False):
+def tail_log_cdf(potential, x, endpoint, /, *, upper):
     """Asymptotic ``log F(x)`` (or ``log(1 - F(x))``) near a support edge.
 
     Parameters
@@ -111,7 +119,7 @@ def tail_log_cdf(potential, x, endpoint, /, *, upper=False):
         Evaluation point, in the same coordinates as *endpoint*.
     endpoint : float
         Support endpoint on the side being queried; may be infinite.
-    upper : bool, optional
+    upper : bool
         Which tail is being queried.  Accepted for signature symmetry with
         :func:`exact_tail_log_cdf`, so callers can forward it uniformly, but
         it does not change the result: the expression below depends on the
@@ -152,7 +160,7 @@ def tail_log_cdf(potential, x, endpoint, /, *, upper=False):
     return -q - np.log(slope)
 
 
-def exact_tail_log_cdf(potential, x, endpoint, /, *, upper=False):
+def exact_tail_log_cdf(potential, x, endpoint, /, *, upper):
     """Return the tail log-mass by scaled direct quadrature.
 
     The leading asymptotic expression in :func:`tail_log_cdf` is an excellent
@@ -379,9 +387,7 @@ def _bisect_tail(log_target, f_at, lo, hi, /):
     return 0.5 * (lo + hi)
 
 
-def invert_tail(
-    potential, log_p, endpoint, start, /, *, upper=False, log_tail_mass=None
-):
+def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
     """Solve an extreme tail quantile with asymptotic seeding and exact correction.
 
     The leading asymptotic tail is used only to obtain a robust seed.  The
@@ -403,7 +409,7 @@ def invert_tail(
         Initial asymptotic tail seed.
     upper : bool
         Whether to invert the upper rather than lower tail.
-    log_tail_mass : callable or None, optional
+    log_tail_mass : callable or None
         Exact tail-mass evaluator ``f(x, endpoint, upper=...)``.  Supplying
         one lets callers keep component or mixture tail quadrature below the
         Python potential-callback boundary during root correction.
@@ -487,7 +493,7 @@ def invert_tail(
 
 
 def refine_tail_quantiles(
-    potential, raw_ppf, lo_edge, hi_edge, p, base_out, /, *, log_tail_mass=None
+    potential, raw_ppf, lo_edge, hi_edge, p, base_out, /, *, log_tail_mass
 ):
     """Re-solve quantiles the spectral CDF cannot resolve.
 
@@ -513,7 +519,7 @@ def refine_tail_quantiles(
         Requested probabilities.
     base_out : numpy.ndarray, shape (R,)
         Quantiles from the spectral inverse, in base coordinates.
-    log_tail_mass : callable or None, optional
+    log_tail_mass : callable or None
         Exact tail-mass evaluator forwarded to :func:`invert_tail`.
 
     Returns

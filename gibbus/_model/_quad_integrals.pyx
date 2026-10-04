@@ -353,7 +353,7 @@ def quad_integral(
         If *terms* does not have shape ``(n, 3)`` with ``n <= 2``.
     ValueError
         If *t_index* is out of range for the provided *terms*.
-    ValueError
+    FloatingPointError
         If *q_poly* contains a non-finite coefficient.
     ValueError
         If the inset integration interval is empty after boundary
@@ -496,6 +496,18 @@ cdef class PreparedQuad:
     cdef int _n_terms
 
     def __init__(self, q_poly, L, U, terms=None):
+        """Prepare reusable quadrature data for one finite integration window.
+
+        Parameters
+        ----------
+        q_poly : array_like
+            Nonempty potential coefficients in increasing power order.
+        L, U : float
+            Finite, strictly ordered integration bounds in fitting coordinates.
+        terms : array_like, shape (n_terms, 3), or None, optional
+            At most two logarithmic boundary descriptors with columns
+            ``(endpoint, sign, amplitude)``. ``None`` supplies no boundary terms.
+        """
         self._L = float(L)
         self._U = float(U)
         if not (np.isfinite(self._L) and np.isfinite(self._U) and self._L < self._U):
@@ -550,6 +562,36 @@ cdef class PreparedQuad:
         limlst: int = 50,
         dmin_log: float | None = None,
     ):
+        """Integrate a power/log statistic using the prepared density callback.
+
+        Parameters
+        ----------
+        mode : int, optional
+            Statistic family: zero for powers, one for a power times one
+            boundary log distance, two for a product of two log distances.
+        k : int, optional
+            Nonnegative power order; mode two requires zero.
+        t_index, t_index2 : int, optional
+            Boundary descriptor indices for logarithmic modes.
+        full_output : int, optional
+            Nonzero returns SciPy's diagnostic tuple instead of just the value.
+        epsabs, epsrel : float
+            Explicit absolute and relative quadrature tolerances.
+        limit : int
+            Explicit adaptive quadrature panel budget.
+        points : sequence or None, optional
+            Interior integration breakpoints forwarded to SciPy.
+        weight : str or None, optional
+            SciPy quadrature weighting mode.
+        wvar, wopts : object or None, optional
+            Weight parameters and cached quadrature information forwarded to
+            SciPy.
+        maxp1, limlst : int, optional
+            SciPy weighted-quadrature moment and cycle budgets.
+        dmin_log : float or None, optional
+            Positive endpoint-distance floor for logarithmic statistics.
+            ``None`` uses the smallest positive float64.
+        """
         cdef int mode_i = int(mode)
         cdef long k_i = int(k)
         cdef int idx1 = int(t_index)

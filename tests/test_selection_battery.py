@@ -92,13 +92,13 @@ class TestStableSelection:
     @pytest.mark.parametrize("seed", [0, 1])
     def test_selects_expected_k(self, name, build, support, expected, seed):
         data = build(np.random.default_rng(seed))
-        c = Distribution().fit(data, support=support, rng=seed)
+        c = Distribution().fit(data, n_components="auto", support=support, rng=seed)
         assert c.n_components in np.atleast_1d(expected)
 
     @pytest.mark.parametrize("name,build,support,expected", STABLE_CASES)
     def test_fit_is_a_valid_density(self, name, build, support, expected):
         data = build(np.random.default_rng(0))
-        c = Distribution().fit(data, support=support, rng=0)
+        c = Distribution().fit(data, n_components="auto", support=support, rng=0)
         grid = np.linspace(*np.percentile(data, [1, 99]), 50)
         pdf = c.pdf(grid)
         assert np.all(np.isfinite(pdf)) and np.all(pdf >= 0.0)
@@ -204,7 +204,10 @@ class TestSkewedSelection:
         rng = np.random.default_rng(seed)
         data = np.ascontiguousarray(rng.gamma(2.0, 1.0, N))
         assert (
-            Distribution().fit(data, support=(0.0, np.inf), rng=seed).n_components == 1
+            Distribution()
+            .fit(data, n_components="auto", support=(0.0, np.inf), rng=seed)
+            .n_components
+            == 1
         )
 
     @pytest.mark.parametrize(
@@ -220,7 +223,9 @@ class TestSkewedSelection:
             rng = np.random.default_rng(seed)
             data = np.ascontiguousarray(getattr(rng, dist)(size=N, **kwargs))
             assert (
-                Distribution().fit(data, support=(0.0, np.inf), rng=seed).n_components
+                Distribution()
+                .fit(data, n_components="auto", support=(0.0, np.inf), rng=seed)
+                .n_components
                 == 1
             )
 
@@ -230,7 +235,9 @@ class TestSkewedSelection:
             rng = np.random.default_rng(seed)
             data = np.ascontiguousarray(rng.gamma(shape, 1.0, N))
             assert (
-                Distribution().fit(data, support=(0.0, np.inf), rng=seed).n_components
+                Distribution()
+                .fit(data, n_components="auto", support=(0.0, np.inf), rng=seed)
+                .n_components
                 == 1
             )
 
@@ -238,7 +245,9 @@ class TestSkewedSelection:
         """Prominence filtering should report one stable mode for gamma data."""
         counts = [
             _count_modes_kde(
-                np.ascontiguousarray(np.random.default_rng(s).gamma(2.0, 1.0, N))
+                np.ascontiguousarray(np.random.default_rng(s).gamma(2.0, 1.0, N)),
+                verbose=0,
+                rng=np.random.default_rng(0),
             )
             for s in range(8)
         ]
@@ -258,7 +267,9 @@ class TestSkewedSelection:
 
         rng = np.random.default_rng(seed)
         data = np.ascontiguousarray(rng.gamma(2.0, 1.0, N))
-        chosen = Distribution().fit(data, support=(0.0, np.inf), rng=seed)
+        chosen = Distribution().fit(
+            data, n_components="auto", support=(0.0, np.inf), rng=seed
+        )
         rival = Distribution().fit(
             data, n_components=chosen.n_components + 1, support=(0.0, np.inf), rng=seed
         )
@@ -436,7 +447,7 @@ class TestBoundedSupportSelection:
         self, name, builder, support, expected, seed
     ):
         data = np.ascontiguousarray(builder(np.random.default_rng(seed)))
-        c = Distribution().fit(data, support=support, rng=seed)
+        c = Distribution().fit(data, n_components="auto", support=support, rng=seed)
         assert c.n_components in np.atleast_1d(expected)
 
     @pytest.mark.parametrize(
@@ -447,5 +458,5 @@ class TestBoundedSupportSelection:
     ):
         """Over-selection was one symptom of the runaway support; this is another."""
         data = np.ascontiguousarray(builder(np.random.default_rng(0)))
-        c = Distribution().fit(data, support=support, rng=0)
+        c = Distribution().fit(data, n_components="auto", support=support, rng=0)
         assert c.spectral_diagnostics["mass_defect"] < 1e-4

@@ -10,13 +10,15 @@ from gibbus._fit._shared_mixture_kernels import (
 )
 from scipy.special import xlogy
 
+from gibbus._fit.conic_newton import _NewtonOptions
+from gibbus._fit.degree import _DegreeSelectionConfig
 from gibbus._fit.natural_mixture import (
     _compiled_component,
     _CompiledJointMixture,
     _degree_probe_problems,
+    _EMOptions,
     _joint_component,
     _mixture_map,
-    _mixture_newton_options,
     _run_natural_em,
     _solve_mixture_face,
 )
@@ -60,7 +62,15 @@ def _case(case):
         rows, r, w = _sample(support, kind, count)
         lower, upper = np.isfinite(support[0]), np.isfinite(support[1])
         fit = _run_natural_em(
-            support, rows, count, lower, upper, w, r, max_em_steps=3, max_rounds=1
+            support,
+            rows,
+            (count,) * count,
+            lower,
+            upper,
+            w,
+            r,
+            degree_config=_DegreeSelectionConfig(),
+            em_options=_EMOptions(max_steps=3, max_rounds=1),
         )
         degrees = tuple(c.spec.requested_poly_degree for c in fit.components)
         problems, layouts, params = _degree_probe_problems(fit, rows, w, degrees)
@@ -217,7 +227,7 @@ def test_joint_face_restricts_the_full_evaluation(case):
     compiled = _CompiledJointMixture(problems, layouts, w)
     face = _full_face(compiled.natural_map, layouts, len(layouts) - 1)
     x = compiled.join(params, np.log(fit.weights))
-    options = replace(_mixture_newton_options({}), max_iterations=0)
+    options = replace(_NewtonOptions(), max_iterations=0)
     run, _ = _solve_mixture_face(compiled.solver(face), face, x, None, options)
     full = compiled(face.expand(run.params))
     _assert_face_evaluation(
@@ -250,7 +260,7 @@ def test_shared_m_step_matches_the_component_objectives(case):
     def solve(*args):
         return compiled.solve(face.component_columns, n_free, *args)
 
-    options = replace(_mixture_newton_options({}), max_iterations=0)
+    options = replace(_NewtonOptions(), max_iterations=0)
     run, _ = _solve_mixture_face(solve, face, mapping.pack(params), None, options)
     size = mapping.n_params
     total_nll, total_gradient = 0.0, np.zeros(size)
@@ -284,9 +294,7 @@ def test_compiled_solves_keep_the_shared_face_optimum():
     compiled = _CompiledJointMixture(problems, layouts, w)
     face = _full_face(compiled.natural_map, layouts, len(layouts) - 1)
     x = compiled.join(params, np.log(fit.weights))
-    solved = _solve_mixture_face(
-        compiled.solver(face), face, x, None, _mixture_newton_options({})
-    )
+    solved = _solve_mixture_face(compiled.solver(face), face, x, None, _NewtonOptions())
     run, _ = solved
     assert run.status in ("converged", "converged_approximately")
     assert run.evaluation.nll <= compiled(x).nll + 1e-12
@@ -309,9 +317,7 @@ def test_invalid_start_fails_the_face_without_fallback():
     def failing(*args):
         raise FloatingPointError("start is not a valid evaluation point")
 
-    assert (
-        _solve_mixture_face(failing, face, x, None, _mixture_newton_options({})) is None
-    )
+    assert _solve_mixture_face(failing, face, x, None, _NewtonOptions()) is None
 
 
 def test_joint_kernel_rejects_inconsistent_inputs():

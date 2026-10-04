@@ -570,6 +570,8 @@ cdef class SpectralPPFEvaluator:
                 free(work1)
             if work2 != NULL:
                 free(work2)
+            # The scalar path needs no workspace and preserves query semantics.
+            # noexcept nogil code cannot use the Python failure ledger.
             self._eval_many(p, out, n)
             return
 
@@ -706,6 +708,8 @@ cdef class SpectralPPFEvaluator:
                 free(work1)
             if work2 != NULL:
                 free(work2)
+            # The scalar path needs no workspace and preserves query semantics.
+            # noexcept nogil code cannot use the Python failure ledger.
             self._eval_many(p, out, n)
             return
 
@@ -815,6 +819,21 @@ cdef class SpectralPPFEvaluator:
         if scalar:
             return float(out[0])
         return out.reshape(shape)
+
+    def eval_compact(self, object p):
+        """Quantiles in compact coordinates through the shared compiled dispatch.
+
+        Parameters
+        ----------
+        p : array_like or float
+            Probability value or values in ``[0, 1]``; NaN propagates.
+
+        Returns
+        -------
+        float or numpy.ndarray
+            Compact quantiles, matching the input shape.
+        """
+        return self._call_mode(p, True, False)
 
     def eval_x_scalar(self, object p):
         """Quantiles in physical coordinates, scalar loop.

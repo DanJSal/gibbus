@@ -13,6 +13,23 @@ def _shared_standard_errors(information, free_indices, shared_indices, effective
     A shared direction coupled to nonpositive or unresolved information has
     infinite uncertainty; a direction outside the face has no ordinary
     interior standard error.
+
+    Parameters
+    ----------
+    information : numpy.ndarray, shape (P, P)
+        Joint observed information per unit observation weight.
+    free_indices : sequence of int
+        Distinct joint-coordinate indices belonging to the selected face.
+    shared_indices : tuple of (int or None, int or None)
+        Physical lower/upper shared-amplitude indices; ``None`` excludes a side.
+    effective_n : float
+        Positive effective observation count used to scale the covariance.
+
+    Returns
+    -------
+    numpy.ndarray, shape (2,)
+        Physical-side standard errors, with infinity for unresolved directions
+        and NaN for amplitudes outside the face.
     """
     h = np.asarray(information, dtype=np.float64)
     if h.ndim != 2 or h.shape[0] != h.shape[1] or not np.all(np.isfinite(h)):
@@ -62,7 +79,22 @@ def _shared_standard_errors(information, free_indices, shared_indices, effective
 
 
 def _mixture_fit_metadata(fitted, effective_n, p_values, /):
-    """Build portable shared inference from a completed numerical mixture."""
+    """Build portable shared inference from a completed numerical mixture.
+
+    Parameters
+    ----------
+    fitted : _NaturalMixtureFit
+        Completed joint fit with components, selected face and information.
+    effective_n : float
+        Positive effective observation count for shared standard errors.
+    p_values : numpy.ndarray, shape (2,)
+        Physical-side boundary-selection p-values.
+
+    Returns
+    -------
+    dict
+        Fitted provenance, model dimensions and shared-boundary inference.
+    """
     allowed = None
     active = None
     amplitudes = None
@@ -80,12 +112,14 @@ def _mixture_fit_metadata(fitted, effective_n, p_values, /):
             dtype=np.float64,
         )
         component_active = tuple(
-            False
-            if index is None
-            else bool(
-                component.lower_amplitude_active
-                if index == component.layout.lower_a_index
-                else component.upper_amplitude_active
+            (
+                False
+                if index is None
+                else bool(
+                    component.lower_amplitude_active
+                    if index == component.layout.lower_a_index
+                    else component.upper_amplitude_active
+                )
             )
             for index in indices
         )
@@ -139,7 +173,18 @@ def _mixture_fit_metadata(fitted, effective_n, p_values, /):
 
 
 def _single_fit_metadata(state, /):
-    """Describe a standalone fitted face in the common model envelope."""
+    """Describe a standalone fitted face in the common model envelope.
+
+    Parameters
+    ----------
+    state : numpy.void or Mapping
+        Packed single-component state with physical boundary inference.
+
+    Returns
+    -------
+    dict
+        Fitted provenance, model dimensions and shared-boundary inference.
+    """
     allowed = tuple(map(bool, state["boundary_allowed"]))
     active = (
         bool(state["lower_amplitude_active"]),

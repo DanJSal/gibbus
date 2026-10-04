@@ -3,8 +3,12 @@
 The runtime package builds fitted spectral CDFs and inverses in the compiled
 builder (``gibbus._spectral._builders``).  This test-only module keeps the
 Python construction control flow so tests can exercise arbitrary callables,
-forced failures, panel-budget semantics, and bitwise agreement of builder
+forced failures, panel-budget semantics, and numerical agreement of builder
 orchestration.
+
+This narrow testing exception supplies callable-density and failure-injection
+control unavailable through the data-only production builders; it is not a
+second specification of runtime behavior.
 
 This is deliberately *not* an independent numerical oracle: it reuses the
 production panel algebra, positivity certificate, packed evaluator classes,
@@ -30,7 +34,6 @@ from gibbus._spectral._panel_kernels import (
 from numpy.polynomial import chebyshev as C
 from scipy.special import expit
 
-from gibbus._defaults import SPECTRAL_DEGREE_OPTIONS
 from gibbus._spectral.cdf import SpectralCDF, _Map, _Panel
 from gibbus._spectral.chebyshev import (
     _lobatto_transform,
@@ -39,6 +42,7 @@ from gibbus._spectral.chebyshev import (
     lobatto_nodes,
     midpoint_nodes,
 )
+from gibbus._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 from gibbus._spectral.ppf import SpectralPPF, _InversePanel, _logit
 
 _EPS = np.finfo(np.float64).eps
@@ -69,7 +73,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         density=None,
         mode=None,
         std=None,
-        degree_options=SPECTRAL_DEGREE_OPTIONS,
+        degree_options=None,
         **options,
     ):
         """Build the Python-harness representation.
@@ -92,6 +96,11 @@ class PythonSpectralCDFBuilder(SpectralCDF):
                 raise TypeError("a pdf callable or a density description is required")
             pdf = density.pdf
         self.pdf = pdf
+        config = options.pop("config", None)
+        if config is None:
+            config = _SpectralCDFOptions()
+        if degree_options is None:
+            degree_options = config.degree_options
         rel_tol = options.pop("rel_tol", None)
         abs_tol = options.pop("abs_tol", None)
         coeff_tol = options.pop("coeff_tol", None)
@@ -101,17 +110,16 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         initial_breaks = options.pop("initial_breaks", None)
         if options:
             raise TypeError(f"unexpected options {sorted(options)}")
-        defaults = SpectralCDF.__init__.__kwdefaults__
         breaks, _ = self._configure(
             support,
             mode,
             std,
             degree_options,
-            defaults["rel_tol"] if rel_tol is None else rel_tol,
-            defaults["abs_tol"] if abs_tol is None else abs_tol,
-            defaults["coeff_tol"] if coeff_tol is None else coeff_tol,
-            defaults["max_depth"] if max_depth is None else max_depth,
-            defaults["max_panels"] if max_panels is None else max_panels,
+            config.rel_tol if rel_tol is None else rel_tol,
+            config.abs_tol if abs_tol is None else abs_tol,
+            config.coeff_tol if coeff_tol is None else coeff_tol,
+            config.max_depth if max_depth is None else max_depth,
+            config.max_panels if max_panels is None else max_panels,
             map_scale,
             initial_breaks,
             density,
@@ -612,6 +620,12 @@ class PythonSpectralCDFBuilder(SpectralCDF):
 
 class PythonSpectralPPFBuilder(SpectralPPF):
     """Spectral inverse built by the Python construction."""
+
+    def __init__(self, spectral_cdf, **options):
+        config = options.pop("config", None)
+        if config is None:
+            config = _SpectralPPFOptions()
+        super().__init__(spectral_cdf, config=replace(config, **options))
 
     def _build_panels(self, intervals):
         """Build the inverse partition in Python.

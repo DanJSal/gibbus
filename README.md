@@ -19,7 +19,7 @@ The public API is the **`Distribution`** class, plus two module-level helpers fo
 - [Dependencies](#dependencies)
 - [Quick Start](#quick-start)
   - [Unimodal (single-component)](#unimodal-single-component)
-  - [Automatic component selection (default)](#automatic-component-selection-default)
+  - [Automatic component selection (opt-in)](#automatic-component-selection-opt-in)
   - [Explicit component count](#explicit-component-count)
 - [API Reference](#api-reference)
   - [Construction](#construction)
@@ -67,7 +67,7 @@ The public API is the **`Distribution`** class, plus two module-level helpers fo
 - **Support-aware modeling**: Full-line, half-line, and bounded supports use representations adapted to their geometry rather than post-hoc clipping.
 - **Point and interval data**: Handles exact observations and interval-censored (binned) observations; interval observations enter through interval probability masses rather than midpoint substitutions.
 - **Weighted samples**: Supports non-negative observation weights.
-- **Mixture models**: Fit multimodal data with `n_components > 1` using an EM algorithm, or let the library choose the number of components automatically with `n_components="auto"` (the default). Each component retains the smooth log-concave model; the mixture as a whole need not be log-concave.
+- **Mixture models**: Fit multimodal data with `n_components > 1` using an EM algorithm, or opt into automatic component-count selection with `n_components="auto"`. The default, `n_components=1`, fits a single log-concave component. Each mixture component retains the smooth log-concave model; the mixture as a whole need not be log-concave.
 - **Full distributional interface**: `pdf`, `logpdf`, `cdf`, `logcdf`, `sf`, `logsf`, `ppf`, `isf`, log-probability quantiles, `sample`, `moment`, `cumulant`, intervals/HPD regions, scoring, information measures, and summary statistics.
 - **Tail-aware numerics**: Dedicated log-domain survival and quantile machinery avoids reducing extreme-tail calculations to numerically fragile expressions such as `1 - cdf(x)`.
 - **Survival analysis**: Tail-accurate hazard, cumulative hazard, mean residual life, and residual entropy. A single fitted log-concave component is IFR by construction, so its hazard is non-decreasing; mixtures do not inherit that guarantee.
@@ -137,9 +137,9 @@ c.ppf(0.25)  # lower quartile
 c.sample(100, rng=rng)
 ```
 
-### Automatic component selection (default)
+### Automatic component selection (opt-in)
 
-By default, `fit()` uses `n_components="auto"`. A KDE bandwidth sweep estimates the number of data modes and focuses the candidate range. Lightweight shared-boundary fits screen that range; competitive candidates are then refined with the requested degree and boundary-selection policies before their BIC scores choose *K*. This is a staged search, not an exhaustive or globally certified search. For interval-censored data, candidates are scored on their actual interval probability masses rather than midpoint-density surrogates. When selection uses a subsample, the winner is refitted on all observations:
+By default, `fit()` uses `n_components=1` and fits a single unimodal density. Pass `n_components="auto"` to select the number of components. A KDE bandwidth sweep estimates the number of data modes and focuses the candidate range. Lightweight shared-boundary fits screen that range; competitive candidates are then refined with the requested degree and boundary-selection policies before their BIC scores choose *K*. This is a staged search, not an exhaustive or globally certified search. For interval-censored data, candidates are scored on their actual interval probability masses rather than midpoint-density surrogates. When selection uses a subsample, the winner is refitted on all observations:
 
 ```python
 bimodal = np.concatenate(
@@ -149,7 +149,7 @@ bimodal = np.concatenate(
     ]
 )
 
-c2 = Distribution().fit(bimodal, support=(-np.inf, np.inf))
+c2 = Distribution().fit(bimodal, n_components="auto", support=(-np.inf, np.inf))
 
 c2.n_components  # automatically chosen
 c2.modes  # tuple of mode locations
@@ -159,12 +159,14 @@ c2.weights  # array of mixture weights
 Use `k_max` to limit the search range:
 
 ```python
-c3 = Distribution().fit(bimodal, support=(-np.inf, np.inf), k_max=5)
+c3 = Distribution().fit(
+    bimodal, n_components="auto", support=(-np.inf, np.inf), k_max=5
+)
 ```
 
 ### Explicit component count
 
-You can still specify an explicit number of components:
+Specify an explicit number of components to fit a mixture without selection:
 
 ```python
 c2 = Distribution().fit(bimodal, n_components=2, support=(-np.inf, np.inf))
@@ -257,7 +259,7 @@ All parameters except `samples` are keyword-only. Returns `self` for method chai
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `samples` | array_like | *(required)* | Observations. Shape `(R,)` or `(R,1)` for point samples; `(R,2)` for interval-censored samples. Point samples must be finite. Interval endpoints may be `-np.inf` or `np.inf` for one-sided censoring, but may not be NaN; an infinite zero-width row is invalid. Reversed rows (`lo > hi`) are swapped silently, and a finite zero-width row is treated as a point. |
-| `n_components` | `int` or `'auto'` | `'auto'` | Number of mixture components. `'auto'` uses KDE proposals, short shared-boundary screening fits, and policy-aware refinement of competitive candidates before choosing *K* by BIC; `1` = single unimodal fit; `> 1` = EM mixture with exactly that many components. Ignored when `init_from` is given (inherited from seed). |
+| `n_components` | `int` or `'auto'` | `1` | Number of mixture components. The default `1` fits a single unimodal density; `> 1` fits an EM mixture with exactly that many components. Opt-in `'auto'` uses KDE proposals, short shared-boundary screening fits, and policy-aware refinement of competitive candidates before choosing *K* by BIC. Ignored when `init_from` is given (inherited from seed). |
 | `poly_degree` | `int`, `'auto'`, or `None` | `None` | Requested degree of the polynomial potential. Must be ≥ 2. On full-infinite support `(-np.inf, np.inf)`, an explicit odd degree is rejected because it is structurally inadmissible; use an even degree. `'auto'` considers only admissible even degrees on full-infinite support. Odd degrees remain available on one-sided or bounded support. `None` means `'auto'` without a seed, or inheritance from a seed. Automatic mixtures grow component degrees using omitted-information diagnostics of the jointly fitted model, including shared boundary parameters and mixture-weight nuisance directions. Different components can retain different degrees. |
 | `support` | `(float, float)` or `None` | `None` | Domain of the density, e.g. `(-np.inf, np.inf)`, `(0, np.inf)`, `(0, 1)`. `None` means the unconstrained real line `(-np.inf, np.inf)`; structural boundaries such as zero must be supplied explicitly. Ignored when `init_from` is given (inherited from seed). |
 | `log_boundary_lower` | `bool` or `None` | `None` | Allow the direct zero-offset lower-endpoint log term `-aL log(x - L)`, with `aL >= 0` (it may optimize to zero). Both its presence and its amplitude are shared across mixture components. `None` lets the data decide on a finite lower endpoint: the term is kept only when a calibrated one-sided likelihood-ratio comparison against the fit without it has `p < 0.05`, and never when a positive-weight observation sits exactly at the endpoint. `None` means no term on an infinite endpoint and inherits the seed setting with `init_from`. |
@@ -405,8 +407,7 @@ c.tail_rate("upper")  # base space only
 ```
 
 The same extension adds equal-tailed intervals and highest-density regions,
-expectations and information measures, held-out scoring, truncation, and a
-SciPy-style frozen adapter:
+expectations and information measures, held-out scoring, and truncation:
 
 ```python
 c.interval(0.95)
@@ -418,7 +419,6 @@ c.kl_divergence(other)
 c.loglik(holdout)
 c.quantile_residuals(holdout, rng=0)
 conditional = c.truncate(lower=0.0, upper=2.0)
-rv = c.frozen()  # live view; follows parent transforms/refits
 ```
 
 In exp space, probability tails and equal-tailed intervals are exact transforms of
@@ -707,7 +707,7 @@ if not d["converged"]:
     print(d)
 ```
 
-`Distribution.selection_diagnostics` is `None` when `n_components` was explicit. After automatic selection it records the KDE proposal, whether screening was subsampled, the selected component count/BIC, and the candidate-score trace. This is the audit trail to retain when automatic *K* is scientifically material.
+`Distribution.selection_diagnostics` is `None` for the default single-component fit and whenever `n_components` is an explicit integer. After opt-in automatic selection it records the KDE proposal, whether screening was subsampled, the selected component count/BIC, and the candidate-score trace. This is the audit trail to retain when automatic *K* is scientifically material.
 
 ```python
 s = c.selection_diagnostics
@@ -921,7 +921,8 @@ print(f"Now mean: {c.mean:.3f}")
 
 ### Multi-Component Mixture Fitting
 
-By default, `fit()` automatically selects the number of components:
+The default fit has one component. Opt into automatic component-count selection
+for multimodal data:
 
 ```python
 # Generate trimodal data
@@ -933,8 +934,10 @@ data = np.concatenate(
     ]
 )
 
-# Auto-select K (the default)
-c = Distribution().fit(data, support=(-np.inf, np.inf), rng=42)
+# Auto-select K explicitly
+c = Distribution().fit(
+    data, n_components="auto", support=(-np.inf, np.inf), rng=42
+)
 
 print(f"Components: {c.n_components}")  # automatically chosen
 print(f"Weights: {c.weights}")
@@ -959,7 +962,9 @@ c = Distribution().fit(data, n_components=3, support=(-np.inf, np.inf), rng=42)
 
 ```python
 # Search only K=1..5 instead of the default K=1..10
-c = Distribution().fit(data, support=(-np.inf, np.inf), rng=42, k_max=5)
+c = Distribution().fit(
+    data, n_components="auto", support=(-np.inf, np.inf), rng=42, k_max=5
+)
 ```
 
 **Per-component options** (requires explicit `n_components`):

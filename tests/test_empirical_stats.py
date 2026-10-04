@@ -6,11 +6,48 @@ from scipy.integrate import quad
 
 from gibbus._fit.natural_objective import _natural_point_stats
 from gibbus._observations.empirical import (
+    _canonical_weights,
+    _normalized_weights,
     _uniform_boundary_log_expectation,
     _uniform_interval_empirical_stats,
     _uniform_power_moments,
 )
 from gibbus._observations.intervals import _build_interval_observations
+
+
+def test_uniform_statistics_do_not_reformat_canonical_inputs(monkeypatch):
+    intervals = np.array([[0.1, 0.2], [0.3, 0.5]])
+    weights = np.array([0.4, 0.6])
+    original = np.asarray
+
+    def asarray(value, *args, **kwargs):
+        if value is intervals or value is weights:
+            raise AssertionError("canonical observation inputs must not be recoerced")
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(np, "asarray", asarray)
+    moments = _uniform_power_moments(intervals, weights, 2)
+    assert moments[1] == pytest.approx(0.3)
+    assert np.isfinite(
+        _uniform_boundary_log_expectation(intervals, weights, 0.0, "lower")
+    )
+
+
+def test_canonical_weight_summary_preserves_array_identity():
+    weights = np.array([0.2, 0.3, 0.5])
+    weights.setflags(write=False)
+    summary = _canonical_weights(3, weights)
+    assert summary.weights is weights
+    assert summary.total_weight == 1.0
+    assert summary.effective_n == pytest.approx(1.0 / np.dot(weights, weights))
+    assert not summary.weights.flags.writeable
+
+
+def test_uniform_weight_summary_preserves_original_count():
+    summary = _canonical_weights(5, None)
+    np.testing.assert_array_equal(summary.weights, np.full(5, 0.2))
+    assert summary.total_weight == 5.0
+    assert summary.effective_n == 5.0
 
 
 def _build_empirical_stats(
@@ -228,7 +265,10 @@ def test_uniform_interval_stats_preserve_weight_metadata_and_logs():
     intervals = np.array([[0.0, 0.2], [0.2, 0.5], [0.2, 0.5]], dtype=float)
     raw_weights = np.array([1.0, 2.0, 3.0])
     obs = _build_interval_observations(
-        intervals, raw_weights, support=(0.0, 1.0), deduplicate=True
+        intervals,
+        _normalized_weights(len(intervals), raw_weights, "interval"),
+        support=(0.0, 1.0),
+        deduplicate=True,
     )
     stats = _uniform_interval_empirical_stats(
         obs, 6, has_lower_log=True, has_upper_log=True

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from gibbus._defaults import MAD_TO_SIGMA, UNIFORM_WIDTH_TO_SIGMA
+from gibbus._fit.inputs import _canon_univariate_samples, _validate_support
 from gibbus._model.coords import (
     _BOUNDED,
     _LOWER_HALF_LINE,
@@ -38,9 +39,9 @@ def test_support_kind_classifies_endpoint_geometry(support, expected):
         ((0.0, 1.0, 2.0)),
     ],
 )
-def test_support_kind_rejects_invalid_support(support):
+def test_support_boundary_rejects_invalid_support(support):
     with pytest.raises(ValueError):
-        _support_kind(support)
+        _validate_support(support)
 
 
 def test_bounded_coordinate_is_data_centered_and_maps_support_affinely():
@@ -65,6 +66,21 @@ def test_bounded_coordinate_caps_extreme_canonical_support_span():
     assert span == pytest.approx(1.0e6, rel=2e-15)
     assert coord.scale == pytest.approx(1.0e-6, rel=2e-15)
     assert coord.center == pytest.approx(2.0e-18, rel=0.0, abs=0.0)
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        np.asarray([1.0, 2.0]),
+        np.asarray([1.0, -1.0, 1.0]),
+        np.asarray([1.0, np.nan, 1.0]),
+        np.zeros(3),
+    ],
+)
+def test_build_fit_coordinate_rejects_malformed_supplied_weights(weights):
+    samples = np.asarray([0.0, 1.0, 2.0])
+    with pytest.raises(ValueError, match="weights"):
+        _build_fit_coordinate((-np.inf, np.inf), samples, weights, None)
 
 
 def test_real_line_uses_weighted_median_and_weighted_mad():
@@ -185,11 +201,11 @@ def test_data_derived_coordinate_rejects_zero_scale(support, samples):
         _build_fit_coordinate(support, np.asarray(samples), None, None)
 
 
-def test_coordinate_rejects_empty_or_nonfinite_samples():
-    with pytest.raises(ValueError, match="non-empty finite"):
-        _build_fit_coordinate((-np.inf, np.inf), np.asarray([]), None, None)
-    with pytest.raises(ValueError, match="non-empty finite"):
-        _build_fit_coordinate((-np.inf, np.inf), np.asarray([0.0, np.nan]), None, None)
+def test_sample_boundary_rejects_empty_or_nonfinite_samples():
+    with pytest.raises(ValueError, match="at least two|at least 2"):
+        _canon_univariate_samples([])
+    with pytest.raises(ValueError, match="only finite"):
+        _canon_univariate_samples([0.0, np.nan])
 
 
 def test_infinite_interval_coordinate_uses_censoring_cutpoints():

@@ -13,8 +13,47 @@ the observed-data one.
 
 from dataclasses import dataclass
 from math import comb
+from typing import NamedTuple
 
 import numpy as np
+
+
+class _WeightSummary(NamedTuple):
+    """Normalized row weights with their original reliability metadata.
+
+    Parameters
+    ----------
+    weights : numpy.ndarray, shape (R,), dtype float64
+        Nonnegative row masses normalized to sum to one.
+    total_weight : float
+        Total mass before normalization; it may overflow for raw relative weights.
+    effective_n : float
+        Original-row Kish effective sample size, before duplicate compression.
+    """
+
+    weights: np.ndarray
+    total_weight: float
+    effective_n: float
+
+
+def _canonical_weights(n, weights, /):
+    """Describe boundary-normalized weights without converting or normalizing.
+
+    Parameters
+    ----------
+    n : int
+        Positive number of original observation rows.
+    weights : numpy.ndarray, shape (n,), dtype float64 or None
+        Already-validated weights summing to one, or ``None`` for equal weights.
+
+    Returns
+    -------
+    _WeightSummary
+        Original reliability metadata, sharing a supplied canonical array.
+    """
+    if weights is None:
+        return _WeightSummary(np.full(n, 1.0 / n, dtype=np.float64), float(n), float(n))
+    return _WeightSummary(weights, 1.0, float(1.0 / np.dot(weights, weights)))
 
 
 @dataclass(frozen=True)
@@ -219,8 +258,9 @@ class _EmpiricalStats:
 def _normalized_weights(n, weights, subject="point", /):
     """Return normalized weights plus total and effective sample size.
 
-    Shared by the point and interval observation builders: the arithmetic is
-    identical, only the noun in the error messages differs.
+    This prepares newly derived responsibility masses or subsets. Original
+    observation weights are normalized at the API boundary and described by
+    :func:`_canonical_weights` instead.
 
     Normalization runs in units of the largest weight so that neither the raw
     sum nor the sum of squares can overflow merely because every relative
@@ -238,12 +278,8 @@ def _normalized_weights(n, weights, subject="point", /):
 
     Returns
     -------
-    weights : numpy.ndarray, shape (n,)
-        Normalized weights summing to one.
-    total_weight : float
-        Pre-normalization total weight.
-    effective_n : float
-        Kish effective sample size.
+    _WeightSummary
+        Normalized weights, pre-normalization total and original-row Kish size.
 
     Raises
     ------
@@ -254,7 +290,7 @@ def _normalized_weights(n, weights, subject="point", /):
     if n < 1:
         raise ValueError(f"at least one {subject} observation is required")
     if weights is None:
-        return np.full(n, 1.0 / n, dtype=np.float64), float(n), float(n)
+        return _canonical_weights(n, None)
 
     w = np.asarray(weights, dtype=np.float64).reshape(-1)
     if w.size != n:
@@ -274,7 +310,7 @@ def _normalized_weights(n, weights, subject="point", /):
         raise ValueError("squared observation weight must be positive and finite")
     with np.errstate(over="ignore"):
         total = float(wmax * scaled_total)
-    return norm, total, float(1.0 / sum_sq_norm)
+    return _WeightSummary(norm, total, float(1.0 / sum_sq_norm))
 
 
 def _uniform_power_moments(intervals, weights, max_order, /):
@@ -306,8 +342,8 @@ def _uniform_power_moments(intervals, weights, max_order, /):
     FloatingPointError
         If a requested moment becomes non-finite.
     """
-    x = np.asarray(intervals, dtype=np.float64)
-    w = np.asarray(weights, dtype=np.float64).reshape(-1)
+    x = intervals
+    w = weights
     order = int(max_order)
     if order < 0:
         raise ValueError("max_order must be non-negative")
@@ -397,8 +433,8 @@ def _uniform_boundary_log_expectation(
         observation lies on the active endpoint, where the point log statistic
         diverges.
     """
-    x = np.asarray(intervals, dtype=np.float64)
-    w = np.asarray(weights, dtype=np.float64).reshape(-1)
+    x = intervals
+    w = weights
     ep = float(endpoint)
     if not np.isfinite(ep):
         raise ValueError("boundary-log pseudo-statistic requires a finite endpoint")

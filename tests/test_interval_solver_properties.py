@@ -15,6 +15,7 @@ def test_randomized_interval_solver_satisfies_mathematical_contract(seed):
         _solve_natural_conic,
     )
     from gibbus._fit.conic_qp import _support_representation
+    from gibbus._fit.inputs import _normalize_sample_weights_1d
     from gibbus._fit.natural_objective import (
         _natural_interval_start,
         _prepare_natural_interval_objective,
@@ -28,7 +29,11 @@ def test_randomized_interval_solver_satisfies_mathematical_contract(seed):
         case.degree,
         case.lower_boundary,
         case.upper_boundary,
-        case.weights,
+        (
+            None
+            if case.weights is None
+            else _normalize_sample_weights_1d(len(case.rows), case.weights)
+        ),
     )
     start, blocks = _natural_interval_start(objective)
     initial = objective(start)
@@ -36,9 +41,9 @@ def test_randomized_interval_solver_satisfies_mathematical_contract(seed):
     label = case.label
 
     assert result.status in ("converged", "converged_approximately"), label
-    assert result.objective_value <= initial.nll + 1e-10 * max(1.0, abs(initial.nll)), (
-        label
-    )
+    assert result.objective_value <= initial.nll + 1e-10 * max(
+        1.0, abs(initial.nll)
+    ), label
     assert _certify(objective.layout, result.params).feasible, label
 
     exact = objective(result.params)

@@ -13,6 +13,23 @@ from gibbus._model.natural import (
 )
 
 
+def test_candidate_validates_once_and_owns_parameter_copy(monkeypatch):
+    layout = _natural_layout((-np.inf, np.inf), 4, False, False)
+    params = np.arange(layout.n_params, dtype=np.float64)
+    original = type(layout).validate_params
+    calls = []
+
+    def validate(self, values):
+        calls.append(values)
+        return original(self, values)
+
+    monkeypatch.setattr(type(layout), "validate_params", validate)
+    candidate = layout.build_candidate(params)
+    assert len(calls) == 1
+    np.testing.assert_array_equal(candidate.params, params)
+    assert not np.shares_memory(candidate.params, params)
+
+
 @pytest.mark.parametrize(
     "support,degree,lower_enabled,upper_enabled,kind,effective,n_params",
     [

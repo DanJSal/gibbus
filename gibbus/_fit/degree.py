@@ -26,7 +26,11 @@ _UPPER = "upper"
 
 @dataclass(frozen=True)
 class _DegreeSelectionConfig:
-    """Policy controlling one omitted-statistic degree diagnostic.
+    """Immutable omitted-statistic policy owned by one fit request.
+
+    The API boundary creates this record once. Candidate fits, component probes,
+    shared degree growth and boundary-removal refits consume the same record
+    rather than resolving their own defaults.
 
     Parameters
     ----------
@@ -113,7 +117,7 @@ class _DegreeDiagnostic:
     stopped_for_reliability: bool
 
 
-def _omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None):
+def _omitted_statistic_diagnostic(fit, probe_orders, /, *, config):
     """Diagnose unresolved omitted power statistics for one point fit.
 
     Parameters
@@ -123,8 +127,8 @@ def _omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None):
         through twice the largest probe order.
     probe_orders : iterable of int
         Strictly increasing omitted power orders, all above the fitted degree.
-    config : _DegreeSelectionConfig or None, optional
-        Diagnostic policy.
+    config : _DegreeSelectionConfig
+        Explicit diagnostic policy shared by the owning fit.
 
     Returns
     -------
@@ -137,7 +141,7 @@ def _omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None):
         If probe orders are invalid or the empirical summary lacks required
         moments.
     """
-    cfg = _DegreeSelectionConfig() if config is None else config
+    cfg = config
     orders = tuple(int(k) for k in probe_orders)
     if not orders or any(k < 1 for k in orders):
         raise ValueError("probe_orders must contain positive power orders")
@@ -527,7 +531,7 @@ class _IntervalDegreeDiagnostic:
     stopped_for_reliability: bool
 
 
-def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None):
+def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config):
     """Diagnose omitted natural power statistics for one finite interval fit.
 
     The natural-coordinate observed information uses the missing-information
@@ -544,7 +548,7 @@ def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None)
         Converged interval fit.
     probe_orders : iterable of int
         Strictly increasing omitted power orders above the fitted degree.
-    config : _DegreeSelectionConfig or None, optional
+    config : _DegreeSelectionConfig
         Rank tolerance and score threshold policy.
 
     Returns
@@ -553,7 +557,7 @@ def _interval_omitted_statistic_diagnostic(fit, probe_orders, /, *, config=None)
         Exact interval omitted-score diagnostic.
     """
 
-    cfg = _DegreeSelectionConfig() if config is None else config
+    cfg = config
     orders = tuple(int(k) for k in probe_orders)
     if not orders or tuple(sorted(set(orders))) != orders:
         raise ValueError("probe_orders must be a nonempty strictly increasing sequence")

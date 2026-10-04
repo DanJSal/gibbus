@@ -32,6 +32,10 @@ def _ledger_integral(prepared, context, /, **options):
     compiled traversal declined, typically far-out line-search trials that
     are then rejected, so a process-wide warning would be noise.
 
+    This is a narrow kwargs exception mirroring the prepared QUADPACK option
+    surface. It neither forwards raw fit options nor chooses numerical policy;
+    callers supply their already-resolved integration controls.
+
     Parameters
     ----------
     prepared : PreparedQuad

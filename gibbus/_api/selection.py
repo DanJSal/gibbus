@@ -12,28 +12,24 @@ import numpy as np
 
 from .._defaults import (
     AUTO_LC_MIN_COMPONENT_N,
-    AUTO_LC_SUBSAMPLE_MIN_N,
-    AUTO_LC_SUBSAMPLE_PER_K,
-    AUTO_LC_SUBSAMPLE_SIZE,
     AUTO_LC_SWEEP_EM_MAX_ITER,
-    AUTO_LC_SWEEP_MAX_K,
-    AUTO_LC_VALIDATION_DEGREES,
+    BOUNDARY_ALPHA,
     NUMERIC_FAILURES,
     SUPPRESSED_WARNINGS,
     _maybe_suppress,
     _reraise_if_debug,
 )
 from .._fit.boundary import AUTO, _effective_n, _select_boundary_terms
-from .._fit.inputs import _is_poly_degree_admissible
 from .._fit.mixture import (
     _initial_responsibility_candidates,
     _interval_identifiability_diagnostic,
     _stratified_subsample,
 )
 from .._fit.natural_mixture import (
+    _EMOptions,
     _fit_natural_mixture,
     _NaturalComponent,
-    _normalized_observation_weights,
+    _observation_weights,
     _run_natural_em,
 )
 from .._fit.natural_objective import (
@@ -42,19 +38,45 @@ from .._fit.natural_objective import (
     _fit_natural_conic_points,
     _fit_natural_conic_points_auto,
 )
+from .._observations.empirical import _normalized_weights
 
 
 class _ComponentSelectionError(RuntimeError):
-    """No refined shared-model candidate could be scored."""
+    """No refined shared-model candidate could be scored.
+
+    Parameters
+    ----------
+    diagnostics : dict
+        Search diagnostics, including individual candidate failure reasons.
+    """
 
     def __init__(self, diagnostics):
+        """Retain the failed search's diagnostics for the caller."""
         super().__init__("Shared-model component selection failed for every candidate")
         self.diagnostics = diagnostics
 
 
+class _CandidateRejected(RuntimeError):
+    """Expected candidate rejection during component-count selection."""
+
+
 @dataclass(frozen=True)
 class _SingleSelectionFit:
-    """A single fit retained without constructing public spectral state."""
+    """A single fit retained without constructing public spectral state.
+
+    Parameters
+    ----------
+    objective, result : object
+        Prepared natural objective and its optimized solver result.
+    components : tuple
+        One numerical component, without postfit spectral tables.
+    weights : numpy.ndarray
+        Unit mixture weight for the single component.
+    log_likelihood : float
+        Weighted mean observation log likelihood.
+    n_face_parameters : int
+        Number of parameters on the fitted numerical face.
+    """
 
     objective: object
     result: object
@@ -64,7 +86,53 @@ class _SingleSelectionFit:
     n_face_parameters: int
 
 
-def _single_selection_fit(support, rows, degree, lower, upper, weights):
+@dataclass(frozen=True)
+class _SelectionCandidate:
+    """Canonical inputs and numerical seed for one shortlist refinement.
+
+    Parameters
+    ----------
+    rows, samples_1d : numpy.ndarray
+        Selection observation rows and their initializer representatives.
+    observation_weights : numpy.ndarray
+        Normalized selection-row weights.
+    n_components : int
+        Candidate component count.
+    responsibilities : numpy.ndarray or None
+        Screening initializer restricted to the selection rows.
+    rng : numpy.random.Generator
+        Candidate-specific refinement stream.
+    initial_fit : object or None
+        Best screening fit, when one succeeded.
+    """
+
+    rows: np.ndarray
+    samples_1d: np.ndarray
+    observation_weights: np.ndarray
+    n_components: int
+    responsibilities: np.ndarray | None
+    rng: np.random.Generator
+    initial_fit: object | None
+
+
+def _single_selection_fit(support, rows, degree, lower, upper, weights, degree_config):
+    """Fit one candidate without constructing public spectral state.
+
+    Parameters
+    ----------
+    support : tuple of float
+        Validated physical support.
+    rows : numpy.ndarray
+        Canonical float64 point or interval rows.
+    degree : int or str
+        Fixed admissible degree or ``"auto"``.
+    lower, upper : bool or str
+        Prepared boundary policies.
+    weights : numpy.ndarray
+        Normalized selection-row weights.
+    degree_config : _DegreeSelectionConfig
+        Explicit omitted-information policy shared by the selection search.
+    """
     intervals = rows.shape[1] == 2
     automatic = degree is None or degree == "auto"
     if automatic:
@@ -74,7 +142,12 @@ def _single_selection_fit(support, rows, degree, lower, upper, weights):
             else _fit_natural_conic_points_auto
         )
         objective, result = fitter(
-            support, rows if intervals else rows[:, 0], lower, upper, weights
+            support,
+            rows if intervals else rows[:, 0],
+            lower,
+            upper,
+            weights,
+            degree_config=degree_config,
         )
     else:
         fitter = (
@@ -110,19 +183,32 @@ def _single_selection_fit(support, rows, degree, lower, upper, weights):
     )
 
 
-def _selection_payload(fitted, **extra):
-    """Normalize the state-free refinement callback's numerical result."""
+def _selection_payload(fitted):
+    """Normalize the state-free refinement callback's numerical result.
+
+    Parameters
+    ----------
+    fitted : _SingleSelectionFit or _NaturalMixtureFit
+        Numerical fit exposing components, weights, mean likelihood and face
+        dimension. Policy metadata is attached explicitly by the caller.
+    """
     return {
         "fit": fitted,
         "log_likelihood": float(fitted.log_likelihood),
         "n_face_parameters": int(fitted.n_face_parameters),
         "weights": fitted.weights,
         "components": fitted.components,
-        **extra,
     }
 
 
 def _candidate_degrees(payload):
+    """Return explicit degrees or recover them from the fitted components.
+
+    Parameters
+    ----------
+    payload : dict
+        Refinement result with components and optional explicit ``degrees``.
+    """
     if "degrees" in payload:
         return tuple(map(int, payload["degrees"]))
     return tuple(
@@ -130,19 +216,32 @@ def _candidate_degrees(payload):
     )
 
 
-def _default_refinement(
-    *, supp, degree_policy, lower_boundary, upper_boundary, **candidate
-):
-    """Private numerical fallback for direct users of the selection helper."""
-    rows = candidate["S"]
-    weights = candidate["obs_w"]
-    count = candidate["n_components"]
-    previous = candidate["initial_fit"]
+def _default_refinement(candidate, supp, policy, degree_config, /):
+    """Private numerical fallback for direct users of the selection helper.
+
+    Parameters
+    ----------
+    candidate : _SelectionCandidate
+        Prepared selection rows, weights and numerical initialization.
+    supp : tuple of float
+        Validated physical support.
+    policy : _ComponentSelectionPolicy
+        Resolved degree and full-data boundary policies.
+    degree_config : _DegreeSelectionConfig
+        Explicit omitted-information policy reused by all refinement fits.
+    """
+    rows = candidate.rows
+    weights = candidate.observation_weights
+    count = candidate.n_components
+    previous = candidate.initial_fit
+    degree_policy = (policy.degree_policy,) * count
     reduced = {}
 
-    def fit_at(degree, lo, up, initial=None):
+    def fit_at(degree, lo, up, initial):
         if count == 1:
-            return _single_selection_fit(supp, rows, degree, lo, up, weights)
+            return _single_selection_fit(
+                supp, rows, degree[0], lo, up, weights, degree_config
+            )
         return _fit_natural_mixture(
             supp,
             rows,
@@ -151,14 +250,15 @@ def _default_refinement(
             lo,
             up,
             weights,
-            rng=candidate["rng"],
-            responsibilities=candidate["responsibilities"],
+            rng=candidate.rng,
+            responsibilities=candidate.responsibilities,
             initial_fit=initial,
+            degree_config=degree_config,
         )
 
     def nested(model, lo, up):
         locked = tuple(c.spec.requested_poly_degree for c in model.components)
-        fitted = fit_at(locked[0] if count == 1 else locked, lo, up, model)
+        fitted = fit_at(locked, lo, up, model)
         reduced[(lo, up)] = fitted
         return fitted
 
@@ -174,13 +274,16 @@ def _default_refinement(
         lambda lo, up: fit_at(degree_policy, lo, up, previous),
         lambda model: -model.log_likelihood,
         amplitude,
-        lower_boundary,
-        upper_boundary,
+        policy.lower_boundary,
+        policy.upper_boundary,
         _effective_n(len(rows), weights),
         fit_reduced=nested,
-        refit=reselect if degree_policy is None or degree_policy == "auto" else None,
+        refit=reselect if "auto" in degree_policy else None,
+        alpha=BOUNDARY_ALPHA,
     )
-    return _selection_payload(fitted, boundary_p_values=p_values, boundary_flags=flags)
+    payload = _selection_payload(fitted)
+    payload.update(boundary_p_values=p_values, boundary_flags=flags)
+    return payload
 
 
 def select_n_components(
@@ -189,25 +292,22 @@ def select_n_components(
     samples_1d,
     supp,
     k_modes,
-    effective_k_max,
     gen,
     obs_w,
     verb,
-    subsample="auto",
-    lower_boundary=False,
-    upper_boundary=False,
-    degree_policy="auto",
-    refine_candidate=None,
+    policy,
+    degree_config,
+    refine_candidate,
 ):
     """Select K using shared screens and an explicitly refined shortlist.
 
-    ``lower_boundary`` and ``upper_boundary`` must already incorporate endpoint
+    The policy's boundary flags must already incorporate endpoint
     exclusions from the full data.  AUTO bases are enabled in every screen;
     their LR policy runs only during refinement.  An explicit degree replaces
     the automatic screening portfolio.
 
-    ``refine_candidate`` is a state-free callback accepting keyword arguments
-    ``S, samples_1d, obs_w, n_components, responsibilities, rng, initial_fit``.
+    ``refine_candidate`` is a state-free callback accepting a
+    :class:`_SelectionCandidate` record.
     It returns a dictionary with ``fit, log_likelihood`` (weighted mean),
     ``n_face_parameters, weights, components`` and optional policy metadata.
     It must apply the caller's actual degree/boundary policies and fit controls.
@@ -217,66 +317,68 @@ def select_n_components(
     payload; callers should remove it before publishing diagnostics and reuse
     it when ``reuse_selected_fit`` is true.  Subsample BIC explicitly
     extrapolates its mean likelihood to the full-data Kish effective size.
-    """
-    S = np.ascontiguousarray(S, dtype=np.float64)
-    samples_1d = np.asarray(samples_1d, dtype=np.float64)
-    n_rows = len(S)
-    full_w = _normalized_observation_weights(n_rows, obs_w)
-    effective_n = _effective_n(n_rows, full_w)
-    ceiling = max(
-        1,
-        min(int(effective_k_max), AUTO_LC_SWEEP_MAX_K, max(n_rows // 50, 2)),
-    )
-    initial_hi = min(ceiling, max(2 * int(k_modes), 1))
-    if degree_policy is None or degree_policy == "auto":
-        degrees = tuple(
-            d for d in AUTO_LC_VALIDATION_DEGREES if _is_poly_degree_admissible(d, supp)
-        )
-    else:
-        degrees = (int(degree_policy),)
-        if not _is_poly_degree_admissible(degrees[0], supp):
-            raise ValueError("requested screening degree is not admissible on support")
-    if not degrees:
-        raise ValueError("no admissible screening degrees")
 
-    if subsample is False or subsample == 0:
-        sub_m = n_rows
-    elif isinstance(subsample, str):
-        if subsample != "auto":
-            raise ValueError(
-                f"subsample must be 'auto', an int, or False, got {subsample!r}."
-            )
-        sub_m = (
-            max(AUTO_LC_SUBSAMPLE_SIZE, initial_hi * AUTO_LC_SUBSAMPLE_PER_K)
-            if n_rows > AUTO_LC_SUBSAMPLE_MIN_N
-            else n_rows
-        )
-    else:
-        sub_m = int(subsample)
-        if sub_m < 2:
-            raise ValueError(f"subsample must be at least 2, got {sub_m}.")
-    sub_m = min(sub_m, n_rows)
+    Parameters
+    ----------
+    S : numpy.ndarray
+        Canonical float64 observations shaped ``(R, 1)`` or ``(R, 2)``.
+    samples_1d : numpy.ndarray
+        Canonical full-data representatives used by the initializer.
+    supp : tuple of float
+        Validated physical support.
+    k_modes : int
+        Full-data mode proposal retained in diagnostics.
+    gen : numpy.random.Generator
+        Generator supplying purpose- and candidate-specific streams.
+    obs_w : numpy.ndarray or None
+        Boundary-normalized original row weights, or uniform weighting.
+    verb : int
+        Prepared verbosity level.
+    policy : _ComponentSelectionPolicy
+        Explicit search limits, subsample size and degree/boundary policies.
+    degree_config : _DegreeSelectionConfig
+        One explicit diagnostic policy reused by screening and refinement.
+    refine_candidate : callable or None
+        Callback consuming one candidate record and returning the numerical
+        payload described above. Explicit ``None`` uses private refinement.
+
+    Returns
+    -------
+    tuple
+        Selected count, full-data initial responsibilities, initial mixture
+        weights and search diagnostics.
+    """
+    n_rows = len(S)
+    full_w = _observation_weights(n_rows, obs_w)
+    effective_n = _effective_n(n_rows, full_w)
+    ceiling = policy.ceiling
+    initial_hi = policy.initial_hi
+    degrees = policy.degrees
+    sub_m = policy.subsample_size
     # Streams are indexed by purpose and K, never by candidate execution order.
     entropy = gen.integers(0, 2**32, size=4, dtype=np.uint32)
 
-    def rng_for(stage, count=0):
+    def rng_for(stage, count):
         return np.random.default_rng(
             np.random.SeedSequence(entropy, spawn_key=(stage, count))
         )
 
     sub_idx = (
-        _stratified_subsample(samples_1d, sub_m, rng_for(0)) if sub_m < n_rows else None
+        _stratified_subsample(samples_1d, sub_m, rng_for(0, 0))
+        if sub_m < n_rows
+        else None
     )
     fit_S = S if sub_idx is None else np.ascontiguousarray(S[sub_idx])
     fit_x = samples_1d if sub_idx is None else np.ascontiguousarray(samples_1d[sub_idx])
     fit_w = (
         full_w
         if sub_idx is None
-        else _normalized_observation_weights(sub_m, full_w[sub_idx])
+        else _normalized_weights(sub_m, full_w[sub_idx], "selection").weights
     )
     sample_effective_n = _effective_n(sub_m, fit_w)
     enabled = tuple(
-        flag is True or flag == AUTO for flag in (lower_boundary, upper_boundary)
+        flag is True or flag == AUTO
+        for flag in (policy.lower_boundary, policy.upper_boundary)
     )
     screens = {}
     screening_scores = []
@@ -289,13 +391,15 @@ def select_n_components(
         dimension = int(fitted["n_face_parameters"])
         likelihood = float(fitted["log_likelihood"])
         if dimension < 1 or not np.isfinite(likelihood):
-            raise ValueError("candidate has invalid likelihood or face dimension")
+            raise _CandidateRejected(
+                "candidate has invalid likelihood or face dimension"
+            )
         if len(fitted["weights"]) > 1:
             if (
                 float(np.min(fitted["weights"])) * sample_effective_n
                 < AUTO_LC_MIN_COMPONENT_N
             ):
-                raise ValueError("degenerate_component")
+                raise _CandidateRejected("degenerate_component")
             if (
                 S.shape[1] == 2
                 and _interval_identifiability_diagnostic(
@@ -308,7 +412,7 @@ def select_n_components(
                 )
                 is not None
             ):
-                raise ValueError("unidentified_interval_components")
+                raise _CandidateRejected("unidentified_interval_components")
         return -2.0 * likelihood * effective_n + dimension * log_n
 
     def screen(count):
@@ -323,7 +427,7 @@ def select_n_components(
                     candidates = _initial_responsibility_candidates(
                         samples_1d, count, rng_for(1, count), weights=full_w
                     )
-            except (*NUMERIC_FAILURES, ValueError) as exc:
+            except NUMERIC_FAILURES as exc:
                 _reraise_if_debug(
                     exc, f"shared K screen initialization K={count}", routine=True
                 )
@@ -354,7 +458,7 @@ def select_n_components(
                     )
                     if count == 1:
                         fitted = _single_selection_fit(
-                            supp, fit_S, degree, *enabled, fit_w
+                            supp, fit_S, degree, *enabled, fit_w, degree_config
                         )
                     else:
                         sharpened = np.square(r)
@@ -362,14 +466,17 @@ def select_n_components(
                         fitted = _run_natural_em(
                             supp,
                             fit_S,
-                            degree,
+                            (degree,) * count,
                             *enabled,
                             fit_w,
                             sharpened,
-                            max_em_steps=AUTO_LC_SWEEP_EM_MAX_ITER,
-                            accelerate=False,
+                            em_options=_EMOptions(
+                                max_steps=AUTO_LC_SWEEP_EM_MAX_ITER,
+                                accelerate=False,
+                            ),
                             initialization=str(name),
                             polish=False,
+                            degree_config=degree_config,
                         )
                     payload = _selection_payload(fitted)
                     bic = score(payload)
@@ -383,7 +490,11 @@ def select_n_components(
                     }
                     if best is None or bic < best["bic"]:
                         best = record
-                except (*NUMERIC_FAILURES, ValueError) as exc:
+                except _CandidateRejected as exc:
+                    # Candidate rejection is expected control flow, not a numerical
+                    # fallback and therefore is not recorded in the failure ledger.
+                    failures.append(f"{type(exc).__name__}: {exc}")
+                except NUMERIC_FAILURES as exc:
                     _reraise_if_debug(
                         exc, f"shared K screen K={count}, d={degree}", routine=True
                     )
@@ -426,25 +537,19 @@ def select_n_components(
             sample_resp = (
                 None if resp is None else (resp if sub_idx is None else resp[sub_idx])
             )
-            candidate = {
-                "S": fit_S,
-                "samples_1d": fit_x,
-                "obs_w": fit_w,
-                "n_components": count,
-                "responsibilities": sample_resp,
-                "rng": rng_for(2, count),
-                "initial_fit": None if start is None else start["fit"],
-            }
+            candidate = _SelectionCandidate(
+                fit_S,
+                fit_x,
+                fit_w,
+                count,
+                sample_resp,
+                rng_for(2, count),
+                None if start is None else start["fit"],
+            )
             payload = (
-                _default_refinement(
-                    supp=supp,
-                    degree_policy=degree_policy,
-                    lower_boundary=lower_boundary,
-                    upper_boundary=upper_boundary,
-                    **candidate,
-                )
+                _default_refinement(candidate, supp, policy, degree_config)
                 if refine_candidate is None
-                else refine_candidate(**candidate)
+                else refine_candidate(candidate)
             )
             bic = score(payload)
             refined[count] = (bic, payload, start)
@@ -460,7 +565,19 @@ def select_n_components(
                     "admission": admissions[count],
                 }
             )
-        except (*NUMERIC_FAILURES, ValueError) as exc:
+        except _CandidateRejected as exc:
+            # Candidate rejection is expected control flow, not a numerical
+            # fallback and therefore is not recorded in the failure ledger.
+            scores.append(
+                {
+                    "n_components": count,
+                    "bic": None,
+                    "status": f"failed:{type(exc).__name__}",
+                    "reason": str(exc),
+                    "admission": admissions[count],
+                }
+            )
+        except NUMERIC_FAILURES as exc:
             _reraise_if_debug(exc, f"shared K refinement K={count}", routine=True)
             scores.append(
                 {
@@ -497,9 +614,11 @@ def select_n_components(
         "subsampled": sub_idx is not None,
         "score_effective_n": float(effective_n),
         "selection_sample_effective_n": float(sample_effective_n),
-        "likelihood_scale": "subsample_mean_extrapolated_to_full_effective_n"
-        if sub_idx is not None
-        else "full_data_effective_n",
+        "likelihood_scale": (
+            "subsample_mean_extrapolated_to_full_effective_n"
+            if sub_idx is not None
+            else "full_data_effective_n"
+        ),
         "screen_boundary_enabled": enabled,
         "screen_degrees": degrees,
         "screening_scores": tuple(screening_scores),
@@ -508,9 +627,11 @@ def select_n_components(
         "excluded_components": tuple(
             count for count in range(1, ceiling + 1) if count not in admissions
         ),
-        "termination": "closed_winner_neighborhood_or_k_limit"
-        if refined
-        else "all_refinements_failed",
+        "termination": (
+            "closed_winner_neighborhood_or_k_limit"
+            if refined
+            else "all_refinements_failed"
+        ),
         "reuse_selected_fit": sub_idx is None,
     }
     if not refined:

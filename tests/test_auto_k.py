@@ -78,9 +78,15 @@ def big_bimodal():
 class TestSelectionAgreement:
     def test_subsampled_selection_matches_full(self, big_bimodal):
         # ``rng=None`` for fitting is deliberately equivalent to seed 0.
-        sub = Distribution().fit(big_bimodal, support=(-np.inf, np.inf))
+        sub = Distribution().fit(
+            big_bimodal, n_components="auto", support=(-np.inf, np.inf)
+        )
         full = Distribution().fit(
-            big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=False
+            big_bimodal,
+            n_components="auto",
+            support=(-np.inf, np.inf),
+            rng=0,
+            auto_k_subsample=False,
         )
         assert sub.n_components == full.n_components == 2
         diag = sub.selection_diagnostics
@@ -90,9 +96,15 @@ class TestSelectionAgreement:
 
     def test_fitted_parameters_are_unaffected(self, big_bimodal):
         """Selection is approximate; the refit that follows is not."""
-        sub = Distribution().fit(big_bimodal, support=(-np.inf, np.inf), rng=0)
+        sub = Distribution().fit(
+            big_bimodal, n_components="auto", support=(-np.inf, np.inf), rng=0
+        )
         full = Distribution().fit(
-            big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=False
+            big_bimodal,
+            n_components="auto",
+            support=(-np.inf, np.inf),
+            rng=0,
+            auto_k_subsample=False,
         )
         assert sub.mean == pytest.approx(full.mean, abs=1e-7)
         assert sub.var == pytest.approx(full.var, rel=1e-7)
@@ -105,16 +117,25 @@ class TestSelectionAgreement:
 
     def test_unimodal_still_selects_one(self):
         rng = np.random.default_rng(6)
-        c = Distribution().fit(rng.normal(size=25000), support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(
+            rng.normal(size=25000),
+            n_components="auto",
+            support=(-np.inf, np.inf),
+            rng=0,
+        )
         assert c.n_components == 1
 
     def test_small_input_is_not_subsampled(self):
         """Below the threshold, results must be exactly as before."""
         rng = np.random.default_rng(7)
         x = np.concatenate([rng.normal(-3, 0.7, 400), rng.normal(3, 0.7, 400)])
-        a = Distribution().fit(x, support=(-np.inf, np.inf), rng=0)
+        a = Distribution().fit(x, n_components="auto", support=(-np.inf, np.inf), rng=0)
         b = Distribution().fit(
-            x, support=(-np.inf, np.inf), rng=0, auto_k_subsample=False
+            x,
+            n_components="auto",
+            support=(-np.inf, np.inf),
+            rng=0,
+            auto_k_subsample=False,
         )
         assert a.n_components == b.n_components
         assert a.mean == pytest.approx(b.mean, rel=1e-12)
@@ -150,7 +171,7 @@ class TestSelectionAgreement:
 
         monkeypatch.setattr(_fitting, "_pack_natural_component", counted_pack)
         monkeypatch.setattr(_fitting, "_pack_natural_fit", counted_single)
-        c = Distribution().fit(x, support=(-np.inf, np.inf), rng=0)
+        c = Distribution().fit(x, n_components="auto", support=(-np.inf, np.inf), rng=0)
 
         # Selection candidates stay in natural solver state; only components
         # of the final selected model build spectral CDF/PPF state.
@@ -161,7 +182,11 @@ class TestSelectionAgreement:
 class TestSubsampleOption:
     def test_explicit_size_accepted(self, big_bimodal):
         c = Distribution().fit(
-            big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=3000
+            big_bimodal,
+            n_components="auto",
+            support=(-np.inf, np.inf),
+            rng=0,
+            auto_k_subsample=3000,
         )
         assert c.n_components == 2
 
@@ -169,6 +194,7 @@ class TestSubsampleOption:
         with pytest.raises(ValueError, match="must be 'auto'"):
             Distribution().fit(
                 big_bimodal,
+                n_components="auto",
                 support=(-np.inf, np.inf),
                 rng=0,
                 auto_k_subsample="sometimes",
@@ -177,7 +203,11 @@ class TestSubsampleOption:
     def test_rejects_degenerate_size(self, big_bimodal):
         with pytest.raises(ValueError, match="at least 2"):
             Distribution().fit(
-                big_bimodal, support=(-np.inf, np.inf), rng=0, auto_k_subsample=1
+                big_bimodal,
+                n_components="auto",
+                support=(-np.inf, np.inf),
+                rng=0,
+                auto_k_subsample=1,
             )
 
     def test_ignored_for_explicit_k(self, big_bimodal):
@@ -200,7 +230,11 @@ class TestWeightedSubsampling:
         w = np.ones(big_bimodal.size)
         w[big_bimodal.size // 2 :] = 5.0
         c = Distribution().fit(
-            big_bimodal, support=(-np.inf, np.inf), rng=0, sample_weights=w
+            big_bimodal,
+            n_components="auto",
+            support=(-np.inf, np.inf),
+            rng=0,
+            sample_weights=w,
         )
         assert c.mean == pytest.approx(np.average(big_bimodal, weights=w), abs=0.1)
 
@@ -219,13 +253,14 @@ def test_full_data_endpoint_exclusion_is_resolved_before_auto_k_thinning(
     seen = []
     original = _selection._single_selection_fit
 
-    def single(support, sample, degree, lower, upper, weights):
+    def single(support, sample, degree, lower, upper, weights, degree_config):
         seen.append((lower, upper, sample))
-        return original(support, sample, degree, lower, upper, weights)
+        return original(support, sample, degree, lower, upper, weights, degree_config)
 
     monkeypatch.setattr(_selection, "_single_selection_fit", single)
     fitted = Distribution().fit(
         rows,
+        n_components="auto",
         support=(0.0, 1.0),
         poly_degree=2,
         log_boundary_lower="auto",
@@ -292,7 +327,12 @@ class TestBinnedKDE:
 
         rng = np.random.default_rng(6)
         x = np.concatenate([rng.normal(m, s, int(6000 * w)) for m, s, w in specs])
-        assert _count_modes_kde(np.ascontiguousarray(x)) == expected
+        assert (
+            _count_modes_kde(
+                np.ascontiguousarray(x), verbose=0, rng=np.random.default_rng(0)
+            )
+            == expected
+        )
 
 
 class TestGMMInit:

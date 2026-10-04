@@ -18,6 +18,7 @@ from numpy.polynomial import Chebyshev, Polynomial
 from numpy.typing import ArrayLike, NDArray
 
 from .._defaults import (
+    BOUNDARY_ALPHA,
     NUMERIC_FAILURES,
     SUPPRESSED_WARNINGS,
     _maybe_suppress,
@@ -25,10 +26,12 @@ from .._defaults import (
 )
 from .._fit.boundary import AUTO, _effective_n, _select_boundary_terms
 from .._fit.conic_newton import _certify, _solve_natural_conic
+from .._fit.degree import _DegreeSelectionConfig
 from .._fit.inputs import _admissible_degrees, _normalize_univariate_fit_inputs
 from .._fit.natural_objective import (
     _fit_natural_conic_intervals_auto,
     _fit_natural_conic_points_auto,
+    _natural_interval_start,
     _prepare_natural_interval_objective,
     _prepare_natural_point_objective,
 )
@@ -45,10 +48,12 @@ from .._postfit.fitted_state import (
     _pack_natural_fit,
     _structured_scalar,
 )
+from .._postfit.logspace import log_mass_between
 from .._spectral._certify import chebyshev_lower_bound
 from .._spectral._tail_integrals import TailIntegrator
 from .._spectral.cdf import SpectralCDF, density_spec
 from .._spectral.chebyshev import chebyshev_bernstein_matrix
+from .._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 from .._spectral.ppf import SpectralPPF
 from .._spectral.runtime import (
     build_cdf_evaluator,
@@ -109,10 +114,14 @@ def _natural_seed_params(seed, layout, coordinate, /):
     if physical.size != 2:
         return None
     canonical = _canonical_boundary_amplitudes(physical, coordinate.direction)
-    try:
-        return layout.pack(float(q_poly[1]), curvature, canonical)
-    except ValueError:
-        return None
+    for index, amplitude in zip(
+        (layout.lower_a_index, layout.upper_a_index), canonical, strict=True
+    ):
+        if index is not None and np.isnan(amplitude):
+            # The target enables a boundary basis absent from the seed.  This is
+            # a normal warm-start incompatibility, so decline the seed explicitly.
+            return None
+    return layout.pack(float(q_poly[1]), curvature, canonical)
 
 
 def _lift_natural_params(source_layout, source_params, target_layout, /):
@@ -138,7 +147,7 @@ def _lift_natural_params(source_layout, source_params, target_layout, /):
     return target_layout.pack(gamma, target_curvature, amplitudes)
 
 
-def _run_natural_fit(norm, /):
+def _run_natural_fit(norm, degree_config, /):
     """Dispatch normalized public inputs to the natural conic fitter.
 
     Boundary terms whose policy is ``"auto"`` are decided by
@@ -150,6 +159,8 @@ def _run_natural_fit(norm, /):
     ----------
     norm : Mapping
         Canonicalized single-component fit inputs.
+    degree_config : _DegreeSelectionConfig
+        Explicit policy reused by automatic candidates and boundary refits.
 
     Returns
     -------
@@ -174,8 +185,12 @@ def _run_natural_fit(norm, /):
 
     def fit_auto(lo, up):
         if rows.shape[1] == 1:
-            return _fit_natural_conic_points_auto(support, rows[:, 0], lo, up, weights)
-        return _fit_natural_conic_intervals_auto(support, rows, lo, up, weights)
+            return _fit_natural_conic_points_auto(
+                support, rows[:, 0], lo, up, weights, degree_config=degree_config
+            )
+        return _fit_natural_conic_intervals_auto(
+            support, rows, lo, up, weights, degree_config=degree_config
+        )
 
     def fit_fixed(target, lo, up):
         return _fit_natural_fixed_degree(norm, int(target), lo, up)
@@ -198,9 +213,11 @@ def _run_natural_fit(norm, /):
         return 0.0 if index is None else float(result.params[index])
 
     (objective, result), _, p_values = _select_boundary_terms(
-        (lambda lo, up: fit_auto(lo, up))
-        if is_auto
-        else (lambda lo, up: fit_fixed(degree, lo, up)),
+        (
+            (lambda lo, up: fit_auto(lo, up))
+            if is_auto
+            else (lambda lo, up: fit_fixed(degree, lo, up))
+        ),
         lambda model: float(model[1].objective_value),
         amplitude,
         lower,
@@ -210,6 +227,7 @@ def _run_natural_fit(norm, /):
             model[0].spec.requested_poly_degree, lo, up
         ),
         refit=fit_auto if is_auto else None,
+        alpha=BOUNDARY_ALPHA,
     )
     return objective, result, effective_n, p_values
 
@@ -248,29 +266,26 @@ def _fit_natural_fixed_degree(norm, degree, lower, upper, /):
             objective = _prepare_natural_interval_objective(
                 support, rows, rung, lower, upper, weights
             )
-        options = {}
+        initial = initial_blocks = None
         if previous is not None:
             prev_objective, prev_result = previous
-            options["initial"] = _lift_natural_params(
+            initial = _lift_natural_params(
                 prev_objective.layout, prev_result.params, objective.layout
             )
         elif seed is not None:
             initial = _natural_seed_params(
                 seed, objective.layout, objective.spec.coordinate
             )
-            if initial is not None:
-                options["initial"] = initial
-        if rows.shape[1] == 2 and "initial" not in options:
-            from .._fit.natural_objective import _natural_interval_start
-
-            initial, blocks = _natural_interval_start(objective)
-            options["initial"] = initial
-            options["initial_blocks"] = blocks
+        if rows.shape[1] == 2 and initial is None:
+            initial, initial_blocks = _natural_interval_start(objective)
         try:
-            result = _solve_natural_conic(objective, **options)
+            result = _solve_natural_conic(
+                objective, initial=initial, initial_blocks=initial_blocks
+            )
         except RuntimeError as exc:
-            if previous is None or "cone description failed its rank checks" not in str(
-                exc
+            if (
+                previous is None
+                or "cone description failed its rank checks" not in str(exc)
             ):
                 raise
             # The requested model contains every lower-degree face.  At
@@ -364,6 +379,7 @@ class _Component:
             self._assign_from_struct(uni_state)
 
     def __copy__(self):
+        """Return a component copy through the standard copy protocol."""
         return self.copy()
 
     def __deepcopy__(self, memo):
@@ -393,9 +409,11 @@ class _Component:
 
     @property
     def _version(self):
+        """Return the owner presentation's cache-invalidation revision."""
         return 0 if self._context is None else self._context.version
 
     def _affine(self):
+        """Return the owner presentation's shift/scale, or standalone identity."""
         return (0.0, 1.0) if self._context is None else self._context.affine
 
     @property
@@ -413,14 +431,15 @@ class _Component:
         cls,
         samples: ArrayLike,
         *,
-        poly_degree: int | str | None = None,
-        support: tuple[float, float] | None = None,
-        log_boundary_lower: bool | None = None,
-        log_boundary_upper: bool | None = None,
-        verbose: int = 0,
-        suppress_warnings: bool = False,
-        init_from: Union["_Component", Mapping[str, Any]] | None = None,
-        sample_weights: ArrayLike | None = None,
+        poly_degree: int | str | None,
+        support: tuple[float, float] | None,
+        log_boundary_lower: bool | None,
+        log_boundary_upper: bool | None,
+        verbose: int,
+        suppress_warnings: bool,
+        init_from: Union["_Component", Mapping[str, Any]] | None,
+        sample_weights: ArrayLike | None,
+        degree_config: _DegreeSelectionConfig,
     ) -> "_Component":
         """Privately fit and return a new completed read-only component.
 
@@ -428,31 +447,33 @@ class _Component:
         ----------
         samples : array_like
             Observations.
-        poly_degree : int, ``'auto'``, or None, optional
-            Degree of the polynomial potential.  ``None`` (default)
+        poly_degree : int, ``'auto'``, or None
+            Degree of the polynomial potential. Explicit ``None``
             means ``"auto"`` when no seed is given, or inherit from the
             seed when ``init_from`` is provided.  Pass ``'auto'`` to
             select degree by the omitted-information criterion.
-        support : tuple of (float, float) or None, optional
+        support : tuple of (float, float) or None
             Domain of the density.  ``None`` means the full real line
             ``(-inf, +inf)``; specify structural boundaries explicitly.
             Ignored when ``init_from`` is given (inherited from seed).
-        log_boundary_lower, log_boundary_upper : bool or None, optional
+        log_boundary_lower, log_boundary_upper : bool or None
             Whether to include a log-singularity boundary term at the
-            lower / upper finite endpoint.  ``None`` (default) means
-            ``True`` when the corresponding support bound is finite (no
-            seed), or inherit from the seed when ``init_from`` is
-            given.  Explicit ``True``/``False`` overrides the seed.
+            lower / upper finite endpoint. Explicit ``None`` selects the term
+            from the data at a finite unseeded endpoint, excludes it at an
+            infinite endpoint, or inherits the seed policy with ``init_from``.
+            Explicit ``True``/``False`` overrides the seed.
             An enabled basis has a direct nonnegative fitted amplitude
             that is allowed to optimize to zero.
-        verbose : int, optional
+        verbose : int
             Verbosity level for fitting progress and diagnostics.
-        suppress_warnings : bool, optional
+        suppress_warnings : bool
             Whether numerical fitting warnings should be suppressed.
-        init_from : _Component, Mapping, or None, optional
+        init_from : _Component, Mapping, or None
             Warm-start seed.
-        sample_weights : array_like or None, optional
+        sample_weights : array_like or None
             Optional non-negative relative weight assigned to each observation.
+        degree_config : _DegreeSelectionConfig
+            Explicit omitted-information policy owned by the fit request.
 
         Returns
         -------
@@ -482,7 +503,9 @@ class _Component:
             sample_weights,
         )
         with _maybe_suppress(norm["suppress_warnings"], SUPPRESSED_WARNINGS):
-            objective, result, effective_n, p_values = _run_natural_fit(norm)
+            objective, result, effective_n, p_values = _run_natural_fit(
+                norm, degree_config
+            )
             data = _pack_natural_fit(
                 objective, result, effective_n=effective_n, boundary_p_values=p_values
             )
@@ -888,42 +911,50 @@ class _Component:
 
     @property
     def support(self):
+        """Return support bounds in the active evaluation space."""
         return self._active.support
 
     @property
     def mode(self):
+        """Return the mode in the active evaluation space."""
         return self._active.mode
 
     @property
     def median(self):
+        """Return the median in the active evaluation space."""
         return self._active.median
 
     @property
     def mean(self):
+        """Return the mean in the active evaluation space."""
         return self._active.mean
 
     @property
     def var(self):
+        """Return variance in the active evaluation space."""
         return self._active.var
 
     @property
     def std(self):
+        """Return standard deviation in the active evaluation space."""
         return self._active.std
 
     @property
     def skew(self):
+        """Return skewness of the active-space distribution."""
         return self._active.skew
 
     @property
     def kurt(self):
+        """Return excess kurtosis of the active-space distribution."""
         return self._active.kurt
 
-    def _truncate_base(self, lower=None, upper=None):
+    def _truncate_base(self, lower, upper):
         """Return this component conditioned to a base-space interval.
 
         Parameters
         ----------
-        lower, upper : float or None, optional
+        lower, upper : float or None
             Base-space truncation bounds. ``None`` keeps the current bound.
         """
         self._ensure_fitted()
@@ -941,8 +972,6 @@ class _Component:
                 f"truncation interval ({lower!r}, {upper!r}) does not overlap "
                 f"support ({active_lo!r}, {active_hi!r})"
             )
-
-        from .._postfit.logspace import log_mass_between
 
         log_mass = float(
             log_mass_between(
@@ -1008,10 +1037,18 @@ class _Component:
             ],
             view=False,
         )
-        cdf_rep = SpectralCDF(trunc_z_support, density=density, mode=z_mode, std=z_std)
+        cdf_rep = SpectralCDF(
+            trunc_z_support,
+            density=density,
+            mode=z_mode,
+            std=z_std,
+            map_scale=None,
+            initial_breaks=None,
+            config=_SpectralCDFOptions(),
+        )
         spectral = dict(pack_cdf_state(cdf_rep))
         try:
-            ppf_rep = SpectralPPF(cdf_rep)
+            ppf_rep = SpectralPPF(cdf_rep, config=_SpectralPPFOptions())
         except NUMERIC_FAILURES as exc:
             _reraise_if_debug(exc, "truncated spectral PPF construction", routine=True)
             ppf_rep = None
@@ -1160,7 +1197,7 @@ class _Component:
             return float(rm[k])
         if k in self._canonical_moments:
             return self._canonical_moments[k]
-        val = float(_pf._univariate_canonical_raw_moment(data, int(k)))
+        val = float(_pf._univariate_canonical_raw_moment(data, k))
         self._canonical_moments[k] = val
         return val
 
@@ -1172,10 +1209,23 @@ class _Component:
         return float(origin), float(local)
 
     def _support_base(self):
+        """Return active base support under the shared presentation transform."""
         shift, scale = self._affine()
         return shift + scale * self._data["support"]
 
     def _base_stat(self, name):
+        """Transform a stored base-space summary statistic.
+
+        Parameters
+        ----------
+        name : str
+            Stored statistic field to express in the presentation coordinate.
+
+        Returns
+        -------
+        float
+            Statistic after applying the appropriate affine transformation.
+        """
         value = float(self._data[name])
         shift, scale = self._affine()
         if name in ("mode", "median", "mean"):

@@ -35,7 +35,7 @@ from .._defaults import (
 )
 from .._model.coords import _safe_scaled_difference
 from ._interval_integrals import AdaptiveIntervalIntegrator, statistic_kinds
-from .empirical import _normalized_weights
+from .empirical import _canonical_weights
 
 _GL_X, _GL_W = np.polynomial.legendre.leggauss(int(INTERVAL_GL_ORDER))
 _GL_LOG_W = np.log(_GL_W)
@@ -417,6 +417,11 @@ class _IntervalObservations:
 @dataclass(frozen=True)
 class _FiniteIntervalQuadrature:
     """Deterministic finite-interval quadrature and reduction plan.
+
+    Scalar, full-row and compact point-limit inputs are deliberate reduction
+    adapter forms for newly evaluated kernels/statistics, not competing raw
+    observation formats. They avoid materializing repeated scalar values or
+    unused point-row arrays while observations retain one canonical layout.
 
     Parameters
     ----------
@@ -812,12 +817,14 @@ def _build_interval_observations(
 
     Parameters
     ----------
-    intervals : array_like, shape (R, 2)
-        Ordered lower/upper endpoints.  They are interpreted as user
+    intervals : numpy.ndarray, shape (R, 2), dtype float64
+        Already-validated ordered lower/upper endpoints. They are interpreted as user
         coordinates when ``coordinate`` is supplied and as already canonical
         otherwise.  Infinite endpoints are permitted; NaN is not.
-    weights : array_like, shape (R,) or None, optional
-        Non-negative observation weights.
+    weights : _WeightSummary or None, optional
+        Prepared normalized weights and original-row reliability metadata.
+        ``None`` creates equal weights; raw relative weights must be prepared
+        explicitly before calling this constructor.
     coordinate : _FitCoordinate or None, optional
         Fixed fitting coordinate.  When supplied, intervals are mapped to
         canonical coordinates and its canonical support is recorded.
@@ -838,18 +845,12 @@ def _build_interval_observations(
     Raises
     ------
     ValueError
-        If interval shape/order/support or weights are invalid.
+        If coordinate/support arguments conflict or mapped geometry lies
+        outside the canonical support.
     """
-    x = np.asarray(intervals, dtype=np.float64)
-    if x.ndim != 2 or x.shape[1] != 2 or x.shape[0] < 1:
-        raise ValueError("intervals must have shape (R, 2) with R >= 1")
-    if np.any(np.isnan(x)):
-        raise ValueError("interval endpoints must not contain NaN")
-    if np.any(x[:, 0] > x[:, 1]):
-        raise ValueError("interval lower endpoints must not exceed upper endpoints")
-
-    n = int(x.shape[0])
-    w, total, effective_n = _normalized_weights(n, weights, "interval")
+    x = intervals
+    n = x.shape[0]
+    w, total, effective_n = _canonical_weights(n, None) if weights is None else weights
 
     canonical_support = support
     point_lower_distance = np.full(n, np.nan, dtype=np.float64)

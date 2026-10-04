@@ -4,11 +4,22 @@
 import numpy as np
 cimport numpy as cnp
 
+from libc.math cimport exp, fabs, INFINITY, isfinite, log, nextafter
+from libc.stdlib cimport free, malloc
+
 cnp.import_array()
 
 
 def product_moment(double[::1] a, double[::1] b, double[::1] moments):
-    """Return ``sum_ij a[i] * b[j] * moments[i+j]`` without convolution."""
+    """Return ``sum_ij a[i] * b[j] * moments[i+j]`` without convolution.
+
+    Parameters
+    ----------
+    a, b : contiguous float64 buffers
+        Polynomial coefficients in increasing power order; either may be empty.
+    moments : contiguous float64 buffer
+        Raw moments through order ``len(a) + len(b) - 2`` for nonempty inputs.
+    """
     cdef Py_ssize_t na = a.shape[0]
     cdef Py_ssize_t nb = b.shape[0]
     cdef Py_ssize_t i, j
@@ -24,9 +35,6 @@ def product_moment(double[::1] a, double[::1] b, double[::1] moments):
 
 
 # Gauss--Kronrod 15/7 constants for simultaneous power-moment integration.
-from libc.math cimport exp, fabs, INFINITY, isfinite, log, nextafter
-from libc.stdlib cimport free, malloc
-
 cdef double _PM_XGK[8]
 _PM_XGK[0] = 0.991455371120812639206854697526329
 _PM_XGK[1] = 0.949107912342758524526189684047851
@@ -356,7 +364,32 @@ def power_moments(
     double epsrel,
     int limit,
 ):
-    """Integrate all shifted raw power moments in shared adaptive traversals."""
+    """Integrate all shifted raw power moments in shared adaptive traversals.
+
+    Parameters
+    ----------
+    q_poly : contiguous float64 buffer
+        Nonempty shifted potential coefficients in increasing power order.
+    support : contiguous float64 buffer, shape (2,)
+        Support endpoints in the integration coordinates.
+    boundary_amplitudes : contiguous float64 buffer, shape (2,)
+        Lower and upper logarithmic amplitudes; absent bases are ``nan``.
+    window : contiguous float64 buffer, shape (2,)
+        Integration window within the support.
+    points : contiguous float64 buffer
+        Ordered interior segment breakpoints, excluding window endpoints.
+    max_order : int
+        Highest raw power moment to integrate, including order zero.
+    epsabs, epsrel : float
+        Explicit absolute and relative adaptive error tolerances.
+    limit : int
+        Maximum adaptive panel count per segment.
+
+    Returns
+    -------
+    numpy.ndarray, shape (max_order + 1,)
+        Unnormalized shifted-density power integrals.
+    """
     cdef Py_ssize_t m, k, i, nseg
     cdef double lower, upper, lo, hi, a_lower, a_upper
     cdef int transform, status
@@ -385,6 +418,9 @@ def power_moments(
     out = np.zeros(m, dtype=np.float64)
     seg = np.empty(m, dtype=np.float64)
     nseg = edges.shape[0] - 1
+    cdef Py_ssize_t nq = q_poly.shape[0]
+    cdef const double* q_ptr = &q_poly[0]
+    cdef double* seg_ptr = &seg[0]
     for i in range(nseg):
         lo = edges[i]
         hi = edges[i + 1]
@@ -397,8 +433,8 @@ def power_moments(
             transform = 2
         with nogil:
             status = _pm_segment(
-                lo, hi, transform, lower, upper, &q_poly[0], q_poly.shape[0],
-                a_lower, a_upper, m, epsabs / nseg, epsrel, limit, &seg[0],
+                lo, hi, transform, lower, upper, q_ptr, nq,
+                a_lower, a_upper, m, epsabs / nseg, epsrel, limit, seg_ptr,
             )
         if status == 9:
             raise MemoryError("power-moment adaptive quadrature allocation failed")

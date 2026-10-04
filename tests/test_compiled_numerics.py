@@ -13,6 +13,7 @@ from scipy.special import betaln, gammaln, logsumexp
 from scipy.stats import beta, gamma, norm
 
 from gibbus import Distribution
+from gibbus._defaults import TAIL_QUAD_EPSABS, TAIL_QUAD_LIMIT
 
 
 def _python_neg_log_mix_derivs(ell_jets, max_order):
@@ -86,6 +87,8 @@ def test_compiled_infinite_tail_matches_normal_oracle(upper):
         np.array([np.nan, np.nan]),
         0.0,
         1.0,
+        epsabs=TAIL_QUAD_EPSABS,
+        limit=TAIL_QUAD_LIMIT,
     )
     assert message is None
     assert got == pytest.approx(np.log(p), abs=3e-12)
@@ -105,6 +108,8 @@ def test_batched_tail_masses_match_normal_oracle(upper):
         np.array([np.nan, np.nan]),
         0.0,
         1.0,
+        epsabs=TAIL_QUAD_EPSABS,
+        limit=TAIL_QUAD_LIMIT,
     )
     assert failed == 0
     np.testing.assert_allclose(values, np.log(p), rtol=0.0, atol=5e-11)
@@ -134,13 +139,29 @@ def test_batched_tail_pieces_are_not_held_below_the_rounding_noise_of_q():
     integrator = TailIntegrator(q_poly)
     grid = np.linspace(7.0, 11.8, 105)
     values, failed = integrator.log_masses(
-        grid, np.inf, True, support, amplitudes, mu_eff, sigma_eff
+        grid,
+        np.inf,
+        True,
+        support,
+        amplitudes,
+        mu_eff,
+        sigma_eff,
+        epsabs=TAIL_QUAD_EPSABS,
+        limit=TAIL_QUAD_LIMIT,
     )
     assert failed == 0
     reference = []
     for x in grid:
         value, message = integrator.log_mass(
-            x, np.inf, True, support, amplitudes, mu_eff, sigma_eff
+            x,
+            np.inf,
+            True,
+            support,
+            amplitudes,
+            mu_eff,
+            sigma_eff,
+            epsabs=TAIL_QUAD_EPSABS,
+            limit=TAIL_QUAD_LIMIT,
         )
         assert message is None
         reference.append(value)
@@ -160,7 +181,15 @@ def test_reusable_tail_context_is_thread_safe():
         x = float(norm.isf(p) if upper else norm.ppf(p))
         endpoint = np.inf if upper else -np.inf
         value, message = integrator.log_mass(
-            x, endpoint, upper, support, amplitudes, 0.0, 1.0
+            x,
+            endpoint,
+            upper,
+            support,
+            amplitudes,
+            0.0,
+            1.0,
+            epsabs=TAIL_QUAD_EPSABS,
+            limit=TAIL_QUAD_LIMIT,
         )
         return p, value, message
 
@@ -185,6 +214,8 @@ def test_compiled_tail_respects_public_affine_transform():
         np.array([np.nan, np.nan]),
         -mu / sigma,
         1.0 / sigma,
+        epsabs=TAIL_QUAD_EPSABS,
+        limit=TAIL_QUAD_LIMIT,
     )
     assert message is None
     assert got == pytest.approx(np.log(p), abs=2e-10)
@@ -207,6 +238,8 @@ def test_compiled_finite_boundary_tail_matches_beta_oracle(upper):
         np.array([a - 1.0, b - 1.0]),
         0.0,
         1.0,
+        epsabs=TAIL_QUAD_EPSABS,
+        limit=TAIL_QUAD_LIMIT,
     )
     assert message is None
     assert got == pytest.approx(np.log(p), abs=3e-10)
@@ -228,6 +261,8 @@ def test_compiled_tail_handles_reflected_upper_boundary_geometry():
         np.array([np.nan, boundary_power]),
         0.0,
         -1.0,
+        epsabs=TAIL_QUAD_EPSABS,
+        limit=TAIL_QUAD_LIMIT,
     )
     assert message is None
     assert got == pytest.approx(np.log(p), abs=5e-10)

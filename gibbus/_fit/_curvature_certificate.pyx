@@ -31,6 +31,8 @@ rounded operation otherwise), so "certifiably" means after subtracting the
 accumulated bound.  The whole decision runs without the GIL on stack arrays.
 """
 
+import numpy as np
+
 from libc.math cimport fabs, isfinite
 
 cdef extern from * nogil:
@@ -424,8 +426,8 @@ def certify_full_curvature(
     double a_lower,
     double a_upper,
     double tolerance,
-    int max_depth=48,
-    int max_leaves=4096,
+    int max_depth,
+    int max_leaves,
 ):
     """Return 1 (feasible), 0 (violated) or -1 (uncertain).
 
@@ -439,11 +441,11 @@ def certify_full_curvature(
         Boundary amplitudes; ``nan`` when the basis is absent.
     tolerance : float
         The separator's feasibility tolerance ``tau``.
-    max_depth, max_leaves : int, optional
+    max_depth, max_leaves : int
         Subdivision budget before answering "uncertain".
     """
-    cdef const double[::1] q = __import__("numpy").ascontiguousarray(
-        q_d2, dtype="float64"
+    cdef const double[::1] q = np.ascontiguousarray(
+        q_d2, dtype=np.float64
     )
     cdef int nq = q.shape[0]
     cdef int status

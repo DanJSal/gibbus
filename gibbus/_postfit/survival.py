@@ -6,7 +6,8 @@ import numpy as np
 from scipy.integrate import quad
 
 from .._defaults import EXPECT_MAX_RELATIVE_ERROR, SF_HANDOVER_P, _reraise_if_debug
-from .._spectral.tail import exact_tail_log_cdf
+from .._spectral.tail import exact_tail_log_cdf, invert_tail
+from .logspace import log1mexp
 
 
 def _vectorize_scalar(func, x, *args):
@@ -36,9 +37,9 @@ def log_sf_hybrid(
     upper_endpoint,
     /,
     *,
-    lower_endpoint=-np.inf,
-    log_tail_mass=None,
-    log_tail_masses=None,
+    lower_endpoint,
+    log_tail_mass,
+    log_tail_masses,
 ):
     """Evaluate log survival using spectral body values and exact tail quadrature.
 
@@ -52,11 +53,11 @@ def log_sf_hybrid(
         Evaluation coordinates.
     upper_endpoint : float
         Upper support endpoint.
-    lower_endpoint : float, optional
+    lower_endpoint : float
         Lower support endpoint, used for exact boundary semantics.
-    log_tail_mass : callable or None, optional
+    log_tail_mass : callable or None
         Exact tail-mass adapter used below the spectral handover.
-    log_tail_masses : callable or None, optional
+    log_tail_masses : callable or None
         Batched form ``(x_array, endpoint, upper=...) -> log masses``; when
         given it evaluates every tail anchor in one call.
     """
@@ -96,9 +97,9 @@ def cdf_hybrid(
     lower_endpoint,
     /,
     *,
-    upper_endpoint=np.inf,
-    log_tail_mass=None,
-    log_tail_masses=None,
+    upper_endpoint,
+    log_tail_mass,
+    log_tail_masses,
 ):
     """Evaluate the CDF with exact lower-tail quadrature below the handover.
 
@@ -118,9 +119,9 @@ def cdf_hybrid(
         Evaluation coordinates.
     lower_endpoint, upper_endpoint : float
         Support endpoints.
-    log_tail_mass : callable or None, optional
+    log_tail_mass : callable or None
         Scalar exact lower-tail log-mass evaluator.
-    log_tail_masses : callable or None, optional
+    log_tail_masses : callable or None
         Batched exact lower-tail log-mass evaluator.
 
     Returns
@@ -169,9 +170,9 @@ def log_cdf_hybrid(
     lower_endpoint,
     /,
     *,
-    upper_endpoint=np.inf,
-    log_tail_mass=None,
-    log_tail_masses=None,
+    upper_endpoint,
+    log_tail_mass,
+    log_tail_masses,
 ):
     """Evaluate log CDF using spectral body values and exact tail quadrature.
 
@@ -185,11 +186,11 @@ def log_cdf_hybrid(
         Evaluation coordinates.
     lower_endpoint : float
         Lower support endpoint.
-    upper_endpoint : float, optional
+    upper_endpoint : float
         Upper support endpoint, used for exact boundary semantics.
-    log_tail_mass : callable or None, optional
+    log_tail_mass : callable or None
         Exact tail-mass adapter used below the spectral handover.
-    log_tail_masses : callable or None, optional
+    log_tail_masses : callable or None
         Batched form ``(x_array, endpoint, upper=...) -> log masses``; when
         given it evaluates every tail anchor in one call.
     """
@@ -416,39 +417,7 @@ def residual_entropy(potential, logsf, support, x, /):
     return _vectorize_scalar(lambda v: one(v), x)
 
 
-def _validate_probabilities(p, name):
-    """Validate ordinary probabilities.
-
-    Parameters
-    ----------
-    p : float or array_like
-        Candidate probabilities.
-    name : str
-        Public method name for error messages.
-    """
-    arr = np.asarray(p, dtype=np.float64)
-    if np.any(((arr < 0.0) | (arr > 1.0) | np.isinf(arr)) & ~np.isnan(arr)):
-        raise ValueError(f"{name} is defined for probabilities in [0, 1]")
-    return arr
-
-
-def _validate_log_probabilities(log_p, name):
-    """Validate logarithmic probabilities.
-
-    Parameters
-    ----------
-    log_p : float or array_like
-        Candidate log probabilities.
-    name : str
-        Public method name for error messages.
-    """
-    arr = np.asarray(log_p, dtype=np.float64)
-    if np.any((arr > 0.0) & ~np.isnan(arr)):
-        raise ValueError(f"{name} requires log_p <= 0")
-    return arr
-
-
-def isf(potential, ppf, support, p, /, *, log_tail_mass=None):
+def isf(potential, ppf, support, p, /, *, log_tail_mass):
     """Invert the survival probability without forming ``1-p`` in deep tails.
 
     Parameters
@@ -459,14 +428,12 @@ def isf(potential, ppf, support, p, /, *, log_tail_mass=None):
         Ordinary quantile evaluator used for body probabilities and tail seeds.
     support : array_like, shape (2,)
         Distribution support.
-    p : float or array_like
-        Survival probabilities in ``[0, 1]``.
-    log_tail_mass : callable or None, optional
+    p : numpy.ndarray, dtype float64
+        Boundary-validated survival probabilities in ``[0, 1]``.
+    log_tail_mass : callable or None
         Exact tail-mass adapter used for deep-tail inversion.
     """
-    from .._spectral.tail import invert_tail
-
-    arr = _validate_probabilities(p, "isf")
+    arr = p
     scalar = arr.ndim == 0
     flat = np.atleast_1d(arr).reshape(-1)
     lo, hi = map(float, support)
@@ -496,7 +463,7 @@ def isf(potential, ppf, support, p, /, *, log_tail_mass=None):
     return float(out) if scalar else out
 
 
-def logppf(potential, ppf, support, log_p, /, *, log_tail_mass=None):
+def logppf(potential, ppf, support, log_p, /, *, log_tail_mass):
     """Invert a logarithmic CDF probability directly.
 
     Parameters
@@ -507,15 +474,12 @@ def logppf(potential, ppf, support, log_p, /, *, log_tail_mass=None):
         Ordinary quantile evaluator used in the body and for seeds.
     support : array_like, shape (2,)
         Distribution support.
-    log_p : float or array_like
-        Log CDF probabilities, no greater than zero.
-    log_tail_mass : callable or None, optional
+    log_p : numpy.ndarray, dtype float64
+        Boundary-validated log CDF probabilities, no greater than zero.
+    log_tail_mass : callable or None
         Exact tail-mass adapter used for deep-tail inversion.
     """
-    from .._spectral.tail import invert_tail
-    from .logspace import log1mexp
-
-    arr = _validate_log_probabilities(log_p, "logppf")
+    arr = log_p
     scalar = arr.ndim == 0
     flat = np.atleast_1d(arr).reshape(-1)
     lo, hi = map(float, support)
@@ -555,7 +519,7 @@ def logppf(potential, ppf, support, log_p, /, *, log_tail_mass=None):
     return float(out) if scalar else out
 
 
-def logisf(potential, ppf, support, log_p, /, *, log_tail_mass=None):
+def logisf(potential, ppf, support, log_p, /, *, log_tail_mass):
     """Invert a logarithmic survival probability directly.
 
     Parameters
@@ -566,15 +530,12 @@ def logisf(potential, ppf, support, log_p, /, *, log_tail_mass=None):
         Ordinary quantile evaluator used in the body and for seeds.
     support : array_like, shape (2,)
         Distribution support.
-    log_p : float or array_like
-        Log survival probabilities, no greater than zero.
-    log_tail_mass : callable or None, optional
+    log_p : numpy.ndarray, dtype float64
+        Boundary-validated log survival probabilities, no greater than zero.
+    log_tail_mass : callable or None
         Exact tail-mass adapter used for deep-tail inversion.
     """
-    from .._spectral.tail import invert_tail
-    from .logspace import log1mexp
-
-    arr = _validate_log_probabilities(log_p, "logisf")
+    arr = log_p
     scalar = arr.ndim == 0
     flat = np.atleast_1d(arr).reshape(-1)
     lo, hi = map(float, support)

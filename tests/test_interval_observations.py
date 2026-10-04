@@ -4,7 +4,10 @@ import numpy as np
 import pytest
 from scipy.integrate import quad
 
+from gibbus._fit.inputs import _canon_univariate_samples
 from gibbus._model.coords import _build_fit_coordinate, _build_interval_fit_coordinate
+from gibbus._observations import intervals as intervals_module
+from gibbus._observations.empirical import _normalized_weights
 from gibbus._observations.intervals import (
     _build_interval_observations,
 )
@@ -39,34 +42,56 @@ def test_duplicate_compression_preserves_original_effective_n():
 def test_weighted_duplicate_compression_is_exact():
     intervals = np.array([[0.0, 1.0], [0.0, 1.0], [1.0, 2.0]])
     weights = np.array([1.0, 3.0, 2.0])
-    obs = _build_interval_observations(intervals, weights)
+    obs = _build_interval_observations(
+        intervals, _normalized_weights(len(intervals), weights, "interval")
+    )
     assert np.allclose(obs.weights, [4.0 / 6.0, 2.0 / 6.0])
     assert obs.total_weight == pytest.approx(6.0)
     assert obs.effective_n == pytest.approx(36.0 / 14.0)
+
+
+def test_prepared_weight_summary_is_consumed_without_reprocessing(monkeypatch):
+    rows = np.array([[0.0, 1.0], [0.0, 1.0], [1.0, 2.0]])
+    summary = _normalized_weights(3, np.array([1.0, 3.0, 2.0]), "interval")
+
+    def unexpected_weight_preparation(n, weights):
+        raise AssertionError("prepared weights were processed again")
+
+    monkeypatch.setattr(
+        intervals_module, "_canonical_weights", unexpected_weight_preparation
+    )
+    obs = _build_interval_observations(rows, summary)
+    assert obs.n_observations == 3
+    assert obs.total_weight == summary.total_weight
+    assert obs.effective_n == summary.effective_n
+    np.testing.assert_allclose(obs.weights, [4.0 / 6.0, 2.0 / 6.0])
 
 
 def test_weight_normalization_survives_overflowing_raw_sum():
     intervals = np.array([[0.0, 1.0], [1.0, 2.0], [2.0, 3.0]])
     w = np.full(3, 1.0e308)
     with np.errstate(over="raise", invalid="raise"):
-        obs = _build_interval_observations(intervals, w)
+        obs = _build_interval_observations(
+            intervals, _normalized_weights(len(intervals), w, "interval")
+        )
     np.testing.assert_allclose(obs.weights, np.full(3, 1.0 / 3.0))
     assert np.isinf(obs.total_weight)
     assert obs.effective_n == pytest.approx(3.0)
 
 
-def test_invalid_rows_and_support_are_rejected():
+def test_boundary_validates_rows_and_builder_checks_canonical_support():
     with pytest.raises(ValueError, match="must not contain NaN"):
-        _build_interval_observations([[0.0, np.nan]])
-    with pytest.raises(ValueError, match="must not exceed"):
-        _build_interval_observations([[2.0, 1.0]])
+        _canon_univariate_samples([[0.0, np.nan]], min_samples=1)
+    rows, _ = _canon_univariate_samples([[2.0, 1.0]], min_samples=1)
+    obs = _build_interval_observations(rows)
+    np.testing.assert_array_equal(obs.intervals, [[1.0, 2.0]])
     with pytest.raises(ValueError, match="outside"):
-        _build_interval_observations([[0.0, 2.0]], support=(-1.0, 1.0))
+        _build_interval_observations(np.array([[0.0, 2.0]]), support=(-1.0, 1.0))
 
 
 def test_infinite_rows_are_classified_but_finite_plan_refuses_them():
     obs = _build_interval_observations(
-        [[-np.inf, -1.0], [0.0, np.inf], [-np.inf, np.inf]],
+        np.array([[-np.inf, -1.0], [0.0, np.inf], [-np.inf, np.inf]]),
         support=(-np.inf, np.inf),
     )
     assert obs.has_infinite_rows

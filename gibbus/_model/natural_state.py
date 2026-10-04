@@ -239,20 +239,12 @@ class _NaturalCoreState:
 
         numerics = _layout_numerics(layout)
         p = np.array(params, dtype=np.float64).reshape(-1)
-        if p.size != layout.n_params:
-            raise ValueError(
-                f"expected {layout.n_params} natural parameters, got {p.size}"
-            )
-        if not np.isfinite(p).all():
-            raise ValueError("natural parameters must be finite")
+        layout._validate_canonical_params(p)
         amplitudes = np.full(2, np.nan, dtype=np.float64)
         if layout.lower_a_index is not None:
             amplitudes[0] = p[layout.lower_a_index]
         if layout.upper_a_index is not None:
             amplitudes[1] = p[layout.upper_a_index]
-        if amplitudes[0] < 0.0 or amplitudes[1] < 0.0:
-            raise ValueError("boundary amplitudes must be >= 0")
-
         self.layout = layout
         self.spec = _ModelSpec(coordinate, layout)
         self.p = p

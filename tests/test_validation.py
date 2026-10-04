@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from gibbus import Distribution
-from gibbus._fit.inputs import _canon_univariate_samples
+from gibbus._fit.inputs import _canon_univariate_samples, _normalize_sample_weights_1d
 
 
 @pytest.fixture
@@ -230,6 +230,11 @@ class TestSupportValidation:
         with pytest.raises(ValueError, match=r"support\[0\]"):
             Distribution().fit(rng.normal(size=100), support=(5, -5))
 
+    @pytest.mark.parametrize("support", [0.0, (0.0,), (0.0, 1.0, 2.0)])
+    def test_support_must_have_exactly_two_endpoints(self, rng, support):
+        with pytest.raises(ValueError, match="exactly two endpoints"):
+            Distribution().fit(rng.normal(size=100), support=support)
+
     @pytest.mark.parametrize("support", [(-np.inf, np.inf), (0, np.inf), (0, 1)])
     def test_valid_supports_accepted(self, support, rng):
         lo, hi = support
@@ -264,6 +269,13 @@ class TestWeightValidation:
                 sample_weights=np.zeros(50),
             )
 
+    def test_large_finite_weights_normalize_without_overflow(self):
+        weights = np.full(50, np.finfo(np.float64).max)
+        normalized = _normalize_sample_weights_1d(50, weights)
+        assert np.all(np.isfinite(normalized))
+        assert normalized.sum() == pytest.approx(1.0)
+        np.testing.assert_allclose(normalized, np.full(50, 1.0 / 50.0))
+
 
 class TestComponentValidation:
     def test_zero_components_rejected(self, rng):
@@ -294,6 +306,24 @@ class TestComponentValidation:
                 n_components=2,
                 support=(-np.inf, np.inf),
                 component_options=[{"support": (0, 1)}, {}],
+            )
+
+    def test_component_options_unknown_key_rejected(self, rng):
+        with pytest.raises(ValueError, match="only 'poly_degree'"):
+            Distribution().fit(
+                rng.normal(size=200),
+                n_components=2,
+                support=(-np.inf, np.inf),
+                component_options=[{"mystery": 1}, {}],
+            )
+
+    def test_component_options_fractional_degree_rejected(self, rng):
+        with pytest.raises(ValueError, match="poly_degree must be an integer"):
+            Distribution().fit(
+                rng.normal(size=200),
+                n_components=2,
+                support=(-np.inf, np.inf),
+                component_options=[{"poly_degree": 4.5}, {}],
             )
 
     def test_component_options_forbidden_under_auto(self, rng):
@@ -478,6 +508,16 @@ class TestFitControlValidation:
     def test_non_integral_n_components_rejected(self, rng):
         with pytest.raises(ValueError, match="positive integer or 'auto'"):
             Distribution().fit(rng.normal(size=200), n_components=2.5)
+
+    @pytest.mark.parametrize("n_components", [1, 2])
+    def test_non_integral_poly_degree_rejected(self, rng, n_components):
+        with pytest.raises(ValueError, match="poly_degree must be an integer"):
+            Distribution().fit(
+                rng.normal(size=200),
+                n_components=n_components,
+                poly_degree=4.5,
+                support=(-np.inf, np.inf),
+            )
 
     def test_non_positive_k_max_rejected(self, rng):
         with pytest.raises(ValueError, match="k_max must be >= 1"):

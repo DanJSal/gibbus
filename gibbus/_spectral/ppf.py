@@ -26,18 +26,10 @@ import numpy as np
 from numpy.polynomial import chebyshev as C
 from scipy.special import expit
 
-from .._defaults import (
-    SPECTRAL_DEGREE_OPTIONS,
-    SPECTRAL_PPF_CERTIFY_SUBDIVIDE,
-    SPECTRAL_PPF_COEFF_TOL,
-    SPECTRAL_PPF_FIT_TOL,
-    SPECTRAL_PPF_LOGIT_TOL,
-    SPECTRAL_PPF_MAX_DEPTH,
-    SPECTRAL_PPF_MAX_PANELS,
-    SPECTRAL_PPF_PROB_TOL,
-)
+from . import _builders
 from ._ppf_eval import SpectralPPFEvaluator
-from .cdf import SpectralCDF
+from .cdf import _KIND_CODE, SpectralCDF, _builder_tables
+from .config import _SpectralPPFOptions
 
 # Spectral inverse domain. More extreme probabilities are evaluated by direct
 # inversion of the already-spectral CDF; this avoids fitting through the
@@ -66,6 +58,26 @@ def _logit(p):
 
 @dataclass
 class _InversePanel:
+    """Locally normalized inverse panel with monotonicity diagnostics.
+
+    Parameters
+    ----------
+    ra, rb : float
+        Log-odds probability bounds.
+    pa, pb : float
+        Corresponding probability bounds.
+    za, zb : float
+        Compact-coordinate quantile bounds.
+    coeff : numpy.ndarray
+        Chebyshev coefficients for the locally normalized compact quantile.
+    fit_error, logit_residual, prob_residual, tail_abs : float
+        Fit, log-odds, probability and coefficient-tail diagnostics.
+    derivative_lower : float
+        Certified lower bound on the local inverse derivative.
+    depth, source_panel : int
+        Subdivision depth and originating forward-panel index.
+    """
+
     ra: float
     rb: float
     pa: float
@@ -83,6 +95,7 @@ class _InversePanel:
 
     @property
     def degree(self):
+        """Return the local inverse polynomial degree."""
         return int(self.coeff.size - 1)
 
 
@@ -99,14 +112,7 @@ class SpectralPPF:
         self,
         spectral_cdf: SpectralCDF,
         *,
-        degree_options=SPECTRAL_DEGREE_OPTIONS,
-        fit_tol=SPECTRAL_PPF_FIT_TOL,
-        logit_tol=SPECTRAL_PPF_LOGIT_TOL,
-        prob_tol=SPECTRAL_PPF_PROB_TOL,
-        coeff_tol=SPECTRAL_PPF_COEFF_TOL,
-        max_depth=SPECTRAL_PPF_MAX_DEPTH,
-        max_panels=SPECTRAL_PPF_MAX_PANELS,
-        certify_subdivide=SPECTRAL_PPF_CERTIFY_SUBDIVIDE,
+        config: _SpectralPPFOptions,
     ):
         """Invert a built spectral CDF into a piecewise Chebyshev PPF.
 
@@ -114,26 +120,9 @@ class SpectralPPF:
         ----------
         spectral_cdf : gibbus._spectral.cdf.SpectralCDF
             Built forward representation to invert.
-        degree_options : sequence of int, optional
-            Degrees tried in order before an interval is bisected.
-        fit_tol : float, optional
-            Relative panel fit tolerance in the compact coordinate.
-        logit_tol : float, optional
-            Tolerance on the residual measured in log-odds.
-        prob_tol : float, optional
-            Tolerance on the residual measured in probability.
-        coeff_tol : float, optional
-            Relative Chebyshev coefficient-tail tolerance.
-        max_depth : int, optional
-            Maximum bisection depth in the log-odds coordinate.
-        max_panels : int, optional
-            Strict leaf budget for the global inverse partition.  Unlike the
-            forward CDF this raises on exhaustion rather than degrading: an
-            uncertified inverse panel could be non-monotone, which is worse
-            than falling back to CDF bisection.  The budget is a deterministic
-            resource fuse for the expensive root-inversion construction.
-        certify_subdivide : int, optional
-            Bernstein subdivision depth for the monotonicity certificate.
+        config : _SpectralPPFOptions
+            Explicit degree/tolerance/depth/panel/certification policy. Budget
+            exhaustion raises rather than accepting an uncertified inverse.
 
         Returns
         -------
@@ -146,20 +135,20 @@ class SpectralPPF:
         """
         if not isinstance(spectral_cdf, SpectralCDF):
             raise TypeError("spectral_cdf must be a SpectralCDF")
-        opts = tuple(sorted({int(v) for v in degree_options}))
+        opts = tuple(sorted({int(v) for v in config.degree_options}))
         if not opts or opts[0] < 2:
             raise ValueError("degree_options must contain degrees >= 2")
 
         self.cdf_rep = spectral_cdf
         self._dicoeff_cache: dict[int, np.ndarray] = {}
         self.degree_options = opts
-        self.fit_tol = float(fit_tol)
-        self.logit_tol = float(logit_tol)
-        self.prob_tol = float(prob_tol)
-        self.coeff_tol = float(coeff_tol)
-        self.max_depth = int(max_depth)
-        self.max_panels = int(max_panels)
-        self.certify_subdivide = int(certify_subdivide)
+        self.fit_tol = float(config.fit_tol)
+        self.logit_tol = float(config.logit_tol)
+        self.prob_tol = float(config.prob_tol)
+        self.coeff_tol = float(config.coeff_tol)
+        self.max_depth = int(config.max_depth)
+        self.max_panels = int(config.max_panels)
+        self.certify_subdivide = int(config.certify_subdivide)
         self.pmin = float(_PSPEC_MIN)
         self.pmax = float(_PSPEC_MAX)
         self.rmin = float(_logit(self.pmin))
@@ -239,9 +228,6 @@ class SpectralPPF:
         -------
         list of _InversePanel
         """
-        from . import _builders
-        from .cdf import _KIND_CODE, _builder_tables
-
         sp = self.cdf_rep
         offsets, ev_coeffs, ev_ncoeff = sp._packed
         m = len(sp.panels)
@@ -518,22 +504,6 @@ class SpectralPPF:
     # Runtime evaluation
     # ------------------------------------------------------------------
 
-    def _panel_indices_r(self, r):
-        """Locate the inverse panel containing each log-odds value.
-
-        Parameters
-        ----------
-        r : array_like
-            Log-odds values.
-
-        Returns
-        -------
-        numpy.ndarray
-            Panel indices, clipped to the valid range.
-        """
-        idx = np.searchsorted(self.breaks_r, r, side="right") - 1
-        return np.clip(idx, 0, len(self.panels) - 1)
-
     def ppf_z(self, p):
         """Compact-coordinate quantile function.
 
@@ -552,39 +522,13 @@ class SpectralPPF:
         numpy.ndarray or float
             Compact coordinates; scalar in, scalar out.
         """
-        arr = np.asarray(p, dtype=np.float64)
-        scalar = arr.ndim == 0
-        if np.any((arr < 0.0) | (arr > 1.0)):
-            raise ValueError("ppf is defined for p in [0, 1]")
-        flat = np.atleast_1d(arr).reshape(-1)
-        out = np.empty_like(flat)
-        nan = np.isnan(flat)
-        out[nan] = np.nan
-        out[flat == 0.0] = -1.0
-        out[flat == 1.0] = 1.0
-        core = (~nan) & (flat >= self.pmin) & (flat <= self.pmax)
-        if np.any(core):
-            pp = flat[core]
-            rr = _logit(pp)
-            idx = self._panel_indices_r(rr)
-            zz = np.empty_like(rr)
-            for j in np.unique(idx):
-                mask = idx == j
-                panel = self.panels[int(j)]
-                u = (2.0 * rr[mask] - (panel.ra + panel.rb)) / (panel.rb - panel.ra)
-                v = C.chebval(u, panel.coeff)
-                z = self._z_from_v(v, panel.za, panel.zb)
-                zz[mask] = np.clip(z, panel.za, panel.zb)
-            out[core] = zz
-        tails = (~nan) & (flat > 0.0) & (flat < 1.0) & (~core)
-        if np.any(tails):
-            out[tails] = np.array(
-                [self._invert_global(pp) for pp in flat[tails]], dtype=np.float64
-            )
-        return float(out[0]) if scalar else out.reshape(arr.shape)
+        return self._cython_evaluator.eval_compact(p)
 
     def ppf_cython(self, p, *, simd=True):
         """Physical-coordinate quantile function via the compiled kernel.
+
+        ``simd=True`` is an intentional compiled-dispatch exception: it chooses
+        an equivalent execution path, not statistical or accuracy policy.
 
         Parameters
         ----------
@@ -617,7 +561,7 @@ class SpectralPPF:
         numpy.ndarray or float
             Quantiles; scalar in, scalar out.
         """
-        return self.cdf_rep.map.x_from_z(self.ppf_z(p))
+        return self.ppf_cython(p)
 
     # ------------------------------------------------------------------
     # Diagnostics

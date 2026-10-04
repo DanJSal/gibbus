@@ -16,7 +16,7 @@ def _terms_for_quad(support, boundary_amplitudes, /):
     ----------
     support : array_like, shape (2,)
         Canonical support ``[L, U]``.
-    boundary_amplitudes : array_like, shape (2,)
+    boundary_amplitudes : numpy.ndarray, shape (2,), dtype float64
         Canonical lower/upper amplitudes ``[aL, aU]``. ``NaN`` or zero
         denotes an inactive side.
 
@@ -28,10 +28,7 @@ def _terms_for_quad(support, boundary_amplitudes, /):
         denotes the upper distance ``U-x``.
     """
     L, U = map(float, support)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if amps.size != 2:
-        raise ValueError("boundary_amplitudes must have length 2")
-    aL, aU = map(float, amps)
+    aL, aU = boundary_amplitudes
 
     terms = []
     if np.isfinite(L) and np.isfinite(aL) and aL > 0.0:
@@ -59,7 +56,7 @@ def _complete_boundary_terms(
     ----------
     support : array_like, shape (2,)
         Canonical support ``[L, U]``.
-    boundary_amplitudes : array_like, shape (2,)
+    boundary_amplitudes : numpy.ndarray, shape (2,), dtype float64
         Current canonical lower/upper amplitudes.
     lower_enabled, upper_enabled : bool
         Whether the corresponding endpoint-log basis belongs to the model.
@@ -72,17 +69,15 @@ def _complete_boundary_terms(
         Mapping from ``"lower"``/``"upper"`` to rows in *terms*.
     """
     L, U = map(float, support)
-    amps = np.asarray(boundary_amplitudes, dtype=np.float64).reshape(-1)
-    if amps.size != 2:
-        raise ValueError("boundary_amplitudes must have length 2")
+    aL, aU = boundary_amplitudes
     rows = []
     mapping = {}
     if bool(lower_enabled):
         mapping["lower"] = len(rows)
-        rows.append((L, -1.0, float(amps[0])))
+        rows.append((L, -1.0, aL))
     if bool(upper_enabled):
         mapping["upper"] = len(rows)
-        rows.append((U, 1.0, float(amps[1])))
+        rows.append((U, 1.0, aU))
     terms = (
         np.asarray(rows, dtype=np.float64)
         if rows

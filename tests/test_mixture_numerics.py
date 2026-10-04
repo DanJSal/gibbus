@@ -43,8 +43,33 @@ def _normal_mixture_potential(mus, sigmas, weights):
 
 def test_mode_root_scan_finds_even_number_of_roots_with_same_sign_samples():
     candidates = []
-    _collect_roots_bisection_func(lambda x: (x - 0.2) * (x - 0.3), 0.0, 1.0, candidates)
+    _collect_roots_bisection_func(
+        lambda x: (x - 0.2) * (x - 0.3), 0.0, 1.0, candidates, None
+    )
     assert sorted(candidates) == pytest.approx([0.2, 0.3], abs=2e-10)
+
+
+@pytest.mark.parametrize("error", [TypeError, ValueError])
+def test_explicit_vectorized_root_evaluator_errors_are_not_scalar_fallbacks(error):
+    def scalar(x):
+        raise AssertionError("a vectorized evaluator failure must propagate")
+
+    def vectorized(x):
+        raise error("vectorized failure")
+
+    with pytest.raises(error, match="vectorized failure"):
+        _collect_roots_bisection_func(scalar, 0.0, 1.0, [], vectorized)
+
+
+def test_explicit_vectorized_root_evaluator_requires_matching_shape():
+    with pytest.raises(ValueError, match="scan grid shape"):
+        _collect_roots_bisection_func(
+            lambda x: x,
+            0.0,
+            1.0,
+            [],
+            lambda x: np.zeros((len(x), 1)),
+        )
 
 
 def test_base_mixture_modes_do_not_duplicate_a_slightly_displaced_seed():
@@ -56,7 +81,7 @@ def test_base_mixture_modes_do_not_duplicate_a_slightly_displaced_seed():
     seeds = [0.05, 6.45]
     assert 1e-9 < abs(potential(seeds[0], 1)) < 1e-8
 
-    modes = _find_mixture_modes_base(potential, seeds)
+    modes = _find_mixture_modes_base(potential, seeds, vectorized=False)
 
     assert len(modes) == 2
     assert np.diff(modes).min() > 1.0
@@ -87,7 +112,7 @@ def test_exp_mixture_modes_use_transformed_component_seeds():
     # A broad concentric component therefore has a transformed mode far outside
     # the hull of the base-space component modes, which are both zero.
     potential = _normal_mixture_potential([0.0, 0.0], [1.0, 5.0], [0.7, 0.3])
-    modes = _find_mixture_modes_exp(potential, [-1.0, -25.0])
+    modes = _find_mixture_modes_exp(potential, [-1.0, -25.0], vectorized=False)
 
     assert len(modes) == 2
     log_modes = np.log(np.asarray(modes))
@@ -99,7 +124,7 @@ def test_exp_mixture_modes_use_transformed_component_seeds():
         assert potential(x, 2) > 0.0
 
 
-@pytest.mark.parametrize("failure", [ValueError, OverflowError])
+@pytest.mark.parametrize("failure", [FloatingPointError, OverflowError])
 def test_gmm_initialization_failure_degrades_to_nested_scale(monkeypatch, failure):
     data = np.linspace(-2.0, 2.0, 20)
     expected_resp = np.full((data.size, 2), 0.5, dtype=np.float64)
@@ -132,6 +157,26 @@ def test_gmm_initialization_failure_degrades_to_nested_scale(monkeypatch, failur
     assert records[-1]["context"] == "GMM mixture initialization"
     assert records[-1]["type"] == failure.__name__
     clear_suppressed_failures()
+
+
+def test_gmm_initialization_value_error_is_not_swallowed(monkeypatch):
+    data = np.linspace(-2.0, 2.0, 20)
+
+    monkeypatch.setattr(
+        mixture_module,
+        "_valley_init_responsibilities",
+        lambda samples, n_components, *, weights=None: (None, None),
+    )
+
+    def failing_gmm(samples, n_components, rng):
+        raise ValueError("invalid GMM initializer contract")
+
+    monkeypatch.setattr(mixture_module, "_gmm_init_responsibilities", failing_gmm)
+
+    with pytest.raises(ValueError, match="invalid GMM initializer contract"):
+        mixture_module._initial_responsibility_candidates(
+            data, 2, np.random.default_rng(0)
+        )
 
 
 def test_mixture_spectral_scale_survives_large_common_translation():

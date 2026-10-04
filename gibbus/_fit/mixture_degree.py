@@ -15,22 +15,45 @@ from .._defaults import AUTO_POLY_DEGREE_MAX, AUTO_POLY_DEGREE_MIN
 from .boundary import _effective_n
 from .degree import (
     _DegreeDiagnostic,
-    _DegreeSelectionConfig,
     _interval_omitted_statistic_diagnostic,
     _omitted_statistic_diagnostic,
     _probe_orders_for_degree,
 )
 from .inputs import _admissible_degrees
+from .natural_objective import _degree_diagnostic_fit
 
 
 @dataclass(frozen=True)
 class _MixtureDegreeDiagnostic(_DegreeDiagnostic):
+    """Component probe result in shared observed-mixture information geometry.
+
+    Parameters
+    ----------
+    component_index : int
+        Component whose omitted power block was probed.
+    information_status : str
+        Resolution or identifiability status of the observed information solve.
+    """
+
     component_index: int
     information_status: str
 
 
 def _strict_information_pinv(matrix, rtol):
-    """Equilibrated rank solve without clipping materially negative curvature."""
+    """Equilibrated rank solve without clipping materially negative curvature.
+
+    Parameters
+    ----------
+    matrix : numpy.ndarray
+        Square observed-information block in joint natural coordinates.
+    rtol : float
+        Shared relative tolerance for numerical rank and negative curvature.
+
+    Returns
+    -------
+    tuple
+        Pseudoinverse, numerical rank and explicit information status.
+    """
     matrix = np.asarray(matrix, dtype=np.float64)
     matrix = 0.5 * (matrix + matrix.T)
     if not matrix.size:
@@ -65,13 +88,37 @@ def _joint_omitted_statistic_diagnostic(
     fitted_degree,
     probe_orders,
     component_index,
-    config=None,
+    config,
     nuisance_solution=None,
 ):
-    """Efficient score and original-row reliability in joint coordinates."""
-    cfg = _DegreeSelectionConfig() if config is None else config
-    w = np.asarray(weights, dtype=np.float64)
-    w = w / w.sum()
+    """Efficient score and original-row reliability in joint coordinates.
+
+    Parameters
+    ----------
+    gradient : numpy.ndarray
+        Joint objective gradient at the zero-coefficient degree lift.
+    observed_information : numpy.ndarray
+        Joint observed-information matrix.
+    row_scores : numpy.ndarray
+        Original-row joint scores, before duplicate compression.
+    weights : numpy.ndarray
+        Canonical normalized original-row reliability weights.
+    nuisance_indices, probe_indices : numpy.ndarray
+        Joint coordinates for fitted nuisance parameters and omitted powers.
+    fitted_degree : int
+        Current requested degree of the probed component.
+    probe_orders : tuple of int
+        Omitted power orders represented by the probe coordinates.
+    component_index : int
+        Probed component's index in solver order.
+    config : _DegreeSelectionConfig
+        Explicit policy shared by this fit's probes and growth steps.
+    nuisance_solution : tuple or None, optional
+        Previously computed nuisance inverse, rank and information status;
+        ``None`` requests the same solve locally.
+    """
+    cfg = config
+    w = weights
     effective_n = _effective_n(len(w), w)
     gradient = np.asarray(gradient, dtype=np.float64)
     information = np.asarray(observed_information, dtype=np.float64)
@@ -178,7 +225,26 @@ def _joint_omitted_statistic_diagnostic(
 
 
 def _mixture_probe_geometry(fit, rows, observation_weights, degrees):
-    """Evaluate all zero-power lifts in one shared observed-mixture geometry."""
+    """Evaluate all zero-power lifts in one shared observed-mixture geometry.
+
+    Parameters
+    ----------
+    fit : _NaturalMixtureFit
+        Optimized shared mixture supplying the fixed fitting coordinates.
+    rows : numpy.ndarray
+        Canonical point or interval observation rows.
+    observation_weights : numpy.ndarray
+        Normalized original-row weights.
+    degrees : tuple of int
+        Derived probe degrees, one per component, at least their fitted degrees.
+
+    Returns
+    -------
+    tuple
+        Joint evaluation, original-row scores, nuisance indices and component
+        probe-index blocks.
+    """
+    # Mixture fitting invokes degree growth; defer the reciprocal fit dependency.
     from .natural_mixture import _CompiledJointMixture, _degree_probe_problems
 
     problems, layouts, params = _degree_probe_problems(
@@ -217,9 +283,28 @@ def _mixture_probe_geometry(fit, rows, observation_weights, degrees):
     return evaluation, row_scores, np.asarray(nuisance, dtype=int), probes
 
 
-def _shared_degree_diagnostics(fit, policies, rows, observation_weights, config=None):
-    """Batch eligible component probes while keeping the represented density."""
-    cfg = _DegreeSelectionConfig() if config is None else config
+def _shared_degree_diagnostics(fit, policies, rows, observation_weights, config):
+    """Batch eligible component probes while keeping the represented density.
+
+    Parameters
+    ----------
+    fit : _NaturalMixtureFit
+        Current optimized shared mixture.
+    policies : tuple of int or str
+        Canonical requested policies; only ``"auto"`` entries can expand.
+    rows : numpy.ndarray
+        Canonical observations used by the owning fit.
+    observation_weights : numpy.ndarray
+        Normalized original-row reliability weights.
+    config : _DegreeSelectionConfig
+        Explicit policy reused by every component diagnostic.
+
+    Returns
+    -------
+    tuple
+        Component-index/diagnostic pairs for eligible omitted power blocks.
+    """
+    cfg = config
     current = tuple(int(c.spec.requested_poly_degree) for c in fit.components)
     support = fit.components[0].coordinate.physical_support
     admissible = tuple(
@@ -228,9 +313,11 @@ def _shared_degree_diagnostics(fit, policies, rows, observation_weights, config=
         if d >= AUTO_POLY_DEGREE_MIN
     )
     orders = tuple(
-        _probe_orders_for_degree(d, admissible[-1], block_size=cfg.probe_block_size)
-        if policy == "auto" and d < admissible[-1]
-        else ()
+        (
+            _probe_orders_for_degree(d, admissible[-1], block_size=cfg.probe_block_size)
+            if policy == "auto" and d < admissible[-1]
+            else ()
+        )
         for d, policy in zip(current, policies, strict=True)
     )
     if not any(orders):
@@ -240,8 +327,8 @@ def _shared_degree_diagnostics(fit, policies, rows, observation_weights, config=
         for degree, block in zip(current, orders, strict=True)
     )
     if len(fit.components) == 1:
+        # This shares the same deferred mixture/degree dependency as joint probes.
         from .natural_mixture import _degree_probe_problems
-        from .natural_objective import _degree_diagnostic_fit
 
         problems, _, _ = _degree_probe_problems(fit, rows, observation_weights, current)
         problem = problems[0]
@@ -290,7 +377,7 @@ def _fit_shared_degree_growth(
     rows,
     observation_weights,
     refit,
-    degree_config=None,
+    degree_config,
 ):
     """Grow one strongest supported private block, with shared warm refits.
 
@@ -299,8 +386,25 @@ def _fit_shared_degree_growth(
     previous_fit)`` performs the fixed-degree shared fit, preserving numerical
     coordinates and using a genuine lifted warm start.  It does not repeat the
     multistart search.  Fixed policy entries never grow.
+
+    Parameters
+    ----------
+    initial_fit : _NaturalMixtureFit
+        Initial optimized shared mixture.
+    policies : tuple of int or str
+        Canonical fixed or automatic policy per component.
+    support : tuple of float
+        Validated physical support of the owning fit.
+    rows : numpy.ndarray
+        Canonical point or interval observation rows.
+    observation_weights : numpy.ndarray
+        Normalized original-row reliability weights.
+    refit : callable
+        Fixed-degree warm-refit callback accepting degrees and the previous fit.
+    degree_config : _DegreeSelectionConfig
+        One explicit policy reused throughout growth and component diagnostics.
     """
-    cfg = _DegreeSelectionConfig() if degree_config is None else degree_config
+    cfg = degree_config
     admissible = tuple(
         int(d)
         for d in _admissible_degrees(support, AUTO_POLY_DEGREE_MAX)

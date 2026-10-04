@@ -21,6 +21,8 @@ from spectral_builder_harness import PythonSpectralCDFBuilder, PythonSpectralPPF
 import gibbus
 from gibbus import Distribution
 from gibbus._api import selection as _selection
+from gibbus._defaults import TURNBULL_GAP_TOL, TURNBULL_MAX_ITER
+from gibbus._fit.inputs import _normalize_sample_weights_1d
 from gibbus._fit.mixture import (
     _e_step_intervals,
     _interval_identifiability_diagnostic,
@@ -183,9 +185,9 @@ def test_density_integrates_to_one(samples, shape, degree):
         samples[shape], n_components=1, poly_degree=degree, support=SUPPORTS[shape]
     )
     mass = _total_mass(c)
-    assert mass == pytest.approx(1.0, abs=1e-6), (
-        f"fitted density integrates to {mass:.12f}, not 1"
-    )
+    assert mass == pytest.approx(
+        1.0, abs=1e-6
+    ), f"fitted density integrates to {mass:.12f}, not 1"
 
 
 def test_high_degree_density_integrates_to_one():
@@ -210,9 +212,9 @@ def test_high_degree_density_integrates_to_one():
     )
 
     mass = _total_mass(c)
-    assert mass == pytest.approx(1.0, abs=1e-8), (
-        f"degree-12 fitted density integrates to {mass:.12f}, not 1"
-    )
+    assert mass == pytest.approx(
+        1.0, abs=1e-8
+    ), f"degree-12 fitted density integrates to {mass:.12f}, not 1"
     assert c.spectral_diagnostics["mass_defect"] < 1e-8
 
 
@@ -236,9 +238,9 @@ def test_base_view_ppf_agrees_with_distribution_ppf(samples, p):
     wrapped = float(c.ppf(p))
     view = float(c.base.ppf(p))
 
-    assert view == pytest.approx(wrapped, rel=1e-3), (
-        f"base.ppf({p:g}) = {view:.6g} against Distribution.ppf = {wrapped:.6g}"
-    )
+    assert view == pytest.approx(
+        wrapped, rel=1e-3
+    ), f"base.ppf({p:g}) = {view:.6g} against Distribution.ppf = {wrapped:.6g}"
 
 
 # --------------------------------------------------------------------------
@@ -343,13 +345,17 @@ def test_uniform_weights_reproduce_unweighted_bandwidth(n):
     x = np.random.default_rng(11).normal(0.0, 1.0, n)
 
     unweighted = _silverman_bandwidth(x)
-    uniform = _silverman_bandwidth(x, weights=np.ones(n))
-    rescaled = _silverman_bandwidth(x, weights=np.full(n, 7.3))
+    uniform = _silverman_bandwidth(
+        x, weights=_normalize_sample_weights_1d(n, np.ones(n))
+    )
+    rescaled = _silverman_bandwidth(
+        x, weights=_normalize_sample_weights_1d(n, np.full(n, 7.3))
+    )
 
     assert uniform == pytest.approx(unweighted, rel=1e-12)
-    assert rescaled == pytest.approx(unweighted, rel=1e-12), (
-        "relative weights must be invariant to their absolute scale"
-    )
+    assert rescaled == pytest.approx(
+        unweighted, rel=1e-12
+    ), "relative weights must be invariant to their absolute scale"
 
 
 def test_weighted_bandwidth_is_scale_invariant():
@@ -359,11 +365,12 @@ def test_weighted_bandwidth_is_scale_invariant():
     x = rng.normal(0.0, 1.0, 400)
     w = rng.exponential(size=400)
 
-    np.testing.assert_array_max_ulp(
-        _silverman_bandwidth(x, weights=w),
-        _silverman_bandwidth(x, weights=1000.0 * w),
-        maxulp=2,
+    bandwidth = _silverman_bandwidth(x, weights=_normalize_sample_weights_1d(x.size, w))
+    rescaled = _silverman_bandwidth(
+        x, weights=_normalize_sample_weights_1d(x.size, 1000.0 * w)
     )
+    assert bandwidth > 0.0
+    np.testing.assert_array_max_ulp(bandwidth, rescaled, maxulp=2)
 
 
 # --------------------------------------------------------------------------
@@ -609,6 +616,21 @@ def test_overlapping_interval_saturation_reports_nonidentifiability():
         )
 
 
+def test_interval_nonparametric_bound_is_rigorous_before_em_converges():
+    intervals = np.array(
+        [[0.0, 2.0], [1.0, 3.0], [0.0, 1.5], [1.5, 3.0]],
+        dtype=np.float64,
+    )
+    bound = _interval_nonparametric_loglik_bound(
+        intervals, (0.0, 3.0), max_iter=1, tol=TURNBULL_GAP_TOL
+    )
+
+    # Atom masses (0, 1/2, 1/2, 0) are feasible and give row masses
+    # (1, 1, 1/2, 1/2), so their mean log-likelihood is -log(2)/2.
+    feasible_loglik = -0.5 * np.log(2.0)
+    assert bound >= feasible_loglik
+
+
 def test_nested_interval_pattern_is_recognized_by_identifiability_diagnostic():
     """The non-identifiability diagnostic must cover nested censoring intervals.
 
@@ -626,7 +648,9 @@ def test_nested_interval_pattern_is_recognized_by_identifiability_diagnostic():
         ]
     )
     support = (-5.0, 5.0)
-    bound = _interval_nonparametric_loglik_bound(intervals, support)
+    bound = _interval_nonparametric_loglik_bound(
+        intervals, support, max_iter=TURNBULL_MAX_ITER, tol=TURNBULL_GAP_TOL
+    )
     components = [
         SimpleNamespace(layout=SimpleNamespace(n_params=2)),
         SimpleNamespace(layout=SimpleNamespace(n_params=2)),
@@ -685,7 +709,10 @@ def test_auto_k_rejects_unidentifiable_richer_interval_candidate():
     mass = fitted.cdf(intervals[:, 1]) - fitted.cdf(intervals[:, 0])
     ll = float(np.mean(np.log(mass)))
     bound = _interval_nonparametric_loglik_bound(
-        intervals, tuple(float(v) for v in fitted.support)
+        intervals,
+        tuple(float(v) for v in fitted.support),
+        max_iter=TURNBULL_MAX_ITER,
+        tol=TURNBULL_GAP_TOL,
     )
     assert bound - ll < 1e-6
 
@@ -727,6 +754,7 @@ def test_interval_auto_k_scores_the_interval_likelihood(monkeypatch):
     def wrapped_run(*args, **kwargs):
         arr = np.asarray(args[1])
         resp = np.asarray(args[6])
+        assert args[2] == (2,) * resp.shape[1]
         seen_multi_cols.append((int(resp.shape[1]), int(arr.shape[1])))
         return original_run(*args, **kwargs)
 
@@ -1321,4 +1349,9 @@ def test_an_unsupported_explicit_component_count_says_what_to_do():
         RuntimeError, match=r"do not support n_components=2; use n_components='auto'"
     ):
         Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
-    assert Distribution().fit(data, support=(-np.inf, np.inf), rng=0).n_components == 1
+    assert (
+        Distribution()
+        .fit(data, n_components="auto", support=(-np.inf, np.inf), rng=0)
+        .n_components
+        == 1
+    )

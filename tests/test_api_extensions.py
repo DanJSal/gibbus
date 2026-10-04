@@ -15,6 +15,7 @@ from gibbus import (
     clear_suppressed_failures,
     suppressed_failures,
 )
+from gibbus._api import distribution as distribution_module
 from gibbus._defaults import SF_HANDOVER_P
 from gibbus._postfit import scoring as scoring_module
 from gibbus._postfit.logspace import log1mexp, log_diff_exp, log_mass_between
@@ -537,17 +538,6 @@ def test_bad_direct_interval_quadrature_falls_back_to_analytic(monkeypatch):
     assert np.isclose(got, expected, rtol=0.0, atol=1e-14)
 
 
-def test_frozen_bounded_expectation_and_moment(gaussian_fit):
-    c = gaussian_fit
-    rv = c.frozen()
-    got = rv.expect(lambda x: x * x, lb=-0.5, ub=0.75)
-    expected = norm(loc=c.mean, scale=c.std).expect(lambda x: x * x, lb=-0.5, ub=0.75)
-    assert np.isclose(got, expected, rtol=0.0, atol=2e-9)
-    assert np.isclose(rv.moment(2), c.moment(2), rtol=0.0, atol=0.0)
-    with pytest.raises(TypeError):
-        rv.interval()
-
-
 def test_equal_tailed_hpd_and_exp_view_algebra(gaussian_fit):
     c = gaussian_fit
     level = 0.9
@@ -616,20 +606,6 @@ def test_truncate_composes_and_round_trips_state(gaussian_fit):
 
     loaded = Distribution(t.data)
     np.testing.assert_allclose(loaded.pdf(grid), t.pdf(grid), rtol=0.0, atol=0.0)
-
-
-def test_frozen_adapter_is_live_and_uses_scipy_names(gaussian_fit):
-    parent = gaussian_fit.copy()
-    frozen = parent.frozen()
-    before = frozen.mean()
-    draws = frozen.rvs(size=4, random_state=123)
-    assert np.asarray(draws).shape == (4,)
-    assert frozen.stats("mv") == (frozen.mean(), frozen.var())
-    assert np.isclose(frozen.expect(lambda x: x), frozen.mean(), atol=2e-10)
-
-    parent.transform(mu=0.5, sigma=1.0, pullback=False, inplace=True)
-    assert frozen.mean() != before
-    assert frozen.mean() == parent.mean
 
 
 def test_log_concavity_margin_is_nonnegative(gaussian_fit):
@@ -778,6 +754,72 @@ def test_goodness_of_fit_reports_its_calibration_contract(gaussian_fit, statisti
     assert (out["pvalue"] is None) == (statistic == "ad")
 
 
+@pytest.mark.parametrize("statistic", ["ks", "cvm", "ad"])
+def test_goodness_of_fit_prepares_pit_once(gaussian_fit, monkeypatch, statistic):
+    counts = {"cdf": 0, "pit": 0, "key": 0}
+    original_cdf = Distribution.cdf
+    original_pit = distribution_module._canonical_pit
+    original_key = distribution_module._validate_gof_statistic
+
+    def cdf(model, x):
+        counts["cdf"] += 1
+        return original_cdf(model, x)
+
+    def pit(u):
+        counts["pit"] += 1
+        return original_pit(u)
+
+    def key(value):
+        counts["key"] += 1
+        return original_key(value)
+
+    monkeypatch.setattr(Distribution, "cdf", cdf)
+    monkeypatch.setattr(distribution_module, "_canonical_pit", pit)
+    monkeypatch.setattr(distribution_module, "_validate_gof_statistic", key)
+    result = gaussian_fit.goodness_of_fit([0.1, -0.5, 1.2], statistic=statistic.upper())
+    assert result["statistic"] == statistic
+    assert counts == {"cdf": 1, "pit": 1, "key": 1}
+
+
+@pytest.mark.parametrize("p", [0.25, [0.1, 0.5, 0.9], [[0.2, 0.8], [0.3, 0.7]]])
+def test_exp_ppf_preserves_base_boundary_shape(gaussian_fit, p):
+    result = gaussian_fit.exp.ppf(p)
+    np.testing.assert_allclose(result, np.exp(gaussian_fit.base.ppf(p)))
+    assert np.shape(result) == np.shape(p)
+    if np.ndim(p) == 0:
+        assert isinstance(result, float)
+
+
+@pytest.mark.parametrize("p", [-0.1, 1.1, np.nan, np.inf, [0.5, np.nan]])
+def test_exp_ppf_preserves_base_boundary_rejection(gaussian_fit, p):
+    with pytest.raises(ValueError, match="finite p"):
+        gaussian_fit.exp.ppf(p)
+
+
+@pytest.mark.parametrize("n_resamples", [0, -1, 2.5, True, np.nan])
+@pytest.mark.parametrize("method", ["goodness_of_fit", "bootstrap_bands"])
+def test_resampling_controls_are_rejected_before_work(
+    gaussian_fit, monkeypatch, n_resamples, method
+):
+    def unexpected_work(*args, **kwargs):
+        raise AssertionError("resampling began before boundary validation")
+
+    monkeypatch.setattr(distribution_module, "_simulated_statistics", unexpected_work)
+    monkeypatch.setattr(distribution_module, "_bootstrap_curves", unexpected_work)
+    with pytest.raises((ValueError, TypeError)):
+        if method == "goodness_of_fit":
+            gaussian_fit.goodness_of_fit(
+                [0.0, 1.0], calibration="montecarlo", n_resamples=n_resamples
+            )
+        else:
+            gaussian_fit.bootstrap_bands([0.0, 1.0], [0.5], n_resamples=n_resamples)
+
+
+def test_asymptotic_gof_ignores_unused_resampling_controls(gaussian_fit):
+    result = gaussian_fit.goodness_of_fit([0.0, 1.0], n_resamples=False)
+    assert result["n_resamples"] == 0
+
+
 def test_goodness_of_fit_monte_carlo_calibration_is_valid_in_sample():
     rng = np.random.default_rng(557)
     data = rng.normal(size=400)
@@ -921,36 +963,6 @@ def test_log_concavity_margin_is_reported_through_spectral_diagnostics(gaussian_
     diag = gaussian_fit.spectral_diagnostics
     assert "log_concavity_margin" in diag
     assert diag["log_concavity_margin"] >= -1e-9
-
-
-def test_frozen_rvs_accepts_a_shape_tuple_like_scipy():
-    rng = np.random.default_rng(413)
-    c = Distribution().fit(
-        rng.normal(size=400),
-        n_components=1,
-        support=(-np.inf, np.inf),
-        rng=0,
-    )
-    draws = c.frozen().rvs(size=(2, 3), random_state=np.random.default_rng(0))
-    assert draws.shape == (2, 3)
-    assert np.all(np.isfinite(draws))
-
-
-def test_frozen_interval_accepts_an_array_of_levels():
-    rng = np.random.default_rng(414)
-    c = Distribution().fit(
-        rng.normal(size=400),
-        n_components=1,
-        support=(-np.inf, np.inf),
-        rng=0,
-    )
-    rv = c.frozen()
-    lower, upper = rv.interval(np.array([0.5, 0.9]))
-    assert lower.shape == upper.shape == (2,)
-    for index, level in enumerate((0.5, 0.9)):
-        one_lo, one_hi = rv.interval(level)
-        assert lower[index] == pytest.approx(one_lo)
-        assert upper[index] == pytest.approx(one_hi)
 
 
 def test_transform_requires_explicit_pullback_direction(gaussian_fit):

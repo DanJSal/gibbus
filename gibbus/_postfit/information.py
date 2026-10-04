@@ -12,7 +12,7 @@ from .._defaults import EXPECT_MAX_RELATIVE_ERROR
 from .expectation import expect_vectorized
 
 
-def entropy(potential, support, /, *, points=None):
+def entropy(potential, support, /, *, points):
     """Return differential entropy ``E[-log f(X)]``.
 
     Parameters
@@ -21,7 +21,7 @@ def entropy(potential, support, /, *, points=None):
         Normalized negative-log density evaluator.
     support : array_like, shape (2,)
         Integration support.
-    points : sequence of float or None, optional
+    points : sequence of float or None
         Quadrature breakpoints.
     """
     return expect_vectorized(
@@ -29,9 +29,7 @@ def entropy(potential, support, /, *, points=None):
     )
 
 
-def cross_entropy(
-    potential, support, other_potential, other_support, /, *, points=None
-):
+def cross_entropy(potential, support, other_potential, other_support, /, *, points):
     """Return ``E_self[-log f_other(X)]``.
 
     Parameters
@@ -44,7 +42,7 @@ def cross_entropy(
         Other distribution's negative-log density evaluator.
     other_support : array_like, shape (2,)
         Other distribution support.
-    points : sequence of float or None, optional
+    points : sequence of float or None
         Quadrature breakpoints.
     """
     lo, hi = map(float, support)
@@ -56,9 +54,7 @@ def cross_entropy(
     )
 
 
-def kl_divergence(
-    potential, support, other_potential, other_support, /, *, points=None
-):
+def kl_divergence(potential, support, other_potential, other_support, /, *, points):
     """Return KL divergence ``D_KL(self || other)``.
 
     Parameters
@@ -71,7 +67,7 @@ def kl_divergence(
         Other negative-log density evaluator.
     other_support : array_like, shape (2,)
         Other support.
-    points : sequence of float or None, optional
+    points : sequence of float or None
         Quadrature breakpoints.
     """
     lo, hi = map(float, support)

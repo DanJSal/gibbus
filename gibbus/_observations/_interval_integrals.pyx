@@ -902,10 +902,40 @@ cdef class AdaptiveIntervalIntegrator:
         lengths,
         int n_primary,
         *,
-        double epsabs=1.49e-8,
-        double epsrel=1.49e-8,
-        int limit=100,
+        double epsabs,
+        double epsrel,
+        int limit,
     ):
+        """Prepare adaptive conditional-statistic reduction for one model state.
+
+        Parameters
+        ----------
+        q_poly : array_like
+            Nonempty finite potential coefficients in increasing power order.
+        support, boundary_amplitudes : array_like, shape (2,)
+            Support bounds and lower/upper logarithmic amplitudes in the same
+            coordinates as the polynomial and censoring rows.
+        mode : float
+            Model mode used to anchor the adaptive integration coordinates.
+        local_scale : float
+            Positive local scale for tail integration.
+        log_Z : float
+            Log normalizer of the described unnormalized density.
+        kinds, orders : array_like
+            Statistic kind codes and their corresponding power orders.
+            Kind codes are exposed by ``statistic_kinds``.
+        coefficients : array_like, shape (n_statistics, width)
+            Padded increasing-power polynomial coefficient rows.
+        lengths : array_like, shape (n_statistics,)
+            Valid polynomial length of each descriptor row.
+        n_primary : int
+            Leading descriptors whose conditional means/covariance are returned;
+            remaining descriptors produce extra conditional means only.
+        epsabs, epsrel : float
+            Absolute and relative adaptive integration tolerances.
+        limit : int
+            Maximum adaptive panel count.
+        """
         cdef cnp.ndarray[cnp.float64_t, ndim=1] qarr
         cdef cnp.ndarray[cnp.int32_t, ndim=1] karr
         cdef cnp.ndarray[cnp.int64_t, ndim=1] oarr
@@ -1321,7 +1351,14 @@ cdef class AdaptiveIntervalIntegrator:
             free(centered_mean)
 
     def reduce(self, interval):
-        """Return ``(log_probability, mean, covariance, extra_mean)``."""
+        """Return ``(log_probability, mean, covariance, extra_mean)``.
+
+        Parameters
+        ----------
+        interval : array_like, shape (2,)
+            Ordered censoring bounds in the prepared model's coordinates;
+            endpoints may be infinite.
+        """
         cdef cnp.ndarray[cnp.float64_t, ndim=1] row = np.asarray(
             interval, dtype=np.float64
         ).reshape(-1)
@@ -1355,6 +1392,11 @@ cdef class AdaptiveIntervalIntegrator:
         Returns ``(log_probability, mean, covariance, extra_mean)`` with the
         leading dimension indexing input intervals.  Adaptive row traversal and
         statistic reduction stay below the Python boundary for the whole batch.
+
+        Parameters
+        ----------
+        intervals : array_like, shape (R, 2)
+            Ordered censoring rows in the prepared model's coordinates.
         """
         cdef cnp.ndarray[cnp.float64_t, ndim=2] rows = np.ascontiguousarray(
             intervals, dtype=np.float64
@@ -1390,6 +1432,13 @@ cdef class AdaptiveIntervalIntegrator:
         Returns ``(log_probability, weighted_mean, weighted_covariance,
         weighted_extra_mean)``.  Only the per-row log probabilities are
         materialized; conditional statistic arrays are accumulated directly.
+
+        Parameters
+        ----------
+        intervals : array_like, shape (R, 2)
+            Ordered censoring rows in the prepared model's coordinates.
+        weights : array_like, shape (R,)
+            Finite row weights used as supplied, without normalization.
         """
         cdef cnp.ndarray[cnp.float64_t, ndim=2] rows = np.ascontiguousarray(
             intervals, dtype=np.float64

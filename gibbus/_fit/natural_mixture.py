@@ -51,9 +51,12 @@ from .._defaults import (
     _reraise_if_debug,
 )
 from .._model.coords import _build_fit_coordinate, _build_interval_fit_coordinate
-from .._model.natural_state import _NaturalCoreState
-from .._model.spec import _build_model_spec
-from .._observations.empirical import _normalized_weights
+from .._model.natural_state import _natural_partials, _NaturalCoreState
+from .._model.spec import _LOGDIST, _LOWER, _build_model_spec
+from .._observations.empirical import (
+    _normalized_weights,
+    _WeightSummary,
+)
 from .._observations.intervals import (
     _build_interval_observations,
     _row_grouping,
@@ -96,6 +99,109 @@ from .natural_objective import (
 from .objective import (
     _ObjectiveEvaluation,
 )
+
+
+@dataclass(frozen=True)
+class _EMOptions:
+    """Immutable EM scheduling policy for one mixture fit.
+
+    Parameters
+    ----------
+    tolerance : float, optional
+        Relative log-likelihood increase that ends an EM phase.
+    max_steps : int, optional
+        EM map evaluation limit per phase.
+    max_rounds : int, optional
+        EM-polish-verify round limit.
+    accelerate : bool, optional
+        Whether to use SQUAREM acceleration.
+    """
+
+    tolerance: float = 1e-4
+    max_steps: int = 20
+    max_rounds: int = 4
+    accelerate: bool = True
+
+
+@dataclass(frozen=True)
+class _MixtureSearchOptions:
+    """Immutable multistart search policy for one mixture fit.
+
+    Parameters
+    ----------
+    paths : tuple of (str, str), optional
+        ``(schedule, treatment)`` pairs explored from every initializer.
+    finalists : int, optional
+        Number of best explorations run to certified convergence.
+    """
+
+    paths: tuple = (
+        ("ladder", "raw"),
+        ("ladder", "sharpened"),
+        ("direct", "raw"),
+        ("direct", "sharpened"),
+    )
+    finalists: int = 2
+
+
+def _resolve_search_options(search_options, /):
+    """Return one validated immutable multistart search policy.
+
+    Parameters
+    ----------
+    search_options : _MixtureSearchOptions or None
+        Explicit policy, or ``None`` for the mixture defaults.
+
+    Returns
+    -------
+    _MixtureSearchOptions
+        Search policy used by the multistart controller.
+    """
+    if search_options is None:
+        return _MixtureSearchOptions()
+    if not isinstance(search_options, _MixtureSearchOptions):
+        raise TypeError("search_options must be _MixtureSearchOptions or None")
+    return search_options
+
+
+def _resolve_newton_options(solver_options, /):
+    """Return one validated immutable Newton policy.
+
+    Parameters
+    ----------
+    solver_options : _NewtonOptions or None
+        Explicit policy, or ``None`` for the shared defaults.
+
+    Returns
+    -------
+    _NewtonOptions
+        Policy used by every component, coupled M-step and polish solve.
+    """
+    if solver_options is None:
+        return _NewtonOptions()
+    if not isinstance(solver_options, _NewtonOptions):
+        raise TypeError("solver_options must be _NewtonOptions or None")
+    return solver_options
+
+
+def _resolve_em_options(em_options, /):
+    """Return one validated immutable EM policy.
+
+    Parameters
+    ----------
+    em_options : _EMOptions or None
+        Explicit policy, or ``None`` for the mixture defaults.
+
+    Returns
+    -------
+    _EMOptions
+        Scheduling policy used by the EM controller.
+    """
+    if em_options is None:
+        return _EMOptions()
+    if not isinstance(em_options, _EMOptions):
+        raise TypeError("em_options must be _EMOptions or None")
+    return em_options
 
 
 @dataclass(frozen=True)
@@ -187,6 +293,8 @@ class _NaturalMixtureFit:
         Physical lower and upper amplitude indices, or ``None`` if excluded.
     free_parameter_indices : tuple
         Exact face's free indices into the reduced observed objective.
+    degree_diagnostics : tuple
+        Per-component diagnostics retained from automatic/shared degree growth.
     """
 
     components: tuple
@@ -260,25 +368,24 @@ class _EMContinuation:
     rounds: int
 
 
-def _normalized_observation_weights(n, weights, /):
-    """Return observation weights normalized to sum to one.
+def _observation_weights(n, weights, /):
+    """Use boundary-normalized observation weights, creating uniform ones if absent.
 
     Parameters
     ----------
     n : int
         Number of observations.
-    weights : array_like or None
-        Nonnegative weights, or ``None`` for uniform.
+    weights : numpy.ndarray, shape (n,), dtype float64 or None
+        Boundary-validated weights summing to one, or ``None`` for uniform.
+
+    Returns
+    -------
+    numpy.ndarray, shape (n,), dtype float64
+        The supplied canonical array, or newly created uniform weights.
     """
     if weights is None:
         return np.full(n, 1.0 / n, dtype=np.float64)
-    w = np.asarray(weights, dtype=np.float64).reshape(-1)
-    if w.size != n or np.any(w < 0.0) or not np.all(np.isfinite(w)):
-        raise ValueError("weights must be finite, nonnegative and match the samples")
-    total = float(np.sum(w))
-    if not total > 0.0:
-        raise ValueError("weights must have a positive total")
-    return w / total
+    return weights
 
 
 _INTERVAL_COORDINATE_GEOMETRY = None
@@ -340,9 +447,6 @@ def _basis(layout, support, z, /, *, lower_distance=None, upper_distance=None):
     lower_distance, upper_distance : array_like or None, optional
         Preserved canonical point-to-boundary distances.
     """
-    from .._model.natural_state import _natural_partials
-    from .._model.spec import _LOGDIST, _LOWER
-
     values = np.asarray(z, dtype=np.float64)
     lower, upper = map(float, support)
     columns = []
@@ -484,7 +588,6 @@ class _ComponentProblem:
                 # replace only its normalized weights/effective-n in M-steps.
                 self._compact_observation_template = _build_interval_observations(
                     self._distinct[0],
-                    np.ones(n_unique, dtype=np.float64),
                     support=coordinate.canonical_support,
                     deduplicate=False,
                 )
@@ -557,7 +660,7 @@ class _ComponentProblem:
         if distinct is None:
             observations = _build_interval_observations(
                 self.rows,
-                weights,
+                _normalized_weights(self.rows.shape[0], weights, "interval"),
                 coordinate=self.coordinate,
                 grouping_cache=self._grouping_cache,
             )
@@ -584,12 +687,12 @@ class _ComponentProblem:
                 )
             else:
                 observations = _build_interval_observations(
-                    self.rows[first], grouped_weights, coordinate=self.coordinate
+                    self.rows[first],
+                    _WeightSummary(grouped_weights, total, effective_n),
+                    coordinate=self.coordinate,
                 )
                 observations = replace(
                     observations,
-                    total_weight=float(total),
-                    effective_n=float(effective_n),
                     n_observations=int(self.rows.shape[0]),
                 )
         return _NaturalIntervalObjectiveFunction(
@@ -679,12 +782,14 @@ class _ComponentProblem:
             )
         else:
             observations = _build_interval_observations(
-                self.rows[first], grouped_weights, coordinate=self.coordinate
+                self.rows[first],
+                _WeightSummary(
+                    grouped_weights, total, float(total * total / square_sum)
+                ),
+                coordinate=self.coordinate,
             )
             observations = replace(
                 observations,
-                total_weight=total,
-                effective_n=float(total * total / square_sum),
                 n_observations=int(self.rows.shape[0]),
             )
         return _NaturalIntervalObjectiveFunction(
@@ -692,7 +797,7 @@ class _ComponentProblem:
         )
 
     def fit_compact(
-        self, responsibilities, observation_weights, previous, /, **options
+        self, responsibilities, observation_weights, previous, solver_options, /
     ):
         """Run one duplicated-interval M-step without expanding row weights.
 
@@ -704,8 +809,8 @@ class _ComponentProblem:
             Original-row normalized reliability weights.
         previous : _ConicNewtonResult or None
             Previous component result for a warm start.
-        **options : dict
-            Passed to ``_solve_natural_conic``.
+        solver_options : _NewtonOptions
+            Shared immutable Newton policy.
 
         Returns
         -------
@@ -716,15 +821,18 @@ class _ComponentProblem:
         """
         objective = self.compact_objective(responsibilities, observation_weights)
         if previous is not None:
-            options.setdefault("initial", previous.params)
-            options.setdefault("initial_blocks", previous.blocks)
+            initial, initial_blocks = previous.params, previous.blocks
         else:
-            start, blocks = _natural_interval_start(objective)
-            options.setdefault("initial", start)
-            options.setdefault("initial_blocks", blocks)
-        return objective, _solve_natural_conic(objective, certify=False, **options)
+            initial, initial_blocks = _natural_interval_start(objective)
+        return objective, _solve_natural_conic(
+            objective,
+            initial=initial,
+            initial_blocks=initial_blocks,
+            solver_options=solver_options,
+            certify=False,
+        )
 
-    def fit(self, weights, previous, /, **options):
+    def fit(self, weights, previous, solver_options, /):
         """Run one M-step for this component.
 
         Parameters
@@ -733,8 +841,8 @@ class _ComponentProblem:
             M-step weights.
         previous : _ConicNewtonResult or None
             Previous result for the warm start, or ``None`` for a cold start.
-        **options : dict
-            Passed to ``_solve_natural_conic``.
+        solver_options : _NewtonOptions
+            Shared immutable Newton policy.
 
         Returns
         -------
@@ -742,14 +850,18 @@ class _ComponentProblem:
             The M-step objective and solver result.
         """
         objective = self.objective(weights)
+        initial = initial_blocks = None
         if previous is not None:
-            options.setdefault("initial", previous.params)
-            options.setdefault("initial_blocks", previous.blocks)
+            initial, initial_blocks = previous.params, previous.blocks
         elif self.intervals:
-            start, blocks = _natural_interval_start(objective)
-            options.setdefault("initial", start)
-            options.setdefault("initial_blocks", blocks)
-        return objective, _solve_natural_conic(objective, certify=False, **options)
+            initial, initial_blocks = _natural_interval_start(objective)
+        return objective, _solve_natural_conic(
+            objective,
+            initial=initial,
+            initial_blocks=initial_blocks,
+            solver_options=solver_options,
+            certify=False,
+        )
 
 
 def _logsumexp(values, /):
@@ -817,6 +929,7 @@ class _RawMixtureEvaluation:
 
     @property
     def observed_hessian(self):
+        """Observed-information Hessian after subtracting missing information."""
         return self.fisher - self.missing_information
 
 
@@ -893,7 +1006,21 @@ def _compiled_component(objective, /):
 
 
 def _component_evaluation(nll, gradient, fisher, missing, means, /):
-    """Wrap one compiled component evaluation as an objective evaluation."""
+    """Wrap one compiled component evaluation as an objective evaluation.
+
+    Parameters
+    ----------
+    nll : float
+        Negative log likelihood at the evaluation point.
+    gradient : numpy.ndarray
+        Objective gradient.
+    fisher : numpy.ndarray
+        Complete-data/Fisher information matrix.
+    missing : numpy.ndarray
+        Missing-information contribution.
+    means : numpy.ndarray
+        Model partial means retained by the natural objective.
+    """
     return _ObjectiveEvaluation(
         nll=float(nll),
         gradient=gradient,
@@ -1118,7 +1245,13 @@ class _CompiledJointMixture:
         return log_likelihood, responsibilities
 
     def solver(self, face, /):
-        """Return the compiled exact-face solve of ``face`` (with its logits)."""
+        """Return the compiled exact-face solve of ``face`` (with its logits).
+
+        Parameters
+        ----------
+        face : _MixtureFace
+            Exact component/logit face whose column maps are bound.
+        """
         return functools.partial(
             self._kernel.solve,
             face.component_columns,
@@ -1127,26 +1260,31 @@ class _CompiledJointMixture:
         )
 
 
-def _mixture_newton_options(options):
-    defaults = {
-        "tolerance": 1e-12,
-        "certified_tolerance": 1e-10,
-        "accuracy_floor": 1e-7,
-        "max_iterations": 60,
-        "armijo": 1e-4,
-        "backtrack": 0.5,
-        "max_line_search": 40,
-    }
-    defaults.update({key: value for key, value in options.items() if key in defaults})
-    return _NewtonOptions(**defaults)
-
-
 def _result_face(natural_map, results, n_logits=0):
+    """Return the shared exact face represented by component results.
+
+    Parameters
+    ----------
+    natural_map : _MixtureNaturalMap
+        Reduced shared-parameter map for the components.
+    results : sequence of _ConicNewtonResult
+        Component results whose effective degrees and physical boundary masks
+        define the face.
+    n_logits : int, optional
+        Number of free mixture-logit coordinates appended to the face.
+
+    Returns
+    -------
+    _MixtureFace
+        Shared exact face in reduced mixture coordinates.
+    """
     natural_map.pack([result.params for result in results])
     masks = [
-        (result.lower_amplitude_active, result.upper_amplitude_active)
-        if spec.coordinate.direction > 0.0
-        else (result.upper_amplitude_active, result.lower_amplitude_active)
+        (
+            (result.lower_amplitude_active, result.upper_amplitude_active)
+            if spec.coordinate.direction > 0.0
+            else (result.upper_amplitude_active, result.lower_amplitude_active)
+        )
         for spec, result in zip(natural_map.specs, results, strict=True)
     ]
     if any(mask != masks[0] for mask in masks[1:]):
@@ -1303,8 +1441,27 @@ def _coupled_component_results(run, face, evaluations):
     return tuple(results)
 
 
-def _coupled_m_step(problems, objectives, masses, previous=None, **options):
-    """Compare globally shared amplitude masks by actual coupled optimization."""
+def _coupled_m_step(problems, objectives, masses, previous, solver_options, /):
+    """Compare globally shared amplitude masks by coupled optimization.
+
+    Parameters
+    ----------
+    problems : sequence of _ComponentProblem
+        Component geometry and observation contracts.
+    objectives : sequence
+        Current component M-step objectives.
+    masses : numpy.ndarray, shape (K,)
+        Responsibility mass of each component.
+    previous : sequence of _ConicNewtonResult or None
+        Previous component results used to warm-start the shared solve.
+    solver_options : _NewtonOptions
+        Shared immutable Newton policy.
+
+    Returns
+    -------
+    tuple of _ConicNewtonResult
+        Coupled component results on the selected shared boundary face.
+    """
     mapping = _mixture_map(problems)
     objective = SharedMStepObjective(
         [
@@ -1314,7 +1471,7 @@ def _coupled_m_step(problems, objectives, masses, previous=None, **options):
             )
         ]
     )
-    controls = _mixture_newton_options(options)
+    controls = solver_options
 
     def solve_face(face, candidate_start, candidate_blocks):
         solve = functools.partial(
@@ -1387,9 +1544,9 @@ def _coupled_m_step(problems, objectives, masses, previous=None, **options):
         while best_face.degrees[k] >= step:
             params = mapping.expand(best_face.expand(best.params))[k]
             curvature = params[layout.curvature_slice]
-            if abs(curvature[best_face.degrees[k]]) > options.get(
-                "face_trigger", 1e-6
-            ) * max(1.0, np.max(np.abs(curvature))):
+            if abs(curvature[best_face.degrees[k]]) > controls.face_trigger * max(
+                1.0, np.max(np.abs(curvature))
+            ):
                 break
             trial_degrees = list(best_face.degrees)
             trial_degrees[k] -= step
@@ -1456,7 +1613,7 @@ def _evaluated_em_state(
     )
 
 
-def _em_map(state, problems, observation_weights, /, **options):
+def _em_map(state, problems, observation_weights, solver_options, /):
     """Apply one EM map using the posterior cached on ``state``.
 
     Parameters
@@ -1467,8 +1624,8 @@ def _em_map(state, problems, observation_weights, /, **options):
         Component problems.
     observation_weights : numpy.ndarray, shape (R,)
         Normalized observation weights.
-    **options : dict
-        Passed to every M-step solve.
+    solver_options : _NewtonOptions
+        Shared immutable Newton policy.
 
     Returns
     -------
@@ -1510,7 +1667,7 @@ def _em_map(state, problems, observation_weights, /, **options):
                 for k, problem in enumerate(problems)
             ]
         return _coupled_m_step(
-            problems, objectives, mass, state.results, **options
+            problems, objectives, mass, state.results, solver_options
         ), _log_mixture_weights(mass)
     if compact:
         grouped_observation_weights, _ = problems[0]._grouped_observation_moments(
@@ -1518,7 +1675,10 @@ def _em_map(state, problems, observation_weights, /, **options):
         )
         for k, problem in enumerate(problems):
             _, result = problem.fit_compact(
-                responsibilities[:, k], observation_weights, state.results[k], **options
+                responsibilities[:, k],
+                observation_weights,
+                state.results[k],
+                solver_options,
             )
             updated.append(result)
         mass = grouped_observation_weights @ responsibilities
@@ -1527,7 +1687,7 @@ def _em_map(state, problems, observation_weights, /, **options):
             _, result = problem.fit(
                 observation_weights * responsibilities[:, k],
                 state.results[k],
-                **options,
+                solver_options,
             )
             updated.append(result)
         mass = observation_weights @ responsibilities
@@ -1543,6 +1703,8 @@ def _stack(results, log_weights, natural_map, /):
         Component results.
     log_weights : numpy.ndarray
         Log mixture weights.
+    natural_map : _MixtureNaturalMap
+        Reduced map used to pack shared component parameters.
     """
     return np.concatenate((natural_map.pack([r.params for r in results]), log_weights))
 
@@ -1561,6 +1723,14 @@ def _unstack(vector, reference, layouts, natural_map, /):
         Results supplying Gram blocks (warm starts only) and shapes.
     layouts : sequence of _NaturalLayout
         Component layouts.
+    natural_map : _MixtureNaturalMap
+        Reduced map used to unpack the stacked component parameters.
+
+    Returns
+    -------
+    tuple or None
+        Admissible ``(results, log_weights)`` pair, or ``None`` when the
+        stacked point violates face feasibility.
     """
     if not np.all(np.isfinite(vector)):
         return None
@@ -1615,7 +1785,7 @@ def _em_phase(
     tolerance,
     accelerate,
     history,
-    **options,
+    solver_options,
 ):
     """Run SQUAREM-accelerated EM until the likelihood stalls.
 
@@ -1636,8 +1806,8 @@ def _em_phase(
         Use SQUAREM.
     history : list
         Appended with the log likelihood after every accepted cycle.
-    **options : dict
-        Passed to every M-step.
+    solver_options : _NewtonOptions
+        Shared immutable Newton policy.
 
     Returns
     -------
@@ -1652,7 +1822,7 @@ def _em_phase(
             point_state,
             problems,
             observation_weights,
-            **options,
+            solver_options,
         )
         return _evaluated_em_state(
             problems, layouts, point_results, point_log_weights, observation_weights
@@ -1698,6 +1868,10 @@ def _em_phase(
                         )
                         trial = em(point_state)
                         steps += 1
+                    except _PointMixtureEstimabilityFailure:
+                        # Extrapolation may create a singular point-component;
+                        # decline this acceleration step without ledger noise.
+                        trial = None
                     except NUMERIC_FAILURES as exc:
                         _reraise_if_debug(
                             exc, "SQUAREM stabilization step", routine=True
@@ -1752,41 +1926,8 @@ def _polish(state, problems, layouts, observation_weights, options, /):
     return replace(run, params=face.expand(run.params)), objective
 
 
-def _degree_policies(degree, count, /):
-    """Return one fixed degree or ``"auto"`` policy per component.
-
-    Parameters
-    ----------
-    degree : int, str, or sequence
-        Shared or per-component degree policy.
-    count : int
-        Number of mixture components.
-
-    Returns
-    -------
-    tuple
-        One normalized degree policy per component.
-    """
-    if isinstance(degree, str):
-        if degree.lower() != "auto":
-            raise ValueError("degree must be an integer, a sequence, or 'auto'")
-        return ("auto",) * int(count)
-    if np.isscalar(degree):
-        return (int(degree),) * int(count)
-    values = tuple(degree)
-    if len(values) != int(count):
-        raise ValueError("per-component degree policies must match the component count")
-    out = []
-    for value in values:
-        if isinstance(value, str):
-            if value.lower() != "auto":
-                raise ValueError(
-                    "per-component degree policy must be an integer or 'auto'"
-                )
-            out.append("auto")
-        else:
-            out.append(int(value))
-    return tuple(out)
+class _PointMixtureEstimabilityFailure(RuntimeError):
+    """Expected rejection of a singular point-mixture candidate."""
 
 
 def _check_point_estimability(rows, observation_weights, responsibilities, /):
@@ -1807,7 +1948,7 @@ def _check_point_estimability(rows, observation_weights, responsibilities, /):
 
     Raises
     ------
-    ValueError
+    _PointMixtureEstimabilityFailure
         If a point-data component has fewer than the required effective distinct
         sample locations.
     """
@@ -1820,7 +1961,7 @@ def _check_point_estimability(rows, observation_weights, responsibilities, /):
             x, observation_weights * responsibilities[:, k], inverse=inverse
         )
         if n_eff < EM_MIN_EFFECTIVE_DISTINCT_N:
-            raise ValueError(
+            raise _PointMixtureEstimabilityFailure(
                 "point-mixture component is not estimable: component "
                 f"{k + 1}/{responsibilities.shape[1]} has only {n_eff:.6g} "
                 "effective distinct sample locations. The unconstrained "
@@ -1872,10 +2013,10 @@ def _policy_initial_components(
     upper,
     observation_weights,
     responsibilities,
+    solver_options,
     /,
     *,
-    degree_config=None,
-    **options,
+    degree_config,
 ):
     """Run the first M-step for heterogeneous fixed/automatic degree policies.
 
@@ -1885,18 +2026,18 @@ def _policy_initial_components(
         Shared user-coordinate support.
     rows : numpy.ndarray, shape (R, 1) or (R, 2)
         Point or interval observations.
-    policies : sequence
-        One fixed degree or ``"auto"`` policy per component.
+    policies : tuple of int or str
+        Canonical fixed degree or ``"auto"`` policy per component.
     lower, upper : bool
         Boundary-amplitude flags.
     observation_weights : numpy.ndarray, shape (R,)
         Normalized observation weights.
     responsibilities : numpy.ndarray, shape (R, K)
         Initial component responsibilities.
-    degree_config : _DegreeSelectionConfig or None, optional
+    solver_options : _NewtonOptions
+        Shared immutable Newton policy.
+    degree_config : _DegreeSelectionConfig
         Omitted-information selection policy.
-    **options : dict
-        Natural conic solver options.
 
     Returns
     -------
@@ -1933,12 +2074,16 @@ def _policy_initial_components(
         ]
         if lower or upper:
             results = _coupled_m_step(
-                problems, objectives, observation_weights @ responsibilities, **options
+                problems,
+                objectives,
+                observation_weights @ responsibilities,
+                None,
+                solver_options,
             )
         else:
             results = [
                 problem.fit(
-                    observation_weights * responsibilities[:, k], None, **options
+                    observation_weights * responsibilities[:, k], None, solver_options
                 )[1]
                 for k, problem in enumerate(problems)
             ]
@@ -1954,7 +2099,7 @@ def _policy_initial_components(
                     upper,
                     component_weights,
                     degree_config=degree_config,
-                    **options,
+                    solver_options=solver_options,
                 )
             else:
                 objective, result = _fit_natural_conic_intervals_auto(
@@ -1964,7 +2109,7 @@ def _policy_initial_components(
                     upper,
                     component_weights,
                     degree_config=degree_config,
-                    **options,
+                    solver_options=solver_options,
                 )
             selected = int(objective.spec.requested_poly_degree)
             problem = _ComponentProblem(
@@ -1978,7 +2123,7 @@ def _policy_initial_components(
             problem = _ComponentProblem(
                 support, rows, int(policy), lower, upper, component_weights
             )
-            objective, result = problem.fit(component_weights, None, **options)
+            objective, result = problem.fit(component_weights, None, solver_options)
         problems.append(problem)
         layouts.append(objective.layout)
         results.append(result)
@@ -1995,20 +2140,14 @@ def _run_natural_em(
     responsibilities,
     /,
     *,
-    em_tolerance=1e-4,
-    max_em_steps=20,
-    max_rounds=4,
-    accelerate=True,
+    em_options=None,
     initialization="given",
     polish=True,
-    tolerance=1e-12,
-    certified_tolerance=1e-10,
-    accuracy_floor=1e-7,
-    degree_config=None,
+    solver_options=None,
+    degree_config,
     _continuation=None,
     _return_continuation=False,
     _continue_with_em=False,
-    **options,
 ):
     """Fit a mixture from initial responsibilities: EM, polish, verify.
 
@@ -2018,38 +2157,33 @@ def _run_natural_em(
         User-coordinate support.
     rows : numpy.ndarray, shape (R, 1) or (R, 2)
         Point samples or interval rows.
-    degree : int, sequence of int, or ``"auto"``
-        Shared polynomial degree, one locked degree per component, or
-        minimum-degree initialization for the shared growth policy.
+    degree : tuple of int or str
+        Canonical fixed degree or ``"auto"`` per component, prepared at the
+        input boundary. Automatic entries initialize the shared growth policy.
     lower, upper : bool
         Boundary amplitude flags.
     observation_weights : numpy.ndarray, shape (R,)
         Normalized observation weights.
     responsibilities : numpy.ndarray, shape (R, K)
         Initial responsibilities.
-    em_tolerance : float, optional
-        Relative log-likelihood increase that ends an EM phase.
-    max_em_steps : int, optional
-        EM map evaluation limit per phase.
-    max_rounds : int, optional
-        EM-polish-verify rounds.
-    accelerate : bool, optional
-        Use SQUAREM.
+    em_options : _EMOptions or None, optional
+        Immutable EM scheduling policy.
     initialization : str, optional
         Name recorded in the result.
     polish : bool, optional
         ``False`` runs one EM phase only (status ``em_only``), as the
         intermediate rungs of a degree ladder do.
-    tolerance, certified_tolerance, accuracy_floor : float, optional
-        Newton tolerances of the polish (see ``_solve_natural_conic``).
-    degree_config : _DegreeSelectionConfig or None, optional
-        Omitted-information policy when ``degree="auto"``.
+    solver_options : _NewtonOptions or None, optional
+        Immutable Newton policy shared by component M-steps and joint polish.
+    degree_config : _DegreeSelectionConfig
+        Explicit omitted-information policy shared by the owning fit.
     _continuation : _EMContinuation or None, optional
         Internal explored state to continue directly into polishing.
     _return_continuation : bool, optional
         Internally return the reusable EM continuation with the fit.
-    **options : dict
-        Passed to every M-step solve.
+    _continue_with_em : bool, optional
+        Whether a supplied continuation should resume with another EM phase
+        before polishing.
 
     Returns
     -------
@@ -2058,11 +2192,13 @@ def _run_natural_em(
         ``_return_continuation`` is true.
     """
     w = observation_weights
+    em = _resolve_em_options(em_options)
+    newton = _resolve_newton_options(solver_options)
     if _continuation is None:
         r = np.asarray(responsibilities, dtype=np.float64)
         k_count = r.shape[1]
         _check_point_estimability(rows, w, r)
-        policies = _degree_policies(degree, k_count)
+        policies = degree
         if any(policy == "auto" for policy in policies):
             problems, layouts, results = _policy_initial_components(
                 support,
@@ -2072,8 +2208,8 @@ def _run_natural_em(
                 upper,
                 w,
                 r,
+                newton,
                 degree_config=degree_config,
-                **options,
             )
         else:
             degrees = tuple(int(value) for value in policies)
@@ -2087,10 +2223,10 @@ def _run_natural_em(
                 objectives = [
                     problem.objective(w * r[:, k]) for k, problem in enumerate(problems)
                 ]
-                results = _coupled_m_step(problems, objectives, w @ r, **options)
+                results = _coupled_m_step(problems, objectives, w @ r, None, newton)
             else:
                 for k, problem in enumerate(problems):
-                    _, result = problem.fit(w * r[:, k], None, **options)
+                    _, result = problem.fit(w * r[:, k], None, newton)
                     results.append(result)
         log_weights = _log_mixture_weights(w @ r)
         state = _evaluated_em_state(problems, layouts, results, log_weights, w)
@@ -2106,22 +2242,12 @@ def _run_natural_em(
         em_steps = int(_continuation.em_iterations)
         rounds = int(_continuation.rounds)
         need_em = bool(_continue_with_em)
-    newton = _NewtonOptions(
-        tolerance=float(tolerance),
-        certified_tolerance=float(certified_tolerance),
-        accuracy_floor=float(accuracy_floor),
-        max_iterations=60,
-        armijo=1e-4,
-        backtrack=0.5,
-        max_line_search=40,
-    )
-
     polish_iterations = 0
     status = "em_only"
     bound = np.inf
     while True:
         if need_em:
-            if rounds >= int(max_rounds):
+            if rounds >= int(em.max_rounds):
                 break
             rounds += 1
             state, steps = _em_phase(
@@ -2129,11 +2255,11 @@ def _run_natural_em(
                 problems,
                 layouts,
                 w,
-                max_steps=max_em_steps,
-                tolerance=em_tolerance,
-                accelerate=accelerate,
+                max_steps=em.max_steps,
+                tolerance=em.tolerance,
+                accelerate=em.accelerate,
                 history=history,
-                **options,
+                solver_options=newton,
             )
             em_steps += steps
         if not polish:
@@ -2179,7 +2305,7 @@ def _run_natural_em(
             need_em = True
             continue
         # Verification: one EM step from the polished point.
-        verified, verified_log_weights = _em_map(state, problems, w, **options)
+        verified, verified_log_weights = _em_map(state, problems, w, newton)
         em_steps += 1
         verified_state = _evaluated_em_state(
             problems, layouts, verified, verified_log_weights, w
@@ -2195,8 +2321,8 @@ def _run_natural_em(
         verified_face = _result_face(objective.natural_map, verified, len(verified) - 1)
         if (
             len(verified_face.free_indices) < len(objective.face.free_indices)
-            and verified_state.log_likelihood >= polished_ll - tolerance * scale
-            and rounds < int(max_rounds)
+            and verified_state.log_likelihood >= polished_ll - newton.tolerance * scale
+            and rounds < int(em.max_rounds)
         ):
             state = verified_state
             history.append(state.log_likelihood)
@@ -2204,7 +2330,7 @@ def _run_natural_em(
             need_em = False
             continue
         if verified_state.log_likelihood - polished_ll <= max(
-            bound, certified_tolerance * scale
+            bound, newton.certified_tolerance * scale
         ):
             break
         # EM still climbs: the polish sat on the wrong face.  Continue from
@@ -2276,7 +2402,24 @@ def _run_natural_em(
 
 
 def _degree_probe_problems(fit, rows, observation_weights, degrees):
-    """Lift a mixture's private degree blocks at exactly zero, without fitting."""
+    """Lift a mixture's private degree blocks at exactly zero, without fitting.
+
+    Parameters
+    ----------
+    fit : _NaturalMixtureFit
+        Existing fit supplying coordinates, amplitudes and lower-order terms.
+    rows : numpy.ndarray, shape (R, 1) or (R, 2)
+        Canonical observation rows.
+    observation_weights : numpy.ndarray, shape (R,)
+        Canonical normalized observation weights.
+    degrees : sequence of int
+        Target degree of each component probe.
+
+    Returns
+    -------
+    tuple
+        ``(problems, layouts, params)`` for the lifted probe geometry.
+    """
     rows = np.asarray(rows, dtype=np.float64)
     if rows.ndim == 1:
         rows = rows[:, None]
@@ -2311,17 +2454,62 @@ def _degree_probe_problems(fit, rows, observation_weights, degrees):
 
 
 def _continue_natural_mixture(
-    fit, support, rows, degrees, lower, upper, observation_weights, /, **options
+    fit,
+    support,
+    rows,
+    degrees,
+    lower,
+    upper,
+    observation_weights,
+    /,
+    *,
+    em_options=None,
+    polish=True,
+    solver_options=None,
+    degree_config,
+    _return_continuation=False,
 ):
     """Continue a fitted mixture after degree/side changes, keeping coordinates.
 
     Lower-order polynomial coefficients and retained physical amplitudes are
     copied exactly into the new layouts before the first coupled optimization.
+
+    Parameters
+    ----------
+    fit : _NaturalMixtureFit
+        Existing fitted mixture supplying coordinates and warm-start state.
+    support : tuple of (float, float)
+        Physical support, which must match ``fit``.
+    rows : numpy.ndarray, shape (R, 1) or (R, 2)
+        Canonical observation rows.
+    degrees : tuple of int
+        Canonical explicit target degrees, one per component.
+    lower, upper : bool
+        Boundary-amplitude flags.
+    observation_weights : numpy.ndarray, shape (R,)
+        Canonical normalized observation weights.
+    em_options : _EMOptions or None, optional
+        EM scheduling policy for the continued fit.
+    polish : bool, optional
+        Whether to run joint Newton polishing after EM.
+    solver_options : _NewtonOptions or None, optional
+        Shared Newton policy.
+    degree_config : _DegreeSelectionConfig
+        Omitted-information policy used by downstream degree growth.
+    _return_continuation : bool, optional
+        Internally return the reusable continuation alongside the fit.
+
+    Returns
+    -------
+    _NaturalMixtureFit or tuple
+        Continued fit, optionally paired with its reusable continuation.
     """
     rows = np.asarray(rows, dtype=np.float64)
     if rows.ndim == 1:
         rows = rows[:, None]
     w = np.asarray(observation_weights, dtype=np.float64)
+    em = _resolve_em_options(em_options)
+    newton = _resolve_newton_options(solver_options)
     if tuple(map(float, support)) != tuple(
         map(float, fit.components[0].coordinate.physical_support)
     ):
@@ -2348,7 +2536,6 @@ def _continue_natural_mixture(
         np.log(fit.weights),
         w,
     )
-    degrees = _degree_policies(degrees, len(fit.components))
     if any(degree == "auto" for degree in degrees):
         raise ValueError("continuation requires explicit per-component degrees")
     problems, layouts, results = [], [], []
@@ -2411,12 +2598,7 @@ def _continue_natural_mixture(
         fit.log_likelihood,
         responsibilities,
     )
-    solver_options = {
-        key: value
-        for key, value in options.items()
-        if key in _NewtonOptions.__dataclass_fields__ or key == "face_trigger"
-    }
-    results, log_weights = _em_map(state, problems, w, **solver_options)
+    results, log_weights = _em_map(state, problems, w, newton)
     state = _evaluated_em_state(problems, layouts, results, log_weights, w)
     continuation = _EMContinuation(
         tuple(problems), tuple(layouts), state, (state.log_likelihood,), 1, 0
@@ -2429,10 +2611,14 @@ def _continue_natural_mixture(
         upper,
         w,
         responsibilities,
+        em_options=em,
         initialization=fit.initialization,
+        polish=polish,
+        solver_options=newton,
+        degree_config=degree_config,
         _continuation=continuation,
+        _return_continuation=_return_continuation,
         _continue_with_em=True,
-        **options,
     )
 
 
@@ -2448,16 +2634,11 @@ def _fit_natural_mixture(
     *,
     rng=0,
     responsibilities=None,
-    paths=(
-        ("ladder", "raw"),
-        ("ladder", "sharpened"),
-        ("direct", "raw"),
-        ("direct", "sharpened"),
-    ),
-    finalists=2,
-    degree_config=None,
+    search_options=None,
+    degree_config,
     initial_fit=None,
-    **options,
+    em_options=None,
+    solver_options=None,
 ):
     """Fit a mixture of natural log-concave components.
 
@@ -2484,33 +2665,34 @@ def _fit_natural_mixture(
     ----------
     support : tuple of (float, float)
         User-coordinate support shared by every component.
-    samples : array_like, shape (R,), (R, 1) or (R, 2)
-        Point samples or interval rows in user coordinates.
+    samples : numpy.ndarray, shape (R, 1) or (R, 2), dtype float64
+        Boundary-validated point samples or interval rows in user coordinates.
     n_components : int
         Number of components.
-    poly_degree : int, ``"auto"``, or sequence
-        Shared polynomial degree, per-component omitted-information selection,
-        or one integer/``"auto"`` policy per component. Automatic components
+    poly_degree : tuple of int or str
+        Canonical integer/``"auto"`` policy per component, prepared at the
+        input boundary. Automatic components
         start at minimum degree; finalists grow jointly conditioned blocks.
     allow_lower_boundary, allow_upper_boundary : bool, optional
         Boundary amplitude flags.
-    weights : array_like or None, optional
-        Nonnegative observation weights.
+    weights : numpy.ndarray, shape (R,), dtype float64 or None, optional
+        Boundary-normalized observation weights, or ``None`` for equal weights.
     rng : int or numpy.random.Generator, optional
         Randomness for the initialization candidates.
     responsibilities : numpy.ndarray or None, optional
         Explicit initial responsibilities; replaces the candidates.
-    paths : sequence of (str, str), optional
-        ``(schedule, treatment)`` pairs explored from every candidate.
-    finalists : int, optional
-        Explorations run to certified convergence.
-    degree_config : _DegreeSelectionConfig or None, optional
-        Omitted-information policy for ``poly_degree="auto"``.
+    search_options : _MixtureSearchOptions or None, optional
+        Multistart path/finalist policy.
+    degree_config : _DegreeSelectionConfig
+        Explicit omitted-information policy shared by this fit and its refits.
     initial_fit : _NaturalMixtureFit or None, optional
         Shared fit to continue without restarting the initializer search or
         changing its numerical coordinates.
-    **options : dict
-        Passed to ``_run_natural_em`` for the finalists.
+    em_options : _EMOptions or None, optional
+        EM scheduling policy for finalists and warm continuations. Exploratory
+        screening keeps the default policy so candidate ranking is comparable.
+    solver_options : _NewtonOptions or None, optional
+        Newton policy for finalists and warm continuations.
 
     Returns
     -------
@@ -2522,21 +2704,24 @@ def _fit_natural_mixture(
     RuntimeError
         If no initialization produced a fit.
     """
-    rows = np.asarray(samples, dtype=np.float64)
-    if rows.ndim == 1:
-        rows = rows[:, None]
-    if rows.ndim != 2 or rows.shape[1] not in (1, 2):
-        raise ValueError("samples must have shape (R,), (R, 1) or (R, 2)")
-    w = _normalized_observation_weights(rows.shape[0], weights)
-    policies = _degree_policies(poly_degree, int(n_components))
+    rows = samples
+    w = _observation_weights(rows.shape[0], weights)
+    policies = poly_degree
     has_auto_degree = any(policy == "auto" for policy in policies)
     lower, upper = bool(allow_lower_boundary), bool(allow_upper_boundary)
+    search_policy = _resolve_search_options(search_options)
+    final_em = _resolve_em_options(em_options)
+    final_newton = _resolve_newton_options(solver_options)
+    exploration_em = _EMOptions()
+    exploration_newton = _NewtonOptions()
 
     def grow(fit):
         # Cold K=1 initialization already runs the standalone selector.
         # Warm starts are refitted at minimum degree and must grow again.
         if not has_auto_degree or (int(n_components) == 1 and initial_fit is None):
             return fit
+        # Degree growth calls back into mixture refitting; keep imports reciprocal
+        # only at runtime, after both modules have initialized.
         from .mixture_degree import _fit_shared_degree_growth
 
         return _fit_shared_degree_growth(
@@ -2546,7 +2731,16 @@ def _fit_natural_mixture(
             rows=rows,
             observation_weights=w,
             refit=lambda degrees, previous: _continue_natural_mixture(
-                previous, support, rows, degrees, lower, upper, w, **options
+                previous,
+                support,
+                rows,
+                degrees,
+                lower,
+                upper,
+                w,
+                em_options=final_em,
+                solver_options=final_newton,
+                degree_config=degree_config,
             ),
             degree_config=degree_config,
         )
@@ -2561,7 +2755,16 @@ def _fit_natural_mixture(
             for policy in policies
         )
         fit = _continue_natural_mixture(
-            initial_fit, support, rows, degrees, lower, upper, w, **options
+            initial_fit,
+            support,
+            rows,
+            degrees,
+            lower,
+            upper,
+            w,
+            em_options=final_em,
+            solver_options=final_newton,
+            degree_config=degree_config,
         )
         return grow(fit)
     if responsibilities is not None:
@@ -2581,11 +2784,15 @@ def _fit_natural_mixture(
     uniform_fixed = (
         not has_auto_degree and len({int(policy) for policy in policies}) == 1
     )
-    degree = int(policies[0]) if uniform_fixed else policies
+    degree = policies
     rungs = (
         []
         if not uniform_fixed
-        else [int(d) for d in _admissible_degrees(support, degree) if int(d) < degree]
+        else [
+            int(d)
+            for d in _admissible_degrees(support, policies[0])
+            if int(d) < policies[0]
+        ]
     )
 
     def prepare(posterior, treatment):
@@ -2614,14 +2821,22 @@ def _fit_natural_mixture(
         # likelihood over a certified ordinary fit.
         return (not _needs_wider_search(fit, rows, w), score(fit))
 
-    # Exploration uses the default EM/M-step controls.  Its terminal state is
-    # therefore exactly the state a default finalist rerun would reproduce.
-    # Polish-only tolerances do not affect that state and are safe to change
-    # when continuing.  For any custom EM or M-step option, keep the previous
-    # restart behavior rather than silently changing its semantics.
-    reusable_options = {"tolerance", "certified_tolerance", "accuracy_floor"}
-    reuse_exploration = set(options).issubset(reusable_options)
-    active_paths = list(paths)
+    # Exploration uses the default EM/M-step controls. Its terminal state is
+    # reusable only when the finalist has the same EM schedule and the same
+    # M-step mechanics. The three convergence tolerances remain polish-safe,
+    # matching the previous continuation policy.
+    default_newton = _NewtonOptions()
+    reuse_exploration = final_em == exploration_em and all(
+        getattr(final_newton, name) == getattr(default_newton, name)
+        for name in (
+            "face_trigger",
+            "max_iterations",
+            "armijo",
+            "backtrack",
+            "max_line_search",
+        )
+    )
+    active_paths = list(search_policy.paths)
     if not uniform_fixed:
         # Heterogeneous or automatic degree policies do not have one shared
         # ladder. Preserve the distinct raw/sharpened responsibility
@@ -2648,23 +2863,29 @@ def _fit_natural_mixture(
                                 rung_fit = _run_natural_em(
                                     support,
                                     rows,
-                                    rung,
+                                    (rung,) * n_components,
                                     lower,
                                     upper,
                                     w,
                                     prepare(posterior, treatment),
+                                    em_options=exploration_em,
                                     polish=False,
+                                    solver_options=exploration_newton,
+                                    degree_config=degree_config,
                                 )
                             else:
                                 rung_fit = _continue_natural_mixture(
                                     rung_fit,
                                     support,
                                     rows,
-                                    rung,
+                                    (rung,) * n_components,
                                     lower,
                                     upper,
                                     w,
+                                    em_options=exploration_em,
                                     polish=False,
+                                    solver_options=exploration_newton,
+                                    degree_config=degree_config,
                                 )
                             posterior = rung_fit.responsibilities
                     start = prepare(posterior, treatment)
@@ -2677,7 +2898,9 @@ def _fit_natural_mixture(
                             lower,
                             upper,
                             w,
+                            em_options=exploration_em,
                             polish=False,
+                            solver_options=exploration_newton,
                             degree_config=degree_config,
                             _return_continuation=True,
                         )
@@ -2690,7 +2913,9 @@ def _fit_natural_mixture(
                             upper,
                             w,
                             start,
+                            em_options=exploration_em,
                             polish=False,
+                            solver_options=exploration_newton,
                             degree_config=degree_config,
                             _return_continuation=True,
                         )
@@ -2703,11 +2928,18 @@ def _fit_natural_mixture(
                             upper,
                             w,
                             start,
+                            em_options=exploration_em,
                             polish=False,
+                            solver_options=exploration_newton,
                             degree_config=degree_config,
                         )
                         continuation = None
-                except (*NUMERIC_FAILURES, ValueError) as exc:
+                except _PointMixtureEstimabilityFailure as exc:
+                    # This seed reached the known singular point-mixture boundary.
+                    # Other starts may remain estimable, so reject only this seed.
+                    failure = exc
+                    continue
+                except NUMERIC_FAILURES as exc:
                     _reraise_if_debug(
                         exc, f"natural mixture EM from {label}", routine=True
                     )
@@ -2723,7 +2955,7 @@ def _fit_natural_mixture(
         explored.sort(key=lambda item: -item[0])
         best = None
         for _, label, start, locked_degrees, continuation in explored[
-            : max(1, int(finalists))
+            : max(1, int(search_policy.finalists))
         ]:
             final_degree = locked_degrees if has_auto_degree else degree
             try:
@@ -2735,12 +2967,19 @@ def _fit_natural_mixture(
                     upper,
                     w,
                     start,
+                    em_options=final_em,
                     initialization=label,
+                    solver_options=final_newton,
+                    degree_config=degree_config,
                     _continuation=continuation,
-                    **options,
                 )
                 fit = grow(fit)
-            except (*NUMERIC_FAILURES, ValueError) as exc:
+            except _PointMixtureEstimabilityFailure as exc:
+                # This finalist reached the known singular point-mixture boundary.
+                # Continue to another finalist without treating it as a fallback.
+                failure = exc
+                continue
+            except NUMERIC_FAILURES as exc:
                 _reraise_if_debug(
                     exc, f"natural mixture fit from {label}", routine=True
                 )
@@ -2773,9 +3012,7 @@ def _fit_natural_mixture(
             best = other
         failure = failure if failure is not None else other_failure
     if best is None:
-        if failure is not None and "point-mixture component is not estimable" in str(
-            failure
-        ):
+        if isinstance(failure, _PointMixtureEstimabilityFailure):
             raise failure
         raise RuntimeError("no mixture initialization produced a fit") from failure
     return best

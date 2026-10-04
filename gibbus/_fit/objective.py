@@ -124,8 +124,8 @@ def _point_boundary_distance(z, support, side, preserved, /):
         Canonical support endpoints.
     side : {'lower', 'upper'}
         Boundary side whose distance is requested.
-    preserved : float or None
-        Preserved physical boundary distance when available.
+    preserved : float
+        Preserved physical boundary distance, or ``nan`` when unavailable.
     """
     if np.isfinite(preserved):
         return float(preserved)
@@ -142,10 +142,10 @@ def _point_q_with_boundary_distances(state, z, lower_distance, upper_distance, /
         Current model state.
     z : float
         Canonical exact-point coordinate.
-    lower_distance : float or None
-        Preserved distance to the lower support endpoint.
-    upper_distance : float or None
-        Preserved distance to the upper support endpoint.
+    lower_distance : float
+        Preserved distance to the lower support endpoint, or ``nan``.
+    upper_distance : float
+        Preserved distance to the upper support endpoint, or ``nan``.
     """
     zz = float(z)
     support = tuple(map(float, state.spec.support))

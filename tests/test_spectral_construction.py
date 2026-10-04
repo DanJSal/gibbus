@@ -28,6 +28,7 @@ from gibbus._spectral.chebyshev import (
     lobatto_nodes,
     midpoint_nodes,
 )
+from gibbus._spectral.config import _SpectralCDFOptions
 
 
 def _bernstein_eval(coeff, t):
@@ -362,7 +363,15 @@ def test_half_line_map_resolves_a_body_far_from_the_endpoint():
         [quad(pdf, -np.inf, v, epsabs=1e-15, epsrel=1e-13)[0] for v in x]
     )
     for rep in (
-        SpectralCDF(support, density=density, mode=0.1747, std=0.829),
+        SpectralCDF(
+            support,
+            density=density,
+            mode=0.1747,
+            std=0.829,
+            map_scale=None,
+            initial_breaks=None,
+            config=_SpectralCDFOptions(),
+        ),
         PythonSpectralCDFBuilder(pdf, support, mode=0.1747, std=0.829),
     ):
         assert rep.map.kind == "lower_centered"

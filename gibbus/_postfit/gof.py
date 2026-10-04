@@ -92,33 +92,35 @@ def gof_statistic(u, statistic, /):
 
     Parameters
     ----------
-    u : array_like
-        Probability-integral-transform values in ``[0, 1]``.
+    u : numpy.ndarray, shape (n,), dtype float64
+        Sorted, endpoint-clipped PIT values returned by :func:`canonical_pit`.
     statistic : str
         One of :data:`GOF_STATISTICS`: ``"ks"`` for the two-sided
         Kolmogorov-Smirnov supremum, ``"cvm"`` for the Cramer-von Mises
-        integral, or ``"ad"`` for the Anderson-Darling integral.
+        integral, or ``"ad"`` for the Anderson-Darling integral. The key has
+        already been normalized by :func:`validate_statistic`.
 
     Returns
     -------
     float
         The statistic value; larger means further from uniform.
     """
-    key = validate_statistic(statistic)
-    us = canonical_pit(u)
+    us = u
     n = us.size
     i = np.arange(1, n + 1, dtype=np.float64)
-    if key == "ks":
+    if statistic == "ks":
         d_plus = float(np.max(i / n - us))
         d_minus = float(np.max(us - (i - 1.0) / n))
         return max(d_plus, d_minus)
-    if key == "cvm":
+    if statistic == "cvm":
         return float(np.sum((us - (2.0 * i - 1.0) / (2.0 * n)) ** 2) + 1.0 / (12.0 * n))
-    terms = (2.0 * i - 1.0) * (np.log(us) + np.log1p(-us[::-1]))
-    return float(-n - np.sum(terms) / n)
+    if statistic == "ad":
+        terms = (2.0 * i - 1.0) * (np.log(us) + np.log1p(-us[::-1]))
+        return float(-n - np.sum(terms) / n)
+    raise ValueError(f"unknown canonical statistic: {statistic!r}")
 
 
-def asymptotic_pvalue(u, statistic, /):
+def asymptotic_pvalue(u, statistic, observed, /):
     """Return the null *p*-value for PIT values independent of the fitted model.
 
     The reference distributions used here assume the fit did not see the
@@ -130,10 +132,12 @@ def asymptotic_pvalue(u, statistic, /):
 
     Parameters
     ----------
-    u : array_like
-        Probability-integral-transform values in ``[0, 1]``.
+    u : numpy.ndarray, shape (n,), dtype float64
+        Sorted, endpoint-clipped PIT values returned by :func:`canonical_pit`.
     statistic : str
-        One of :data:`GOF_STATISTICS`.
+        Already-normalized key from :data:`GOF_STATISTICS`.
+    observed : float
+        Statistic already evaluated on *u*.
 
     Returns
     -------
@@ -141,13 +145,13 @@ def asymptotic_pvalue(u, statistic, /):
         Upper-tail probability under the null, or ``None`` when no
         calibrated asymptotic reference exists for *statistic*.
     """
-    key = validate_statistic(statistic)
-    us = canonical_pit(u)
-    if key == "ks":
-        return float(np.clip(kstwo.sf(gof_statistic(us, "ks"), us.size), 0.0, 1.0))
-    if key == "cvm":
-        return float(np.clip(cramervonmises(us, "uniform").pvalue, 0.0, 1.0))
-    return None
+    if statistic == "ks":
+        return float(np.clip(kstwo.sf(observed, u.size), 0.0, 1.0))
+    if statistic == "cvm":
+        return float(np.clip(cramervonmises(u, "uniform").pvalue, 0.0, 1.0))
+    if statistic == "ad":
+        return None
+    raise ValueError(f"unknown canonical statistic: {statistic!r}")
 
 
 def monte_carlo_pvalue(observed, replicates, /):

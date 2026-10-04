@@ -8,9 +8,18 @@ from .conic_qp import _ConicRepresentation, _support_representation
 
 
 class _MixtureNaturalMap:
-    """Map private polynomial shapes and shared physical boundary amplitudes."""
+    """Map private polynomial shapes and shared physical boundary amplitudes.
+
+    Parameters
+    ----------
+    specs : sequence of model specifications
+        Nonempty component specifications with matching physical boundary bases.
+    layouts : sequence of _NaturalLayout or None, optional
+        Component layouts; ``None`` uses each specification's own layout.
+    """
 
     def __init__(self, specs, layouts=None):
+        """Build component-to-joint indices and a cache of exact cone faces."""
         self.specs = tuple(specs)
         self.layouts = (
             tuple(spec.layout for spec in self.specs)
@@ -20,9 +29,11 @@ class _MixtureNaturalMap:
         if not self.specs or len(self.specs) != len(self.layouts):
             raise ValueError("a mixture map requires matching nonempty specs/layouts")
         self.physical_indices = tuple(
-            (layout.lower_a_index, layout.upper_a_index)
-            if spec.coordinate.direction > 0.0
-            else (layout.upper_a_index, layout.lower_a_index)
+            (
+                (layout.lower_a_index, layout.upper_a_index)
+                if spec.coordinate.direction > 0.0
+                else (layout.upper_a_index, layout.lower_a_index)
+            )
             for spec, layout in zip(self.specs, self.layouts, strict=True)
         )
         private = []
@@ -54,14 +65,27 @@ class _MixtureNaturalMap:
         self._faces = {}
 
     def expand(self, params):
-        """Expand one stable reduced vector without duplicating fitted variables."""
+        """Expand one stable reduced vector without duplicating fitted variables.
+
+        Parameters
+        ----------
+        params : numpy.ndarray, shape (n_params,)
+            Finite joint shape/amplitude vector, without mixture logits.
+        """
         params = np.asarray(params, dtype=np.float64)
         if params.shape != (self.n_params,) or not np.all(np.isfinite(params)):
             raise ValueError("invalid reduced mixture parameter vector")
         return tuple(params[indices] for indices in self.local_indices)
 
     def pack(self, params):
-        """Strictly pack an already shared iterate; never average unequal values."""
+        """Strictly pack an already shared iterate; never average unequal values.
+
+        Parameters
+        ----------
+        params : sequence of numpy.ndarray
+            One valid local vector per component. Shared physical amplitudes
+            must agree exactly, including across reflected fitting coordinates.
+        """
         if len(params) != len(self.layouts):
             raise ValueError("component parameter count does not match mixture")
         result = np.empty(self.n_params, dtype=np.float64)
@@ -78,7 +102,13 @@ class _MixtureNaturalMap:
         return result
 
     def joint_matrix(self, n_logits=0):
-        """Linear expansion including the unchanged trailing mixture logits."""
+        """Linear expansion including the unchanged trailing mixture logits.
+
+        Parameters
+        ----------
+        n_logits : int, optional
+            Number of trailing unconstrained mixture logits to preserve.
+        """
         matrix = np.zeros(
             (len(self.expanded_indices) + n_logits, self.n_params + n_logits)
         )
@@ -91,6 +121,15 @@ class _MixtureNaturalMap:
         """Build an exact injection and the corresponding component cone product.
 
         Faces are immutable and memoized per map.
+
+        Parameters
+        ----------
+        degrees : sequence of int
+            Active curvature degree of each component.
+        active : sequence of bool
+            Whether the shared lower and upper physical amplitudes are free.
+        n_logits : int, optional
+            Number of trailing mixture logits included in the face.
         """
         key = (tuple(map(int, degrees)), tuple(map(bool, active)), int(n_logits))
         face = self._faces.get(key)
@@ -102,12 +141,27 @@ class _MixtureNaturalMap:
 
 @dataclass
 class _MixtureFace:
+    """Exact zero-coordinate face and its coupled component cone bookkeeping.
+
+    Parameters
+    ----------
+    natural_map : _MixtureNaturalMap
+        Joint coordinate map owning the component layouts and physical sides.
+    degrees : tuple of int
+        Curvature degree retained per component.
+    active : tuple of bool
+        Activity of the shared lower and upper physical boundary amplitudes.
+    n_logits : int, optional
+        Number of trailing unconstrained mixture logits.
+    """
+
     natural_map: _MixtureNaturalMap
     degrees: tuple
     active: tuple
     n_logits: int = 0
 
     def __post_init__(self):
+        """Derive the exact injection, cone rows and component dual mappings."""
         mapping = self.natural_map
         if len(self.degrees) != len(mapping.layouts) or len(self.active) != 2:
             raise ValueError("invalid mixture face")
@@ -196,7 +250,13 @@ class _MixtureFace:
         )
 
     def expand(self, params):
-        """Inject free parameters; absent coordinates are exactly zero."""
+        """Inject free parameters; absent coordinates are exactly zero.
+
+        Parameters
+        ----------
+        params : numpy.ndarray, shape (len(free_indices),)
+            Reduced parameters on this exact face, including free logits.
+        """
         values = np.asarray(params, dtype=np.float64)
         if values.shape != (len(self.free_indices),):
             raise ValueError("invalid free face vector")
@@ -205,11 +265,25 @@ class _MixtureFace:
         return result
 
     def restrict(self, params):
-        """Restrict a full vector for a proposed exact face."""
+        """Restrict a full vector for a proposed exact face.
+
+        Parameters
+        ----------
+        params : numpy.ndarray
+            Full joint shape/amplitude/logit vector in the map's ordering.
+        """
         return np.asarray(params, dtype=np.float64)[self.free_indices].copy()
 
     def component_dual(self, dual, component):
-        """Restore eliminated zero equality multipliers for component bookkeeping."""
+        """Restore eliminated zero equality multipliers for component bookkeeping.
+
+        Parameters
+        ----------
+        dual : numpy.ndarray
+            Joint equality multipliers in the face's concatenated row ordering.
+        component : int
+            Component whose full local multiplier vector is requested.
+        """
         result = np.zeros(self.component_representations[component].n_rows)
         result[self.component_rows[component]] = dual[
             self.row_offsets[component] : self.row_offsets[component + 1]

@@ -6,7 +6,9 @@ aggregation -- independent of the fitting machinery, so it can be exercised
 directly without building a model.
 
 A replicate is counted as failed when the refit raises one of
-:data:`gibbus._defaults.NUMERIC_FAILURES` or returns any non-finite value.
+:data:`gibbus._defaults.NUMERIC_FAILURES`, explicitly declines by returning
+``None``, or returns non-finite numerical output.  A result with the wrong
+shape is a callback contract error and is raised immediately.
 Failures are expected at low rates: a resample can omit enough of a mode's
 support that the log-concave fit for that component degenerates.  They are
 tolerated up to a fraction of the requested total and reported in the
@@ -18,11 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .._defaults import (
-    BOOTSTRAP_MAX_FAILURE_FRACTION,
-    NUMERIC_FAILURES,
-    _reraise_if_debug,
-)
+from .._defaults import NUMERIC_FAILURES, _reraise_if_debug
 
 
 def validate_resample_count(n_resamples, /):
@@ -97,7 +95,7 @@ def percentile_bands(curves, level, /):
     curves : array_like, shape (B, M)
         One row per successful replicate, one column per abscissa.
     level : float
-        Two-sided coverage in ``(0, 1)``.
+        Already-validated two-sided coverage in ``(0, 1)``.
 
     Returns
     -------
@@ -114,8 +112,7 @@ def percentile_bands(curves, level, /):
         raise ValueError("curves must be two-dimensional, shape (B, M)")
     if arr.shape[0] == 0:
         raise ValueError("percentile bands require at least one replicate curve")
-    coverage = validate_confidence(level)
-    tail = 50.0 * (1.0 - coverage)
+    tail = 50.0 * (1.0 - level)
     lower, upper = np.percentile(arr, [tail, 100.0 - tail], axis=0)
     return np.asarray(lower, dtype=np.float64), np.asarray(upper, dtype=np.float64)
 
@@ -164,7 +161,13 @@ def _collect_replicates(
             n_failed += 1
             continue
         row = np.asarray(value, dtype=np.float64).reshape(-1)
-        if row.size != width or not np.all(np.isfinite(row)):
+        if row.size != width:
+            raise ValueError(
+                f"{context} replicate returned {row.size} values; expected {width}"
+            )
+        if not np.all(np.isfinite(row)):
+            exc = FloatingPointError(f"{context} replicate returned non-finite values")
+            _reraise_if_debug(exc, context, routine=True)
             n_failed += 1
             continue
         rows.append(row)
@@ -192,7 +195,7 @@ def bootstrap_curves(
     n_resamples,
     level,
     rng,
-    max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+    max_failure_fraction,
 ):
     """Build pointwise bands by nonparametric resampling of observation rows.
 
@@ -211,12 +214,12 @@ def bootstrap_curves(
     n_points : int
         Number of abscissae each replicate evaluates.
     n_resamples : int
-        Replicates to attempt.
+        Already-validated positive replicate count.
     level : float
-        Two-sided pointwise coverage in ``(0, 1)``.
+        Already-validated two-sided pointwise coverage in ``(0, 1)``.
     rng : numpy.random.Generator
         Source of resampling indices.
-    max_failure_fraction : float, optional
+    max_failure_fraction : float
         Largest tolerated share of failed replicates.
 
     Returns
@@ -225,10 +228,8 @@ def bootstrap_curves(
         Keys ``lower``, ``upper``, ``n_resamples``, ``n_failed``, and
         ``level``.
     """
-    count = validate_resample_count(n_resamples)
-    coverage = validate_confidence(level)
-    rows = int(n_rows)
-    width = int(n_points)
+    rows = n_rows
+    width = n_points
     if rows < 1:
         raise ValueError("bootstrap requires at least one observation row")
     if width < 1:
@@ -239,18 +240,18 @@ def bootstrap_curves(
 
     curves, n_failed = _collect_replicates(
         make_replicate,
-        count,
+        n_resamples,
         width,
         "bootstrap",
         max_failure_fraction=max_failure_fraction,
     )
-    lower, upper = percentile_bands(curves, coverage)
+    lower, upper = percentile_bands(curves, level)
     return {
         "lower": lower,
         "upper": upper,
-        "n_resamples": count,
+        "n_resamples": n_resamples,
         "n_failed": n_failed,
-        "level": coverage,
+        "level": level,
     }
 
 
@@ -259,7 +260,7 @@ def simulated_statistics(
     /,
     *,
     n_resamples,
-    max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+    max_failure_fraction,
 ):
     """Collect a null distribution of scalar statistics by simulation.
 
@@ -269,8 +270,8 @@ def simulated_statistics(
         Zero-argument callable returning one statistic drawn under the
         null, or ``None`` to mark the replicate as failed.
     n_resamples : int
-        Replicates to attempt.
-    max_failure_fraction : float, optional
+        Already-validated positive replicate count.
+    max_failure_fraction : float
         Largest tolerated share of failed replicates.
 
     Returns
@@ -279,7 +280,6 @@ def simulated_statistics(
         ``(statistics, n_failed)`` where ``statistics`` is a one-dimensional
         float64 array of successful draws.
     """
-    count = validate_resample_count(n_resamples)
 
     def make_replicate():
         value = simulate_statistic()
@@ -287,7 +287,7 @@ def simulated_statistics(
 
     rows, n_failed = _collect_replicates(
         make_replicate,
-        count,
+        n_resamples,
         1,
         "parametric bootstrap",
         max_failure_fraction=max_failure_fraction,

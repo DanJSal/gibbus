@@ -18,7 +18,7 @@ from gibbus._model.coords import _build_fit_coordinate, _build_interval_fit_coor
 from gibbus._model.natural_state import _NaturalCoreState
 from gibbus._model.spec import _build_model_spec
 from gibbus._model.vec import _q_eval
-from gibbus._observations.empirical import _EmpiricalStats
+from gibbus._observations.empirical import _EmpiricalStats, _normalized_weights
 from gibbus._observations.intervals import (
     _build_interval_observations,
     _prepare_partial_interval_reducer,
@@ -254,7 +254,11 @@ def test_interval_objective_matches_direct_probability_integrals():
     mids = np.mean(user_intervals, axis=1)
     widths = user_intervals[:, 1] - user_intervals[:, 0]
     coord = _build_fit_coordinate(support, mids, weights, widths)
-    obs = _build_interval_observations(user_intervals, weights, coordinate=coord)
+    obs = _build_interval_observations(
+        user_intervals,
+        _normalized_weights(len(user_intervals), weights, "interval"),
+        coordinate=coord,
+    )
     spec = _build_model_spec(coord, 4, True, True)
     params = _natural_params(spec, -0.1, [0.8, 0.15], 0.4, 0.25)
     bounds = (float(obs.intervals[:, 0].min()), float(obs.intervals[:, 1].max()))
@@ -317,7 +321,11 @@ def test_zero_width_interval_objective_equals_point_objective():
     stats = _build_empirical_stats(z, weights, 8, spec.support)
     pfun = _point_objective(spec, _PointObservations(stats), (z.min(), z.max()))
     intervals = np.column_stack([x, x])
-    iobs = _build_interval_observations(intervals, weights, coordinate=coord)
+    iobs = _build_interval_observations(
+        intervals,
+        _normalized_weights(len(intervals), weights, "interval"),
+        coordinate=coord,
+    )
     ifun = _interval_objective(spec, iobs, (z.min(), z.max()))
     pe = pfun(params)
     ie = ifun(params)
@@ -345,7 +353,11 @@ def test_near_exponential_right_tail_reducer_preserves_high_order_moments():
     ]
     support = (0.0, np.inf)
     coord = _build_interval_fit_coordinate(support, intervals, weights)
-    obs = _build_interval_observations(intervals, weights, coordinate=coord)
+    obs = _build_interval_observations(
+        intervals,
+        _normalized_weights(len(intervals), weights, "interval"),
+        coordinate=coord,
+    )
     spec = _build_model_spec(coord, 4, True, False)
 
     # Exact exponential slope plus a tiny positive curvature.  The latter
@@ -395,7 +407,11 @@ def test_infinite_interval_objective_matches_direct_tail_probabilities_and_deriv
     )
     weights = np.array([0.2, 0.35, 0.3, 0.15])
     coord = _build_interval_fit_coordinate(support, intervals, weights)
-    obs = _build_interval_observations(intervals, weights, coordinate=coord)
+    obs = _build_interval_observations(
+        intervals,
+        _normalized_weights(len(intervals), weights, "interval"),
+        coordinate=coord,
+    )
     spec = _build_model_spec(coord, 4)
     params = _natural_params(spec, -0.08, [0.85, 0.04, 0.3])
     finite = obs.intervals[np.isfinite(obs.intervals)]

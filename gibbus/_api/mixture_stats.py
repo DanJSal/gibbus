@@ -36,6 +36,7 @@ from .._postfit.analytics import _exp_stats_from_log_moments
 from .._postfit.evaluators import _potential_exp_from_x_potential
 from .._postfit.logsumexp import _neg_log_mix_derivs_batch, _neg_logsumexp_batch
 from .._spectral.cdf import SpectralCDF, density_spec
+from .._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 from .._spectral.ppf import SpectralPPF
 
 
@@ -226,7 +227,9 @@ class _MixtureAnalyticsMixin:
             return self._mode_cache
         self._ensure_fitted()
         comp_modes = [c.base.mode for c in self._components]
-        base_modes = _find_mixture_modes_base(self._mix_base_potential, comp_modes)
+        base_modes = _find_mixture_modes_base(
+            self._mix_base_potential, comp_modes, vectorized=True
+        )
         modes = {"base": base_modes}
         self._mode_cache = modes
         return modes
@@ -283,7 +286,7 @@ class _MixtureAnalyticsMixin:
         out = all_derivs[n]
         return out.item() if scalar else out
 
-    def _mix_base_log_tail_mass(self, x, endpoint, /, *, upper=False):
+    def _mix_base_log_tail_mass(self, x, endpoint, /, *, upper):
         """Combine exact component tail masses with a compiled stable reduction.
 
         Parameters
@@ -292,7 +295,7 @@ class _MixtureAnalyticsMixin:
             Tail anchor in base coordinates.
         endpoint : float
             Support endpoint in the requested tail direction.
-        upper : bool, optional
+        upper : bool
             Select the upper tail instead of the lower tail.
         """
         with np.errstate(divide="ignore"):
@@ -304,7 +307,7 @@ class _MixtureAnalyticsMixin:
             )
         return float(-_neg_logsumexp_batch(np.ascontiguousarray(logs))[0])
 
-    def _mix_base_log_tail_masses(self, x, endpoint, /, *, upper=False):
+    def _mix_base_log_tail_masses(self, x, endpoint, /, *, upper):
         """Batched ``_mix_base_log_tail_mass`` over an array of anchors.
 
         Parameters
@@ -313,7 +316,7 @@ class _MixtureAnalyticsMixin:
             Tail anchors in base coordinates.
         endpoint : float
             Support endpoint in the requested tail direction.
-        upper : bool, optional
+        upper : bool
             Select the upper tail instead of the lower tail.
         """
         xs = np.asarray(x, dtype=np.float64).reshape(-1)
@@ -422,9 +425,12 @@ class _MixtureAnalyticsMixin:
             density=density_spec(parts, view=True),
             mode=mode,
             std=std,
+            map_scale=None,
+            initial_breaks=None,
+            config=_SpectralCDFOptions(),
         )
         try:
-            ppf_rep = SpectralPPF(cdf_rep)
+            ppf_rep = SpectralPPF(cdf_rep, config=_SpectralPPFOptions())
         except NUMERIC_FAILURES as exc:
             # Same contract as the component fitted-state path:
             # an inverse that will not certify monotone must not take the

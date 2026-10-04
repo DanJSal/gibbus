@@ -19,12 +19,12 @@ errors of zero is reported as weakly identified.
 import numpy as np
 from scipy.stats import chi2
 
+from .._defaults import _reraise_if_debug
+
 AUTO = "auto"
 """Boundary policy meaning "decide from the data"."""
 
 _SIDES = ("lower", "upper")
-BOUNDARY_ALPHA = 0.05
-"""Test level for keeping an automatically chosen boundary term."""
 
 
 def _effective_n(n_rows, weights, /):
@@ -34,17 +34,12 @@ def _effective_n(n_rows, weights, /):
     ----------
     n_rows : int
         Number of observation rows.
-    weights : array_like or None
-        Nonnegative row weights, or ``None`` for equal weights.
+    weights : numpy.ndarray, shape (n_rows,), dtype float64 or None
+        Boundary-normalized row weights, or ``None`` for equal weights.
     """
     if weights is None:
         return float(n_rows)
-    w = np.asarray(weights, dtype=np.float64).reshape(-1)
-    total = float(np.sum(w))
-    if not total > 0.0:
-        return 0.0
-    w = w / total
-    return float(1.0 / np.dot(w, w))
+    return float(1.0 / np.dot(weights, weights))
 
 
 def _boundary_p_value(nll_without, nll_with, effective_n, /):
@@ -74,7 +69,7 @@ def _select_boundary_terms(
     *,
     fit_reduced=None,
     refit=None,
-    alpha=BOUNDARY_ALPHA,
+    alpha,
 ):
     """Fit with automatic boundary terms decided by one-sided LR tests.
 
@@ -98,8 +93,8 @@ def _select_boundary_terms(
         ``refit(lower, upper)`` gives the final fit once a term has been
         dropped (for instance, rerunning degree selection); defaults to the
         nested fit.
-    alpha : float, optional
-        Test level.
+    alpha : float
+        Explicit test level resolved by the caller.
 
     Returns
     -------
@@ -200,7 +195,10 @@ def _amplitude_standard_errors(
     h = 0.5 * (h + h.T)
     try:
         eigenvalues, vectors = np.linalg.eigh(h)
-    except np.linalg.LinAlgError:
+    except np.linalg.LinAlgError as exc:
+        # Boundary standard errors are diagnostic only; a singular information
+        # matrix may degrade to unavailable (NaN) uncertainty without failing fit.
+        _reraise_if_debug(exc, "boundary amplitude standard errors")
         return out
     top = float(np.max(np.abs(eigenvalues))) if eigenvalues.size else 0.0
     positive = eigenvalues > 1e-12 * max(top, np.finfo(np.float64).tiny)

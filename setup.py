@@ -11,6 +11,7 @@ optimize away.
 
 import os
 import sys
+import tempfile
 
 import numpy as np
 from Cython.Build import cythonize
@@ -23,7 +24,13 @@ from setuptools.command.build_ext import build_ext
 
 
 def _env_flag(name):
-    """Return whether a build environment variable contains a truthy token."""
+    """Return whether a build environment variable contains a truthy token.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable to interpret; unset values are false.
+    """
     value = os.environ.get(name)
     return value is not None and value.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -129,9 +136,15 @@ extensions = cythonize(
 
 
 def _accepts_flag(compiler, flag):
-    """Return whether ``compiler`` compiles a trivial file with ``flag``."""
-    import tempfile
+    """Return whether ``compiler`` compiles a trivial file with ``flag``.
 
+    Parameters
+    ----------
+    compiler : setuptools compiler
+        Initialized compiler used by the extension build.
+    flag : str
+        Optional compiler flag to probe without affecting production sources.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         source = os.path.join(tmp, "probe.c")
         with open(source, "w", encoding="utf-8") as handle:

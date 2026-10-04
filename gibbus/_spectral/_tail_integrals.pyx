@@ -445,6 +445,13 @@ cdef class TailIntegrator:
     cdef TailUd* _ud
 
     def __init__(self, q_poly):
+        """Prepare owned polynomial data and a reusable tail-quadrature callback.
+
+        Parameters
+        ----------
+        q_poly : array_like
+            Nonempty potential coefficients in increasing power order.
+        """
         self._buf, self._cap = _make_ud(q_poly)
         self._ud = _from_cap(self._cap)
         self._llc = LowLevelCallable.from_cython(
@@ -463,14 +470,34 @@ cdef class TailIntegrator:
         double mu_eff,
         double sigma_eff,
         *,
-        double epsabs=1e-12,
-        int limit=200,
+        double epsabs,
+        int limit,
     ):
         """Return ``(log_tail_mass, quad_message_or_None)`` for one query.
 
         The prepared callback data are reused between calls.  A per-context
         lock keeps the mutable scalar query fields coherent when a fitted
         component is evaluated concurrently from multiple threads.
+
+        Parameters
+        ----------
+        x : float
+            Tail anchor in public base coordinates.
+        endpoint : float
+            Outward support endpoint in the same coordinates as ``x``.
+        upper : bool
+            Whether the upper rather than lower tail is requested.
+        support : array_like, shape (2,)
+            Support bounds in public base coordinates.
+        boundary_amplitudes : array_like, shape (2,)
+            Lower and upper physical-side logarithmic amplitudes.
+        mu_eff, sigma_eff : float
+            Affine map ``z = mu_eff + sigma_eff * x`` to polynomial coordinates;
+            the scale is finite and nonzero and may be negative.
+        epsabs : float
+            Absolute tolerance for the scaled relative-tail integral.
+        limit : int
+            Maximum adaptive quadrature panel count.
         """
         with self._lock:
             return self._log_mass_unlocked(
@@ -511,8 +538,8 @@ cdef class TailIntegrator:
         double mu_eff,
         double sigma_eff,
         *,
-        double epsabs=1e-12,
-        int limit=200,
+        double epsabs,
+        int limit,
     ):
         """Return ``(log_tail_masses, n_unconverged)`` for many anchors at once.
 
@@ -520,6 +547,26 @@ cdef class TailIntegrator:
         tolerance).  The anchors are ordered toward ``endpoint``; the most
         extreme gets a full adaptive integration and every other one adds the
         integral up to its neighbor in log space.
+
+        Parameters
+        ----------
+        x : array_like
+            Tail anchors in public base coordinates, flattened in the result.
+        endpoint : float
+            Common outward support endpoint in public base coordinates.
+        upper : bool
+            Whether the upper rather than lower tail is requested.
+        support : array_like, shape (2,)
+            Support bounds in public base coordinates.
+        boundary_amplitudes : array_like, shape (2,)
+            Lower and upper physical-side logarithmic amplitudes.
+        mu_eff, sigma_eff : float
+            Affine map from public base to polynomial coordinates; scale may be
+            negative but must be finite and nonzero.
+        epsabs : float
+            Absolute tolerance for the initial scaled tail integral.
+        limit : int
+            Workspace/adaptive-panel budget, at least four.
         """
         cdef cnp.ndarray[cnp.float64_t, ndim=1] xs = np.ascontiguousarray(
             x, dtype=np.float64
@@ -544,32 +591,36 @@ cdef class TailIntegrator:
         work = <double*> malloc(4 * limit * sizeof(double))
         if work == NULL:
             raise MemoryError("tail mass workspace")
-        with self._lock:
-            self._setup(
-                endpoint, upper, support, boundary_amplitudes, mu_eff, sigma_eff
-            )
-            with nogil:
-                j = ip[0]
-                current = _full_log_mass(self._ud, xp[j], epsabs, limit, work, &failed)
-                op[j] = current
-                prev = j
-                for i in range(1, n):
-                    j = ip[i]
-                    if xp[j] == xp[prev]:
-                        op[j] = current
-                        continue
-                    if upper:
-                        piece = _log_piece(
-                            self._ud, xp[j], xp[prev], limit, work, &failed
-                        )
-                    else:
-                        piece = _log_piece(
-                            self._ud, xp[prev], xp[j], limit, work, &failed
-                        )
-                    current = _logaddexp(current, piece)
+        try:
+            with self._lock:
+                self._setup(
+                    endpoint, upper, support, boundary_amplitudes, mu_eff, sigma_eff
+                )
+                with nogil:
+                    j = ip[0]
+                    current = _full_log_mass(
+                        self._ud, xp[j], epsabs, limit, work, &failed
+                    )
                     op[j] = current
                     prev = j
-        free(work)
+                    for i in range(1, n):
+                        j = ip[i]
+                        if xp[j] == xp[prev]:
+                            op[j] = current
+                            continue
+                        if upper:
+                            piece = _log_piece(
+                                self._ud, xp[j], xp[prev], limit, work, &failed
+                            )
+                        else:
+                            piece = _log_piece(
+                                self._ud, xp[prev], xp[j], limit, work, &failed
+                            )
+                        current = _logaddexp(current, piece)
+                        op[j] = current
+                        prev = j
+        finally:
+            free(work)
         len(self._refs)
         return out, failed
 

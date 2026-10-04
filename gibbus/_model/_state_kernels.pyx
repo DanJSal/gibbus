@@ -19,6 +19,8 @@ import numpy as np
 cimport numpy as cnp
 
 from libc.math cimport fabs, log, sqrt, isinf, isnan, exp as c_exp, NAN, INFINITY
+from libc.math cimport nextafter
+from libc.stdlib cimport malloc, free
 
 cnp.import_array()
 
@@ -824,6 +826,19 @@ cpdef cnp.ndarray _pdf_vec(
     Replaces the Python ``gibbus._model.vec`` PDF path with a single C loop that fuses
     Horner polynomial evaluation, boundary log terms, exponentiation,
     and support masking.  Avoids all intermediate array allocations.
+
+    Parameters
+    ----------
+    x_arr : numpy.ndarray
+        Evaluation coordinates; returned values follow their flattened ordering.
+    support : tuple of float
+        Lower and upper support bounds in the evaluation coordinates.
+    q_poly_arr : numpy.ndarray
+        Nonempty potential coefficients in increasing power order.
+    boundary_amplitudes_arr : numpy.ndarray, shape (2,)
+        Lower and upper logarithmic amplitudes; absent bases are ``nan``.
+    log_norm : float
+        Additive logarithmic normalizer in the potential.
     """
     cdef cnp.ndarray[cnp.float64_t, ndim=1] x = np.ascontiguousarray(
         x_arr, dtype=np.float64
@@ -902,6 +917,13 @@ cpdef cnp.ndarray _polyval_vec(
     """Vectorized Horner polynomial evaluation.
     Replacement for numpy.polynomial.polynomial.polyval when called
     on a 1-D array with a small coefficient vector.
+
+    Parameters
+    ----------
+    x_arr : numpy.ndarray
+        Evaluation coordinates; returned values follow their flattened ordering.
+    poly_arr : numpy.ndarray
+        Increasing-power coefficients. An empty vector evaluates to zero.
     """
     cdef cnp.ndarray[cnp.float64_t, ndim=1] x = np.ascontiguousarray(
         x_arr, dtype=np.float64
@@ -949,9 +971,6 @@ cpdef cnp.ndarray _polyval_vec(
 # ``power_moments`` traversal.  At each panel the fifteen nodes are
 # evaluated once into contiguous arrays; every feature is then two dot
 # products over those arrays (SIMD reductions under ``-fopenmp-simd``).
-
-from libc.stdlib cimport malloc, free
-from libc.math cimport nextafter
 
 cdef extern from * nogil:
     """
@@ -1385,6 +1404,19 @@ def state_numerics(
     cdef cnp.ndarray[cnp.float64_t, ndim=1] moments = np.zeros(F, dtype=np.float64)
     cdef cnp.ndarray[cnp.float64_t, ndim=1] means = np.zeros(n, dtype=np.float64)
     cdef cnp.ndarray[cnp.float64_t, ndim=2] fisher = np.zeros((n, n), dtype=np.float64)
+    cdef const double* support_ptr = &support[0]
+    cdef const double* q_ptr = &q_poly[0]
+    cdef const double* amplitudes_ptr = &amplitudes[0]
+    cdef const double* data_bounds_ptr = &data_bounds[0]
+    cdef const int* kinds_ptr = &kinds[0] if n > 0 else NULL
+    cdef const int* lengths_ptr = &lengths[0] if n > 0 else NULL
+    cdef const double* coefficients_ptr = &coefficients[0, 0] if n > 0 else NULL
+    cdef const double* controls_ptr = &controls[0]
+    cdef double* geometry_ptr = &geometry[0]
+    cdef double* points_ptr = &points_buf[0]
+    cdef double* moments_ptr = &moments[0]
+    cdef double* means_ptr = &means[0] if n > 0 else NULL
+    cdef double* fisher_ptr = &fisher[0, 0] if n > 0 else NULL
     cdef double* work = <double*>malloc(
         (3 * nq + 2 * limit * F + 2 * limit + 8 * F) * sizeof(double)
     )
@@ -1395,14 +1427,12 @@ def state_numerics(
     try:
         with nogil:
             status = _state_numerics_c(
-                &support[0], &q_poly[0], nq, &amplitudes[0], &data_bounds[0],
+                support_ptr, q_ptr, nq, amplitudes_ptr, data_bounds_ptr,
                 featL, featU, n_power, n_log, F,
-                &kinds[0] if n > 0 else NULL, &lengths[0] if n > 0 else NULL,
-                &coefficients[0, 0] if n > 0 else NULL, n, width,
-                &controls[0], epsabs, epsrel, limit, work,
-                &geometry[0], &points_buf[0], &npts, &shifted_z,
-                &moments[0], &means[0] if n > 0 else NULL,
-                &fisher[0, 0] if n > 0 else NULL,
+                kinds_ptr, lengths_ptr, coefficients_ptr, n, width,
+                controls_ptr, epsabs, epsrel, limit, work,
+                geometry_ptr, points_ptr, &npts, &shifted_z,
+                moments_ptr, means_ptr, fisher_ptr,
             )
     finally:
         free(work)

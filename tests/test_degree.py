@@ -15,6 +15,7 @@ from gibbus._fit.degree import (
     _probe_orders_for_degree,
 )
 from gibbus._fit.mixture_degree import _joint_omitted_statistic_diagnostic
+from gibbus._fit.natural_mixture import _EMOptions, _MixtureSearchOptions
 from gibbus._fit.natural_objective import (
     _degree_diagnostic_fit,
     _fit_natural_conic_intervals,
@@ -46,15 +47,20 @@ def _interval_fit(support, rows, degree, lower=False, upper=False, /):
 
 def _point_auto(support, x, lower=False, upper=False, weights=None, /):
     """Automatic-degree point fit; returns its objective."""
-    return _fit_natural_conic_points_auto(support, x, lower, upper, weights)[0]
+    return _fit_natural_conic_points_auto(
+        support, x, lower, upper, weights, degree_config=_DegreeSelectionConfig()
+    )[0]
 
 
 def _interval_auto(support, rows, /):
-    return _fit_natural_conic_intervals_auto(support, rows)[0]
+    return _fit_natural_conic_intervals_auto(
+        support, rows, degree_config=_DegreeSelectionConfig()
+    )[0]
 
 
 def _joint_diagnostic(information, gradient, row_scores, weights=None, **kwargs):
     rows = len(row_scores)
+    kwargs.setdefault("config", _DegreeSelectionConfig())
     return _joint_omitted_statistic_diagnostic(
         gradient=np.asarray(gradient, dtype=float),
         observed_information=np.asarray(information, dtype=float),
@@ -164,6 +170,7 @@ def test_shared_degree_growth_changes_one_component_and_honors_fixed_policy(
         rows=np.zeros((100, 1)),
         observation_weights=np.full(100, 0.01),
         refit=refit,
+        degree_config=_DegreeSelectionConfig(),
     )
     assert calls == [(2, 4, 6), (4, 4, 6)]
     assert [item["expanded_component"] for item in result.degree_diagnostics] == [
@@ -283,12 +290,13 @@ def test_separated_shared_degree_growth_detects_only_quartic_component(monkeypat
     resp[2000:, 1] = 1
     fitted = natural_mixture._fit_natural_mixture(
         (-np.inf, np.inf),
-        x,
+        x[:, None],
         2,
-        "auto",
+        ("auto", "auto"),
+        degree_config=_DegreeSelectionConfig(),
         responsibilities=resp,
-        paths=(("direct", "raw"),),
-        max_em_steps=10,
+        search_options=_MixtureSearchOptions(paths=(("direct", "raw"),)),
+        em_options=_EMOptions(max_steps=10),
     )
     assert tuple(c.spec.requested_poly_degree for c in fitted.components) == (4, 2)
     assert fitted.degree_diagnostics[0]["expanded_component"] == 0
@@ -306,18 +314,21 @@ def test_joint_degree_k1_reuses_existing_point_diagnostic():
         (-np.inf, np.inf),
         rows,
         1,
-        2,
+        (2,),
+        degree_config=_DegreeSelectionConfig(),
         responsibilities=np.ones((len(x), 1)),
-        paths=(("direct", "raw"),),
+        search_options=_MixtureSearchOptions(paths=(("direct", "raw"),)),
     )
     ((index, actual),) = mixture_degree._shared_degree_diagnostics(
-        fitted, ("auto",), rows, weights
+        fitted, ("auto",), rows, weights, _DegreeSelectionConfig()
     )
     objective = _prepare_natural_point_objective(
         (-np.inf, np.inf), x, 2, False, False, weights, moment_order=8
     )
     single = _degree_diagnostic_fit(objective, fitted.components[0].solver_result)
-    expected = _omitted_statistic_diagnostic(single, (3, 4))
+    expected = _omitted_statistic_diagnostic(
+        single, (3, 4), config=_DegreeSelectionConfig()
+    )
     assert index == 0
     assert actual.score == pytest.approx(expected.score, rel=1e-7, abs=1e-8)
     np.testing.assert_allclose(actual.participation, expected.participation)
@@ -345,7 +356,9 @@ def test_gaussian_degree_two_has_no_resolvable_omitted_block():
     rng = np.random.default_rng(2)
     x = rng.normal(size=3000)
     fit = _point_fit((-np.inf, np.inf), x, 2, moment_order=12)
-    diagnostic = _omitted_statistic_diagnostic(fit, (3, 4))
+    diagnostic = _omitted_statistic_diagnostic(
+        fit, (3, 4), config=_DegreeSelectionConfig()
+    )
     assert diagnostic.rank >= 1
     assert not diagnostic.should_expand
     assert diagnostic.p_value > 0.01
@@ -355,7 +368,9 @@ def test_quartic_log_concave_shape_requests_more_capacity():
     rng = np.random.default_rng(3)
     x = gennorm.rvs(beta=4.0, size=4000, random_state=rng)
     fit = _point_fit((-np.inf, np.inf), np.ascontiguousarray(x), 2, moment_order=12)
-    diagnostic = _omitted_statistic_diagnostic(fit, (3, 4))
+    diagnostic = _omitted_statistic_diagnostic(
+        fit, (3, 4), config=_DegreeSelectionConfig()
+    )
     assert diagnostic.should_expand
     assert diagnostic.p_value < 1e-4
 
@@ -403,7 +418,9 @@ def test_interval_diagnostic_matches_narrow_point_intuition():
     x = rng.normal(size=1500)
     intervals = np.column_stack([x - 0.01, x + 0.01])
     fit = _interval_fit((-np.inf, np.inf), intervals, 2)
-    diagnostic = _interval_omitted_statistic_diagnostic(fit, (3, 4))
+    diagnostic = _interval_omitted_statistic_diagnostic(
+        fit, (3, 4), config=_DegreeSelectionConfig()
+    )
     assert diagnostic.rank == 2
     assert not diagnostic.should_expand
 
@@ -416,7 +433,9 @@ def test_interval_diagnostic_preserves_sub_ulp_boundary_point_distance():
     assert fit.observations.intervals[tiny, 0] == fit.observations.support[0]
     assert 0.0 < fit.observations.point_lower_distance[tiny] < 1e-18
 
-    diagnostic = _interval_omitted_statistic_diagnostic(fit, (3, 4))
+    diagnostic = _interval_omitted_statistic_diagnostic(
+        fit, (3, 4), config=_DegreeSelectionConfig()
+    )
 
     assert np.all(np.isfinite(diagnostic.efficient_residual))
     assert np.isfinite(diagnostic.score)
@@ -428,7 +447,9 @@ def test_interval_diagnostic_detects_quartic_shape():
     x = gennorm.rvs(beta=4.0, size=2000, random_state=rng)
     intervals = np.column_stack([x - 0.01, x + 0.01])
     fit = _interval_fit((-np.inf, np.inf), intervals, 2)
-    diagnostic = _interval_omitted_statistic_diagnostic(fit, (3, 4))
+    diagnostic = _interval_omitted_statistic_diagnostic(
+        fit, (3, 4), config=_DegreeSelectionConfig()
+    )
     assert diagnostic.should_expand
     assert diagnostic.p_value < 1e-5
 
@@ -506,7 +527,9 @@ def test_infinite_interval_diagnostic_uses_adaptive_missing_information():
             rows.append((value - 0.02, value + 0.02))
     intervals = np.asarray(rows, dtype=float)
     fit = _interval_fit((-np.inf, np.inf), intervals, 2)
-    diagnostic = _interval_omitted_statistic_diagnostic(fit, (3, 4))
+    diagnostic = _interval_omitted_statistic_diagnostic(
+        fit, (3, 4), config=_DegreeSelectionConfig()
+    )
     assert diagnostic.rank >= 1
     assert not diagnostic.should_expand
 
@@ -531,7 +554,9 @@ def test_auto_selector_runs_on_full_boundary_cone():
     """Enabled amplitudes remain part of every degree candidate."""
     rng = np.random.default_rng(102)
     x = np.ascontiguousarray(rng.gamma(2.0, 1.0, 900))
-    objective, result = _fit_natural_conic_points_auto((0.0, np.inf), x, True, False)
+    objective, result = _fit_natural_conic_points_auto(
+        (0.0, np.inf), x, True, False, degree_config=_DegreeSelectionConfig()
+    )
     assert 2 <= objective.spec.requested_poly_degree <= 12
     assert objective.layout.lower_a_index is not None
     assert result.status in ("converged", "converged_approximately")

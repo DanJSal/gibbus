@@ -568,6 +568,8 @@ cdef class SpectralEvaluator:
                 free(work1)
             if work2 != NULL:
                 free(work2)
+            # The scalar path needs no workspace and preserves query semantics.
+            # noexcept nogil code cannot use the Python failure ledger.
             self._eval_many(x, out, n)
             return
 
@@ -730,6 +732,8 @@ cdef class SpectralEvaluator:
                 free(work1)
             if work2 != NULL:
                 free(work2)
+            # The scalar path needs no workspace and preserves query semantics.
+            # noexcept nogil code cannot use the Python failure ledger.
             self._eval_many(x, out, n)
             return
 

@@ -7,10 +7,16 @@ import itertools
 import numpy as np
 from scipy.integrate import quad
 
-from .._defaults import EXPECT_MAX_RELATIVE_ERROR
+from .._defaults import (
+    EXPECT_EPSABS,
+    EXPECT_EPSREL,
+    EXPECT_MAX_RELATIVE_ERROR,
+    EXPECT_SCALAR_LIMIT,
+    EXPECT_VECTORIZED_LIMIT,
+)
 
 
-def expect(potential, support, func, /, *, points=None):
+def expect(potential, support, func, /, *, points):
     """Compute ``E[g(X)]`` under a normalized fitted potential.
 
     Parameters
@@ -21,7 +27,7 @@ def expect(potential, support, func, /, *, points=None):
         Integration support.
     func : callable
         Scalar function ``g``. Non-finite interior values are rejected.
-    points : sequence of float or None, optional
+    points : sequence of float or None
         Interior quadrature breakpoints for finite integration ranges.
     """
     lo, hi = map(float, support)
@@ -53,13 +59,21 @@ def expect(potential, support, func, /, *, points=None):
             )
         return float(gx * density)
 
-    kwargs = {"epsabs": 1e-10, "epsrel": 1e-10, "limit": 300}
+    breakpoints = None
     if np.isfinite(lo) and np.isfinite(hi) and points is not None:
         pts = np.asarray(points, dtype=np.float64).reshape(-1)
         pts = pts[np.isfinite(pts) & (pts > lo) & (pts < hi)]
         if pts.size:
-            kwargs["points"] = np.unique(pts)
-    value, error = quad(integrand, lo, hi, **kwargs)
+            breakpoints = np.unique(pts)
+    value, error = quad(
+        integrand,
+        lo,
+        hi,
+        epsabs=EXPECT_EPSABS,
+        epsrel=EXPECT_EPSREL,
+        limit=EXPECT_SCALAR_LIMIT,
+        points=breakpoints,
+    )
     scale = max(abs(value), 1.0)
     if (
         not np.isfinite(value)
@@ -119,9 +133,7 @@ _GAUSS[[1, 3, 5, 7, 9]] = _WG10
 _GAUSS[[19, 17, 15, 13, 11]] = _WG10
 
 
-def expect_vectorized(
-    potential, support, func, /, *, points=None, epsabs=1e-10, epsrel=1e-10, limit=4000
-):
+def expect_vectorized(potential, support, func, /, *, points):
     """Compute ``E[g(X)]`` with a vectorized adaptive Gauss--Kronrod rule.
 
     Same contract as :func:`expect` for integrands that accept arrays:
@@ -130,7 +142,7 @@ def expect_vectorized(
     once per node through Python.  Semi-infinite pieces use
     ``x = a +/- s u / (1 - u)`` with ``s`` the density's width at its highest
     breakpoint; refinement bisects the panels carrying the largest errors
-    until the global error meets ``max(epsabs, epsrel |E|)``.
+    until the global error meets the package expectation tolerances.
 
     Parameters
     ----------
@@ -141,12 +153,8 @@ def expect_vectorized(
     func : callable
         Vectorized ``g``; non-finite values where the density is positive
         are rejected.
-    points : sequence of float or None, optional
+    points : sequence of float or None
         Interior breakpoints (typically the mode or modes).
-    epsabs, epsrel : float, optional
-        Global error targets.
-    limit : int, optional
-        Maximum number of panels.
     """
     lo, hi = map(float, support)
     pts = np.asarray(points if points is not None else (), dtype=np.float64).reshape(-1)
@@ -154,9 +162,11 @@ def expect_vectorized(
     if pts.size == 0 and not (np.isfinite(lo) and np.isfinite(hi)):
         pts = np.array(
             [
-                0.0
-                if not (np.isfinite(lo) or np.isfinite(hi))
-                else (lo + 1.0 if np.isfinite(lo) else hi - 1.0)
+                (
+                    0.0
+                    if not (np.isfinite(lo) or np.isfinite(hi))
+                    else (lo + 1.0 if np.isfinite(lo) else hi - 1.0)
+                )
             ]
         )
     width = 1.0
@@ -230,14 +240,14 @@ def expect_vectorized(
     while True:
         total = float(np.sum(value))
         total_error = float(np.sum(error))
-        tolerance = max(epsabs, epsrel * abs(total))
-        if total_error <= tolerance or value.size >= limit:
+        tolerance = max(EXPECT_EPSABS, EXPECT_EPSREL * abs(total))
+        if total_error <= tolerance or value.size >= EXPECT_VECTORIZED_LIMIT:
             break
         order = np.argsort(-error)
         needed = (
             np.searchsorted(np.cumsum(error[order]), total_error - 0.5 * tolerance) + 1
         )
-        split = order[: min(int(needed), limit - value.size)]
+        split = order[: min(int(needed), EXPECT_VECTORIZED_LIMIT - value.size)]
         if split.size == 0:
             break
         mid = 0.5 * (pa[split] + pb[split])

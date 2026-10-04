@@ -11,6 +11,7 @@ import pytest
 from scipy import stats
 
 from gibbus._defaults import BOOTSTRAP_MAX_FAILURE_FRACTION
+from gibbus._postfit import resample as resample_module
 from gibbus._postfit.gof import (
     GOF_STATISTICS,
     asymptotic_pvalue,
@@ -31,10 +32,11 @@ from gibbus._postfit.resample import (
 @pytest.mark.parametrize("n", [10, 97, 1000])
 def test_ks_and_cvm_statistics_match_scipy(n):
     u = np.random.default_rng(11).random(n)
-    assert gof_statistic(u, "ks") == pytest.approx(
+    pit = canonical_pit(u)
+    assert gof_statistic(pit, "ks") == pytest.approx(
         stats.kstest(u, "uniform").statistic, rel=1e-12
     )
-    assert gof_statistic(u, "cvm") == pytest.approx(
+    assert gof_statistic(pit, "cvm") == pytest.approx(
         stats.cramervonmises(u, "uniform").statistic, rel=1e-12
     )
 
@@ -42,10 +44,11 @@ def test_ks_and_cvm_statistics_match_scipy(n):
 @pytest.mark.parametrize("n", [10, 97, 1000])
 def test_ks_and_cvm_pvalues_match_scipy(n):
     u = np.random.default_rng(12).random(n)
-    assert asymptotic_pvalue(u, "ks") == pytest.approx(
+    pit = canonical_pit(u)
+    assert asymptotic_pvalue(pit, "ks", gof_statistic(pit, "ks")) == pytest.approx(
         stats.kstest(u, "uniform").pvalue, rel=1e-12
     )
-    assert asymptotic_pvalue(u, "cvm") == pytest.approx(
+    assert asymptotic_pvalue(pit, "cvm", gof_statistic(pit, "cvm")) == pytest.approx(
         stats.cramervonmises(u, "uniform").pvalue, rel=1e-12
     )
 
@@ -58,22 +61,26 @@ def test_anderson_darling_null_mean_is_one():
     cannot (SciPy exposes no uniform Anderson-Darling statistic).
     """
     rng = np.random.default_rng(13)
-    draws = np.array([gof_statistic(rng.random(500), "ad") for _ in range(3000)])
+    draws = np.array(
+        [gof_statistic(canonical_pit(rng.random(500)), "ad") for _ in range(3000)]
+    )
     assert draws.mean() == pytest.approx(1.0, abs=0.06)
     assert np.all(np.isfinite(draws))
 
 
 def test_cramer_von_mises_null_mean_is_one_sixth():
     rng = np.random.default_rng(14)
-    draws = np.array([gof_statistic(rng.random(400), "cvm") for _ in range(3000)])
+    draws = np.array(
+        [gof_statistic(canonical_pit(rng.random(400)), "cvm") for _ in range(3000)]
+    )
     assert draws.mean() == pytest.approx(1.0 / 6.0, abs=0.01)
 
 
 @pytest.mark.parametrize("statistic", GOF_STATISTICS)
 def test_statistics_detect_non_uniformity(statistic):
     rng = np.random.default_rng(15)
-    uniform = gof_statistic(rng.random(400), statistic)
-    skewed = gof_statistic(rng.random(400) ** 3, statistic)
+    uniform = gof_statistic(canonical_pit(rng.random(400)), statistic)
+    skewed = gof_statistic(canonical_pit(rng.random(400) ** 3), statistic)
     assert skewed > uniform
 
 
@@ -85,12 +92,13 @@ def test_statistics_are_finite_at_support_endpoints(statistic):
     make the statistic report a perfect fit as infinitely bad.
     """
     u = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
-    assert np.isfinite(gof_statistic(u, statistic))
+    assert np.isfinite(gof_statistic(canonical_pit(u), statistic))
 
 
 def test_anderson_darling_has_no_asymptotic_pvalue():
     """`None` records the absence of a calibrated reference, not a failure."""
-    assert asymptotic_pvalue(np.linspace(0.05, 0.95, 20), "ad") is None
+    pit = canonical_pit(np.linspace(0.05, 0.95, 20))
+    assert asymptotic_pvalue(pit, "ad", gof_statistic(pit, "ad")) is None
 
 
 def test_gof_statistic_is_order_invariant():
@@ -98,8 +106,8 @@ def test_gof_statistic_is_order_invariant():
     u = rng.random(50)
     shuffled = rng.permutation(u)
     for statistic in GOF_STATISTICS:
-        assert gof_statistic(u, statistic) == pytest.approx(
-            gof_statistic(shuffled, statistic), rel=1e-14
+        assert gof_statistic(canonical_pit(u), statistic) == pytest.approx(
+            gof_statistic(canonical_pit(shuffled), statistic), rel=1e-14
         )
 
 
@@ -181,14 +189,15 @@ def test_bootstrap_curves_resamples_rows_with_replacement():
         n_resamples=25,
         level=0.9,
         rng=np.random.default_rng(18),
+        max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
     )
     assert result["n_resamples"] == 25
     assert result["n_failed"] == 0
     assert all(idx.size == 40 for idx in seen)
     assert all(idx.min() >= 0 and idx.max() < 40 for idx in seen)
-    assert any(np.unique(idx).size < 40 for idx in seen), (
-        "draws must be with replacement"
-    )
+    assert any(
+        np.unique(idx).size < 40 for idx in seen
+    ), "draws must be with replacement"
     assert result["lower"] <= result["upper"]
 
 
@@ -196,11 +205,42 @@ def test_bootstrap_curves_is_deterministic_under_equal_seeds():
     def evaluate(indices):
         return np.array([float(indices.sum())])
 
-    kwargs = {"n_resamples": 20, "level": 0.95}
+    kwargs = {
+        "n_resamples": 20,
+        "level": 0.95,
+        "max_failure_fraction": BOOTSTRAP_MAX_FAILURE_FRACTION,
+    }
     first = bootstrap_curves(evaluate, 30, 1, rng=np.random.default_rng(19), **kwargs)
     second = bootstrap_curves(evaluate, 30, 1, rng=np.random.default_rng(19), **kwargs)
     assert np.array_equal(first["lower"], second["lower"])
     assert np.array_equal(first["upper"], second["upper"])
+
+
+def test_resampling_helpers_consume_prevalidated_controls(monkeypatch):
+    def unexpected_validation(value):
+        raise AssertionError("canonical controls were validated again")
+
+    monkeypatch.setattr(
+        resample_module, "validate_resample_count", unexpected_validation
+    )
+    monkeypatch.setattr(resample_module, "validate_confidence", unexpected_validation)
+    result = bootstrap_curves(
+        lambda indices: np.array([float(indices.mean())]),
+        10,
+        1,
+        n_resamples=5,
+        level=0.9,
+        rng=np.random.default_rng(19),
+        max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+    )
+    assert result["n_resamples"] == 5
+    draws, n_failed = simulated_statistics(
+        lambda: 1.0,
+        n_resamples=5,
+        max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+    )
+    np.testing.assert_array_equal(draws, np.ones(5))
+    assert n_failed == 0
 
 
 def test_bootstrap_curves_counts_declined_and_non_finite_replicates():
@@ -221,6 +261,7 @@ def test_bootstrap_curves_counts_declined_and_non_finite_replicates():
         n_resamples=20,
         level=0.9,
         rng=np.random.default_rng(20),
+        max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
     )
     assert result["n_failed"] == 2
     assert result["n_resamples"] == 20
@@ -230,7 +271,7 @@ def test_bootstrap_curves_rejects_wrong_width_replicates():
     def evaluate(indices):
         return np.array([1.0, 2.0, 3.0])
 
-    with pytest.raises(RuntimeError, match="every bootstrap replicate failed"):
+    with pytest.raises(ValueError, match="returned 3 values; expected 2"):
         bootstrap_curves(
             evaluate,
             10,
@@ -238,6 +279,7 @@ def test_bootstrap_curves_rejects_wrong_width_replicates():
             n_resamples=4,
             level=0.9,
             rng=np.random.default_rng(21),
+            max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
         )
 
 
@@ -260,6 +302,7 @@ def test_bootstrap_curves_enforces_the_failure_budget():
             n_resamples=n_resamples,
             level=0.9,
             rng=np.random.default_rng(22),
+            max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
         )
 
 
@@ -272,6 +315,7 @@ def test_bootstrap_curves_raises_when_every_replicate_fails():
             n_resamples=6,
             level=0.9,
             rng=np.random.default_rng(23),
+            max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
         )
 
 
@@ -285,12 +329,17 @@ def test_bootstrap_curves_rejects_degenerate_shapes(rows, points):
             n_resamples=2,
             level=0.9,
             rng=np.random.default_rng(24),
+            max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
         )
 
 
 def test_simulated_statistics_returns_flat_finite_draws():
     values = iter([1.0, 2.0, None, 4.0, np.nan, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0])
-    draws, n_failed = simulated_statistics(lambda: next(values), n_resamples=12)
+    draws, n_failed = simulated_statistics(
+        lambda: next(values),
+        n_resamples=12,
+        max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+    )
     assert draws.ndim == 1
     assert n_failed == 2
     assert n_failed <= BOOTSTRAP_MAX_FAILURE_FRACTION * 12
@@ -301,4 +350,8 @@ def test_simulated_statistics_returns_flat_finite_draws():
 
 def test_simulated_statistics_propagates_the_failure_budget():
     with pytest.raises(RuntimeError, match="parametric bootstrap"):
-        simulated_statistics(lambda: None, n_resamples=5)
+        simulated_statistics(
+            lambda: None,
+            n_resamples=5,
+            max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+        )

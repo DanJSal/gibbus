@@ -1201,9 +1201,21 @@ cdef tuple _solve_face(
         or qoff.shape[0] != nb
     ):
         raise ValueError("invalid compiled mixture face geometry")
+    cdef const int* k_ptr = &k[0]
+    cdef const Py_ssize_t* aoff_ptr = &aoff[0]
+    cdef const Py_ssize_t* qoff_ptr = &qoff[0]
+    cdef const double* b_ptr = &b[0, 0]
+    cdef const double* a_ptr = &a[0] if na > 0 else NULL
+    cdef const double* ref_ptr = &ref[0]
+    cdef const Py_ssize_t* degrees_ptr = &degrees[0]
+    cdef double* theta_ptr = &theta[0]
+    cdef double* blocks_ptr = &blocks[0] if qtot > 0 else NULL
+    cdef double* gradient_ptr = &gradient[0]
+    cdef double* hessian_ptr = &hessian[0, 0]
+    cdef double* dual_ptr = &dual[0]
     with nogil:
         start = objective.evaluate(
-            objective.ctx, &theta[0], &nll, &gradient[0], &hessian[0, 0], &smallest
+            objective.ctx, theta_ptr, &nll, gradient_ptr, hessian_ptr, &smallest
         )
         if start == 0:
             objective.accept(objective.ctx)
@@ -1211,23 +1223,23 @@ cdef tuple _solve_face(
                 nf,
                 r,
                 nb,
-                &k[0],
-                &aoff[0],
-                &qoff[0],
+                k_ptr,
+                aoff_ptr,
+                qoff_ptr,
                 qtot,
                 na,
-                &b[0, 0],
-                &a[0],
-                &ref[0],
-                &degrees[0],
+                b_ptr,
+                a_ptr,
+                ref_ptr,
+                degrees_ptr,
                 objective,
-                &theta[0],
-                &blocks[0],
+                theta_ptr,
+                blocks_ptr,
                 &nll,
-                &gradient[0],
-                &hessian[0, 0],
+                gradient_ptr,
+                hessian_ptr,
                 &smallest,
-                &dual[0],
+                dual_ptr,
                 tolerance,
                 certified_tolerance,
                 accuracy_floor,
@@ -1331,6 +1343,7 @@ cdef class SharedMStepObjective:
     cdef MStep ctx
 
     def __cinit__(self, components):
+        """Own component buffers described by the class construction contract."""
         cdef int K = len(components), k
         cdef Component* c
         if K < 1:
@@ -1398,6 +1411,15 @@ cdef class SharedMStepObjective:
     def evaluate(self, columns, int n_free, params):
         """Evaluate every component's raw geometry at one face point.
 
+        Parameters
+        ----------
+        columns : sequence of arrays
+            Local-parameter to free-face column maps, with -1 for fixed zeros.
+        n_free : int
+            Positive number of free parameters on the face.
+        params : array_like, shape (n_free,)
+            Free-face evaluation point.
+
         Returns
         -------
         tuple
@@ -1423,9 +1445,12 @@ cdef class SharedMStepObjective:
         self._bind_face(refs, columns)
         _work = self._bind_work(n_free)
         self.ctx.raw = True
+        cdef double* x_ptr = &x[0]
+        cdef double* gradient_ptr = &gradient[0]
+        cdef double* metric_ptr = &metric[0, 0]
         with nogil:
             status = _mstep_evaluate(
-                &self.ctx, &x[0], &nll, &gradient[0], &metric[0, 0], &smallest
+                &self.ctx, x_ptr, &nll, gradient_ptr, metric_ptr, &smallest
             )
             if status == 0:
                 _mstep_accept(&self.ctx)
@@ -1458,6 +1483,33 @@ cdef class SharedMStepObjective:
         int min_steps=0,
     ):
         """Optimize one exact face of the coupled M-step objective.
+
+        Parameters
+        ----------
+        columns : sequence of arrays
+            Local-parameter to free-face columns, with -1 for fixed zeros.
+        n_free : int
+            Positive free-face parameter count.
+        params : array_like, shape (n_free,)
+            Initial free-face parameters.
+        blocks_packed : array_like
+            Packed positive-definite starting Gram blocks.
+        b_matrix, a_packed : array_like
+            Face constraint matrix and packed cone row operators.
+        sizes, a_offsets, q_offsets : array_like
+            Gram block sizes and offsets into packed row/Gram data.
+        reference_dual, row_degrees : array_like
+            Per-constraint reference multipliers and polynomial row powers.
+        tolerance, certified_tolerance, accuracy_floor : float
+            Requested, certified and minimum attainable decrease thresholds.
+        max_iterations : int
+            Newton iteration budget.
+        armijo, backtrack : float
+            Sufficient-decrease coefficient and line-search contraction factor.
+        max_line_search : int
+            Maximum backtracking attempts per step.
+        min_steps : int, optional
+            Minimum accepted steps before convergence is allowed.
 
         Returns
         -------
@@ -1529,6 +1581,7 @@ cdef class JointMixtureObjective:
     cdef cnp.ndarray weights
 
     def __cinit__(self, components, row_weights):
+        """Own joint-row buffers described by the class construction contract."""
         cdef int K = len(components), k
         cdef Py_ssize_t N, i, gathered = 1, extra
         cdef Component* c
@@ -1633,6 +1686,19 @@ cdef class JointMixtureObjective:
         Only finiteness is checked; no Newton metric is built, so the point
         may lie in any coordinate system, including all reduced coordinates.
 
+        Parameters
+        ----------
+        columns : sequence of arrays
+            Component-local to free-coordinate maps, with -1 for fixed zeros.
+        logit_columns : array_like
+            Free-coordinate indices of the mixture logits.
+        n_free : int
+            Positive number of free coordinates.
+        params : array_like, shape (n_free,)
+            Joint shape/amplitude/logit evaluation point.
+        rows : bool, optional
+            Also return original-row responsibilities and centered partial means.
+
         Returns
         -------
         tuple
@@ -1660,9 +1726,12 @@ cdef class JointMixtureObjective:
         self._bind_face(refs, columns, logit_columns, n_free)
         _work = self._bind_work(n_free)
         self.ctx.raw = True
+        cdef double* x_ptr = &x[0]
+        cdef double* gradient_ptr = &gradient[0]
+        cdef double* metric_ptr = &metric[0, 0]
         with nogil:
             status = _joint_evaluate(
-                &self.ctx, &x[0], &nll, &gradient[0], &metric[0, 0], &smallest
+                &self.ctx, x_ptr, &nll, gradient_ptr, metric_ptr, &smallest
             )
         if status != 0:
             raise FloatingPointError(
@@ -1688,6 +1757,17 @@ cdef class JointMixtureObjective:
         values feed a per-row log-sum-exp; no moments or information are
         accumulated.  The result equals ``evaluate`` bit for bit.
 
+        Parameters
+        ----------
+        columns : sequence of arrays
+            Component-local to free-coordinate maps, with -1 for fixed zeros.
+        logit_columns : array_like
+            Free-coordinate indices of the mixture logits.
+        n_free : int
+            Positive number of free coordinates.
+        params : array_like, shape (n_free,)
+            Joint shape/amplitude/logit evaluation point.
+
         Returns
         -------
         tuple
@@ -1708,8 +1788,9 @@ cdef class JointMixtureObjective:
         if n_free < 1 or x.shape[0] != n_free:
             raise ValueError("invalid joint mixture evaluation point")
         self._bind_face(refs, columns, logit_columns, n_free)
+        cdef double* x_ptr = &x[0]
         with nogil:
-            status = _joint_posterior(&self.ctx, &x[0], False)
+            status = _joint_posterior(&self.ctx, x_ptr, False)
         if status != 0:
             raise FloatingPointError(
                 f"compiled mixture posterior failed (status {status})"
@@ -1741,6 +1822,35 @@ cdef class JointMixtureObjective:
         int min_steps=0,
     ):
         """Optimize the joint objective on one exact face.
+
+        Parameters
+        ----------
+        columns : sequence of arrays
+            Component-local to free-face columns, with -1 for fixed zeros.
+        logit_columns : array_like
+            Free-face indices of the mixture logits.
+        n_free : int
+            Positive free-face parameter count.
+        params : array_like, shape (n_free,)
+            Initial joint free-face parameters.
+        blocks_packed : array_like
+            Packed positive-definite starting Gram blocks.
+        b_matrix, a_packed : array_like
+            Face constraint matrix and packed cone row operators.
+        sizes, a_offsets, q_offsets : array_like
+            Gram block sizes and offsets into packed row/Gram data.
+        reference_dual, row_degrees : array_like
+            Per-constraint reference multipliers and polynomial row powers.
+        tolerance, certified_tolerance, accuracy_floor : float
+            Requested, certified and minimum attainable decrease thresholds.
+        max_iterations : int
+            Newton iteration budget.
+        armijo, backtrack : float
+            Sufficient-decrease coefficient and line-search contraction factor.
+        max_line_search : int
+            Maximum backtracking attempts per step.
+        min_steps : int, optional
+            Minimum accepted steps before convergence is allowed.
 
         Returns
         -------

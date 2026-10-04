@@ -35,7 +35,11 @@ from typing import Any, Optional
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .._defaults import BOOTSTRAP_DEFAULT_RESAMPLES, PROB_EPS
+from .._defaults import (
+    BOOTSTRAP_DEFAULT_RESAMPLES,
+    BOOTSTRAP_MAX_FAILURE_FRACTION,
+    PROB_EPS,
+)
 from .._fit.inputs import _coerce_sample_size, _to_generator
 from .._fit.mixture import (
     _find_mixture_modes_exp,
@@ -48,6 +52,7 @@ from .._postfit.expectation import expect as _expect
 from .._postfit.expectation import expect_vectorized as _expect_vectorized
 from .._postfit.fitted_state import _model_metadata
 from .._postfit.gof import asymptotic_pvalue as _asymptotic_gof_pvalue
+from .._postfit.gof import canonical_pit as _canonical_pit
 from .._postfit.gof import gof_statistic as _gof_statistic
 from .._postfit.gof import monte_carlo_pvalue as _monte_carlo_pvalue
 from .._postfit.gof import validate_statistic as _validate_gof_statistic
@@ -57,6 +62,8 @@ from .._postfit.regions import hpd as _hpd
 from .._postfit.regions import interval as _interval
 from .._postfit.resample import bootstrap_curves as _bootstrap_curves
 from .._postfit.resample import simulated_statistics as _simulated_statistics
+from .._postfit.resample import validate_confidence as _validate_confidence
+from .._postfit.resample import validate_resample_count as _validate_resample_count
 from .._postfit.scoring import canonical_scoring_rows as _canonical_scoring_rows
 from .._postfit.scoring import interval_loglik as _interval_loglik
 from .._postfit.scoring import (
@@ -74,8 +81,12 @@ from .._spectral.tail import refine_tail_quantiles
 from .component import _Component, _Presentation
 from .diagnostics import _DiagnosticsMixin
 from .fitting import _FitRequest, _prepare_fit_request, _run_fit_request
-from .frozen import FrozenDistribution
 from .mixture_stats import _MixtureAnalyticsMixin
+from .validation import (
+    _validate_level,
+    _validate_log_probabilities,
+    _validate_probabilities,
+)
 from .views import _BaseSpaceView, _ExpSpaceView
 
 
@@ -100,7 +111,7 @@ def _restore_distribution_pickle(cls, state, em_diagnostics, selection_diagnosti
 class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
     """Flexible maximum-likelihood model for univariate probability distributions.
 
-    ``Distribution`` is the sole public class of the ``gibbus`` package.  It fits
+    ``Distribution`` is the primary fitting entry point of the ``gibbus`` package. It fits
     one or more smooth log-concave components to point or interval-censored
     data.  Each component uses an explicit support-aware analytic potential
     representation whose polynomial degree controls shape flexibility and whose
@@ -260,10 +271,18 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
 
     @property
     def _default(self):
+        """Return the model-owned active evaluation space."""
         return self._presentation.default
 
     @_default.setter
     def _default(self, value):
+        """Install an already-resolved active space on the shared presentation.
+
+        Parameters
+        ----------
+        value : str
+            Canonical ``"base"`` or ``"exp"`` selection.
+        """
         self._presentation.default = value
 
     @property
@@ -355,7 +374,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self,
         samples: ArrayLike,
         *,
-        n_components: int | str = "auto",
+        n_components: int | str = 1,
         poly_degree: int | str | None = None,
         support: tuple[float, float] | None = None,
         log_boundary_lower: bool | None = None,
@@ -384,7 +403,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
               infinite for one-sided censoring but may not be NaN.
 
         n_components : int or ``'auto'``, optional
-            Number of mixture components (default ``'auto'``).
+            Number of mixture components (default ``1``).
             Ignored when ``init_from`` is given (inherited from seed).
             ``'auto'`` counts KDE modes to center a search range, picks
             the best *K* by BIC over lightweight log-concave fits, then
@@ -690,15 +709,13 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
 
         Parameters
         ----------
-        p : float or array_like
-            CDF probabilities in ``[0, 1]``.
+        p : float or numpy.ndarray
+            Derived CDF probabilities in ``[0, 1]`` from survival inversion.
         """
         p_arr = np.asarray(p, dtype=np.float64)
         scalar = p_arr.ndim == 0
-        if np.any(~np.isfinite(p_arr) | (p_arr < 0.0) | (p_arr > 1.0)):
-            raise ValueError("ppf is defined for finite p in [0, 1]")
         if self._K == 1:
-            return self._components[0].base.ppf(p_arr)
+            return self._components[0].base._ppf(p_arr)
         self._ensure_spectral_cache()
         base_out = np.atleast_1d(
             np.asarray(self._mix_base_ppf(p_arr), dtype=np.float64)
@@ -721,7 +738,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             np.asarray(self._components[0].base.support, dtype=np.float64),
         )
 
-    def _base_log_tail_mass(self, x, endpoint, /, *, upper=False):
+    def _base_log_tail_mass(self, x, endpoint, /, *, upper):
         """Return an exact base-space tail mass without mixture-potential quadrature.
 
         Parameters
@@ -730,7 +747,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Tail anchor in base coordinates.
         endpoint : float
             Support endpoint in the requested tail direction.
-        upper : bool, optional
+        upper : bool
             Select the upper tail instead of the lower tail.
         """
         if self._K == 1:
@@ -739,7 +756,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             )
         return self._mix_base_log_tail_mass(x, endpoint, upper=upper)
 
-    def _base_log_tail_masses(self, x, endpoint, /, *, upper=False):
+    def _base_log_tail_masses(self, x, endpoint, /, *, upper):
         """Batched ``_base_log_tail_mass`` over an array of anchors.
 
         Parameters
@@ -748,7 +765,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Tail anchors in base coordinates.
         endpoint : float
             Support endpoint in the requested tail direction.
-        upper : bool, optional
+        upper : bool
             Select the upper tail instead of the lower tail.
         """
         if self._K == 1:
@@ -884,7 +901,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             pot,
             self._base_ppf_for_extensions,
             support,
-            p,
+            _validate_probabilities(p, "isf"),
             log_tail_mass=self._base_log_tail_mass,
         )
         if self._default == "base":
@@ -910,7 +927,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             pot,
             self._base_ppf_for_extensions,
             support,
-            log_p,
+            _validate_log_probabilities(log_p, "logppf"),
             log_tail_mass=self._base_log_tail_mass,
         )
         if self._default == "base":
@@ -936,7 +953,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             pot,
             self._base_ppf_for_extensions,
             support,
-            log_p,
+            _validate_log_probabilities(log_p, "logisf"),
             log_tail_mass=self._base_log_tail_mass,
         )
         if self._default == "base":
@@ -1039,7 +1056,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Probability mass in ``(0, 1]``.
         """
         self._ensure_fitted()
-        return _interval(self.ppf, self.isf, self.support, level)
+        return _interval(self.ppf, self.isf, self.support, _validate_level(level))
 
     def hpd(self, level: float) -> np.ndarray:
         """Return the highest-density region as an ``(m, 2)`` array.
@@ -1057,7 +1074,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             self.ppf,
             self.isf,
             self.support,
-            level,
+            _validate_level(level),
             modes=self.modes,
         )
 
@@ -1116,54 +1133,6 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return func(y)
 
         return self._base_expect(transformed)
-
-    def _expect_between(self, func, lower, upper):
-        """Integrate an active-space expectation contribution over bounds.
-
-        Parameters
-        ----------
-        func : callable
-            Scalar function of the active-space random variable.
-        lower, upper : float
-            Active-space integration limits.
-        """
-        self._ensure_fitted()
-        a = float(lower)
-        b = float(upper)
-        if not a < b:
-            return 0.0
-        pot, _cdf, base_support = self._base_probability_parts()
-        if self._K == 1:
-            points = (self._components[0].base.mode,)
-        else:
-            points = self._ensure_modes().get("base", ())
-        if self._default == "base":
-            lo = max(float(base_support[0]), a)
-            hi = min(float(base_support[1]), b)
-            if not lo < hi:
-                return 0.0
-            return _expect(pot, (lo, hi), func, points=points)
-
-        with np.errstate(divide="ignore", invalid="ignore"):
-            lo = (
-                float(base_support[0])
-                if a <= 0.0
-                else max(float(base_support[0]), float(np.log(a)))
-            )
-            hi = (
-                float(base_support[1])
-                if np.isposinf(b)
-                else min(float(base_support[1]), float(np.log(b)))
-            )
-        if not lo < hi:
-            return 0.0
-
-        def transformed(x):
-            with np.errstate(over="ignore"):
-                y = float(np.exp(x))
-            return func(y)
-
-        return _expect(pot, (lo, hi), transformed, points=points)
 
     def entropy(self) -> float:
         """Return differential entropy in the active space."""
@@ -1334,6 +1303,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             raise ValueError(
                 f"calibration must be 'asymptotic' or 'montecarlo', got {calibration!r}"
             )
+        if mode == "montecarlo":
+            n_resamples = _validate_resample_count(n_resamples)
         rows = _canonical_scoring_rows(x)
         if rows.shape[1] != 1:
             raise ValueError(
@@ -1341,14 +1312,15 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
                 "have no single probability-integral transform"
             )
         points = rows[:, 0]
-        observed = _gof_statistic(self.cdf(points), key)
+        pit = _canonical_pit(self.cdf(points))
+        observed = _gof_statistic(pit, key)
         n = int(points.size)
 
         if mode == "asymptotic":
             return {
                 "statistic": key,
                 "value": observed,
-                "pvalue": _asymptotic_gof_pvalue(self.cdf(points), key),
+                "pvalue": _asymptotic_gof_pvalue(pit, key, observed),
                 "calibration": "asymptotic",
                 "n": n,
                 "n_resamples": 0,
@@ -1362,9 +1334,13 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         def simulate():
             draw = np.asarray(self.sample(size=n, rng=gen), dtype=np.float64)
             replica = Distribution().fit(draw, **refit_kwargs)
-            return _gof_statistic(replica.cdf(draw), key)
+            return _gof_statistic(_canonical_pit(replica.cdf(draw)), key)
 
-        null, n_failed = _simulated_statistics(simulate, n_resamples=n_resamples)
+        null, n_failed = _simulated_statistics(
+            simulate,
+            n_resamples=n_resamples,
+            max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
+        )
         return {
             "statistic": key,
             "value": observed,
@@ -1442,6 +1418,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         name = str(quantity).strip().lower()
         if name not in ("pdf", "cdf", "sf"):
             raise ValueError(f"quantity must be 'pdf', 'cdf' or 'sf', got {quantity!r}")
+        n_resamples = _validate_resample_count(n_resamples)
+        level = _validate_confidence(level)
         grid = np.asarray(x, dtype=np.float64).reshape(-1)
         if grid.size == 0:
             raise ValueError("bootstrap_bands requires at least one abscissa")
@@ -1465,6 +1443,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             n_resamples=n_resamples,
             level=level,
             rng=gen,
+            max_failure_fraction=BOOTSTRAP_MAX_FAILURE_FRACTION,
         )
         return {
             "x": grid,
@@ -1545,11 +1524,6 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             )
         finite = [rate for rate in rates if np.isfinite(rate)]
         return float(min(finite)) if finite else np.inf
-
-    def frozen(self) -> FrozenDistribution:
-        """Return a live SciPy-compatible frozen-distribution adapter."""
-        self._ensure_fitted()
-        return FrozenDistribution(self)
 
     def truncate(self, lower=None, upper=None) -> "Distribution":
         """Condition the fitted distribution to an interval.
@@ -1694,7 +1668,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         if n < 0:
             raise ValueError("n must be >= 0")
         if self._default == "exp":
-            return self._mix_exp_potential(x, n)
+            return self._mix_exp_potential(np.asarray(x, dtype=np.float64), n)
         return self._mix_base_potential(x, n)
 
     def sample(self, size=None, rng=None):
@@ -1870,6 +1844,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
                 modes["exp"] = _find_mixture_modes_exp(
                     self._mix_base_potential,
                     [c.exp._log_mode_coordinate() for c in self._components],
+                    vectorized=True,
                 )
             return modes["exp"]
         return modes["base"]
