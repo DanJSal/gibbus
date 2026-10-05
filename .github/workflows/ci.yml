@@ -1,0 +1,189 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      - name: Install built wheel and test dependencies
+        run: >-
+          python -c "import pathlib, subprocess, sys;
+          wheel = next(pathlib.Path('dist').glob('*.whl'));
+          print(f'Installing {wheel}');
+          subprocess.check_call([
+          sys.executable, '-m', 'pip', 'install',
+          str(wheel), 'pytest>=7.0', 'pytest-cov'
+          ])"
+
+      - name: Copy tests outside repository
+        run: >-
+          python -c "import os, pathlib, shutil;
+          dst = pathlib.Path(os.environ['RUNNER_TEMP']) / 'tests';
+          shutil.copytree('tests', dst, dirs_exist_ok=True);
+          print(dst)"
+
+      - name: Verify installed package
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -c "import importlib, pathlib, gibbus;
+          path = pathlib.Path(gibbus.__file__).resolve();
+          print(f'gibbus imported from: {path}');
+          text = str(path).lower();
+          assert 'site-packages' in text or 'dist-packages' in text,
+          f'Expected installed package, got {path}';
+          importlib.import_module('gibbus._fit._conic_kernels');
+          importlib.import_module('gibbus._spectral._cdf_eval');
+          print('compiled extension smoke test passed')"
+
+      - name: Run test suite
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -m pytest -q tests
+          --ignore=tests/test_selection_battery.py
+
+  selection-battery:
+    name: Selection battery / Ubuntu / Python 3.14
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      - name: Install built wheel and test dependencies
+        run: >-
+          python -c "import pathlib, subprocess, sys;
+          wheel = next(pathlib.Path('dist').glob('*.whl'));
+          subprocess.check_call([
+          sys.executable, '-m', 'pip', 'install',
+          str(wheel), 'pytest>=7.0', 'pytest-cov'
+          ])"
+
+      - name: Copy tests outside repository
+        run: >-
+          python -c "import os, pathlib, shutil;
+          dst = pathlib.Path(os.environ['RUNNER_TEMP']) / 'tests';
+          shutil.copytree('tests', dst, dirs_exist_ok=True)"
+
+      - name: Run selection battery
+        working-directory: ${{ runner.temp }}
+        run: python -m pytest -q tests/test_selection_battery.py
+
+  sdist:
+    name: Source distribution / Ubuntu / Python 3.14
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build source distribution
+        run: python -m build --sdist
+
+      - name: Install source distribution and test dependencies
+        run: >-
+          python -c "import pathlib, subprocess, sys;
+          sdist = next(pathlib.Path('dist').glob('*.tar.gz'));
+          print(f'Installing {sdist}');
+          subprocess.check_call([
+          sys.executable, '-m', 'pip', 'install',
+          str(sdist), 'pytest>=7.0', 'pytest-cov'
+          ])"
+
+      - name: Copy tests outside repository
+        run: >-
+          python -c "import os, pathlib, shutil;
+          dst = pathlib.Path(os.environ['RUNNER_TEMP']) / 'tests';
+          shutil.copytree('tests', dst, dirs_exist_ok=True)"
+
+      - name: Verify installed source distribution
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -c "import importlib, pathlib, gibbus;
+          path = pathlib.Path(gibbus.__file__).resolve();
+          print(f'gibbus imported from: {path}');
+          text = str(path).lower();
+          assert 'site-packages' in text or 'dist-packages' in text,
+          f'Expected installed package, got {path}';
+          importlib.import_module('gibbus._fit._conic_kernels');
+          importlib.import_module('gibbus._spectral._cdf_eval');
+          print('compiled extension smoke test passed')"
+
+      - name: Run packaging and serialization checks
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -m pytest -q
+          tests/test_serialization_v1.py
+          tests/test_api.py
+          tests/test_fitted_state.py
+          tests/test_model_ownership.py
