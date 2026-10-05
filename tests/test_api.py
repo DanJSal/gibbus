@@ -26,7 +26,7 @@ class TestSampleWeights:
     def test_fit_uses_singular_sample_weight_keyword(self):
         params = inspect.signature(Distribution.fit).parameters
         assert "sample_weight" in params
-        assert "sample_weight" not in params
+        assert "sample_weights" not in params
 
     def test_weights_shift_single_component_mean(self, rng, bimodal):
         w = np.ones(bimodal.size)

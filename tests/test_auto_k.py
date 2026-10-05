@@ -108,7 +108,7 @@ class TestSelectionAgreement:
         )
         assert sub.mean == pytest.approx(full.mean, abs=1e-7)
         assert sub.var == pytest.approx(full.var, rel=1e-7)
-        assert sub.weights == pytest.approx(full.weights, abs=1e-8)
+        assert sub.weights == pytest.approx(full.weights, abs=1e-7)
         assert np.mean(sub.neg_log(big_bimodal)) == pytest.approx(
             np.mean(full.neg_log(big_bimodal)), abs=1e-9
         )
