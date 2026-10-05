@@ -15,6 +15,7 @@ Unlike a histogram, KDE, spline, or piecewise-linear log-density, a fitted Gibbu
 - **Full distributional interface.** Evaluate densities, probabilities, quantiles, moments, samples, survival quantities, information measures, and diagnostics from the fitted model.
 - **Tail-aware numerics.** Extreme-tail probabilities and quantiles use dedicated log-domain and direct-tail machinery instead of numerically fragile `1 - cdf(x)` calculations.
 - **Exponential-family perspective.** For fixed support, boundary structure, and polynomial degree, the natural coefficients form an exponential-family representation, linking maximum-likelihood fitting to moment-matching and maximum-entropy geometry under the convexity constraint.
+- **Versioned persistence.** Fitted models have a non-pickle NumPy serialization format with an explicit cross-version compatibility contract.
 - **Compiled numerical kernels.** Performance-sensitive fitting, quadrature, certification, and spectral evaluation routines are implemented in Cython.
 
 See [Modeling concepts](docs/modeling-concepts.md) for the statistical model and its relationship to fixed parametric families and nonparametric density estimators.
@@ -80,6 +81,7 @@ The documentation is organized by task and subject rather than kept in one large
 - [Modeling concepts](docs/modeling-concepts.md)
 - [Fitting](docs/fitting.md)
 - [Using fitted distributions](docs/using-distributions.md)
+- [Serialization and compatibility](docs/serialization.md)
 - [Diagnostics and model checking](docs/diagnostics.md)
 - [API reference](docs/api-reference.md)
 - [Examples](docs/examples.md)

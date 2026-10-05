@@ -8,4 +8,4 @@ include gibbus/py.typed
 recursive-exclude gibbus *.c
 recursive-exclude gibbus *.h
 
-recursive-include tests *.py *.npz
+recursive-include tests *.py *.npz *.npy *.md

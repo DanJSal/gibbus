@@ -21,12 +21,12 @@ Construct an unfitted distribution when `state` is `None`, or reconstruct a fitt
 | Member | Purpose |
 |---|---|
 | `fit(samples, **options)` | Fit a single component or finite mixture. |
-| `load(state)` | Validate and install a structured fitted state. |
-| `data` | Deep copy of the structured fitted state. |
+| `load(state)` | Validate and install a versioned durable serialized state atomically. |
+| `data` | Deep copy of the current versioned durable serialization envelope. |
 | `copy()` | Independent distribution object sharing only immutable fitted payload where safe. |
 | `is_fitted` | Whether the instance contains a fitted model. |
 
-See [Fitting](fitting.md) and [Using fitted distributions](using-distributions.md#serialization--save--load).
+See [Fitting](fitting.md), [Using fitted distributions](using-distributions.md#serialization--save--load), and [Serialization and compatibility](serialization.md).
 
 ### Density, probability, and quantiles
 

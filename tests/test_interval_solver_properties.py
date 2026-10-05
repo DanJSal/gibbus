@@ -15,7 +15,7 @@ def test_randomized_interval_solver_satisfies_mathematical_contract(seed):
         _solve_natural_conic,
     )
     from gibbus._fit.conic_qp import _support_representation
-    from gibbus._fit.inputs import _normalize_sample_weights_1d
+    from gibbus._fit.inputs import _normalize_sample_weight_1d
     from gibbus._fit.natural_objective import (
         _natural_interval_start,
         _prepare_natural_interval_objective,
@@ -32,7 +32,7 @@ def test_randomized_interval_solver_satisfies_mathematical_contract(seed):
         (
             None
             if case.weights is None
-            else _normalize_sample_weights_1d(len(case.rows), case.weights)
+            else _normalize_sample_weight_1d(len(case.rows), case.weights)
         ),
     )
     start, blocks = _natural_interval_start(objective)

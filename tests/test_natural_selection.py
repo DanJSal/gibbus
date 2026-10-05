@@ -6,7 +6,7 @@ import pytest
 from gibbus._api.selection import select_n_components
 from gibbus._fit.degree import _DegreeSelectionConfig
 from gibbus._fit.inputs import (
-    _normalize_sample_weights_1d,
+    _normalize_sample_weight_1d,
     _prepare_component_selection_policy,
 )
 from gibbus._fit.mixture import _count_modes_kde
@@ -283,7 +283,7 @@ def test_explicit_degree_and_full_data_endpoint_exclusion_survive_subsampling(
 def test_weighted_bic_uses_same_effective_size_for_likelihood_and_penalty(monkeypatch):
     selection, fit, _ = _mock_shared_screens(monkeypatch, lambda k, d: -float(k))
     x = np.linspace(-1.0, 1.0, 400)
-    weights = _normalize_sample_weights_1d(len(x), np.linspace(1.0, 3.0, len(x)))
+    weights = _normalize_sample_weight_1d(len(x), np.linspace(1.0, 3.0, len(x)))
     seen_weights = []
 
     def refine(candidate):
@@ -464,7 +464,7 @@ def test_full_data_selection_reuses_canonical_inputs_by_identity(monkeypatch):
     )
     x = np.linspace(-1.0, 1.0, 200)
     rows = np.ascontiguousarray(x[:, None])
-    weights = _normalize_sample_weights_1d(len(x), np.linspace(1.0, 2.0, len(x)))
+    weights = _normalize_sample_weight_1d(len(x), np.linspace(1.0, 2.0, len(x)))
     candidates = []
 
     def refine(candidate):

@@ -20,8 +20,8 @@ All parameters except `samples` are keyword-only. Returns `self` for method chai
 | `verbose` | `int` | `0` | Verbosity level for fitting and automatic selection diagnostics. |
 | `suppress_warnings` | `bool` | `False` | Suppress selected numerical warnings. Warning filters are process-global on supported Python versions, so leave this `False` for concurrent fitting. |
 | `init_from` | `Distribution` or `None` | `None` | Warm-start seed from a previously fitted `Distribution`. When given, `n_components` and `support` are inherited from the seed and cannot be overridden for that fit. Boundary flags inherit when left as `None` but may be explicitly overridden. Polynomial degree may be inherited or overridden globally/per component as documented below. Per-component seeds are threaded automatically in seed-component order. |
-| `sample_weights` | array_like or `None` | `None` | Non-negative **relative** observation weights, normalized to sum to 1. A row weighted 6 contributes twice what a row weighted 3 does; the absolute scale carries no meaning, so `[1,1,1]` and `[100,100,100]` are identical. Weights are *not* frequencies: they do not stand for repeated observations, and the model-selection sample size is the number of **rows** regardless of the weights. **Aggregated or binned data is therefore not supported through this argument** — 700 rows representing 1431 observations will be penalized as 700, biasing selection toward under-fitting. Expand such data to one row per observation instead. |
-| `component_options` | `list[dict]` or `None` | `None` | Per-component keyword arguments for mixture fitting (length must equal effective `n_components`). Currently only `poly_degree` is allowed per-component; `support`, `sample_weights`, `init_from`, `log_boundary_*` are forbidden (they are global). Must be `None` when `n_components='auto'` and no seed is given. |
+| `sample_weight` | array_like or `None` | `None` | Non-negative **relative** observation weights, normalized to sum to 1. A row weighted 6 contributes twice what a row weighted 3 does; the absolute scale carries no meaning, so `[1,1,1]` and `[100,100,100]` are identical. Weights are *not* frequencies: they do not stand for repeated observations, and the model-selection sample size is the number of **rows** regardless of the weights. **Aggregated or binned data is therefore not supported through this argument** — 700 rows representing 1431 observations will be penalized as 700, biasing selection toward under-fitting. Expand such data to one row per observation instead. |
+| `component_options` | `list[dict]` or `None` | `None` | Per-component keyword arguments for mixture fitting (length must equal effective `n_components`). Currently only `poly_degree` is allowed per-component; `support`, `sample_weight`, `init_from`, `log_boundary_*` are forbidden (they are global). Must be `None` when `n_components='auto'` and no seed is given. |
 | `em_max_iter` | `int` or `None` | `None` (default: 50) | Maximum EM iterations. |
 | `em_tol` | `float` or `None` | `None` (default: 1e-4) | EM relative log-likelihood convergence tolerance. |
 | `rng` | `None`, `int`, `Generator`, or `RandomState` | `None` | Random-number source for stratified subsampling and the fallback GMM initializer. For fitting, `None` uses deterministic seed 0; pass an explicit source to choose another stream. Sampling has separate semantics: `sample(..., rng=None)` uses NumPy entropy. |
@@ -88,7 +88,7 @@ When `init_from` is supplied, `None` inherits the seed setting while an explicit
 data = rng.normal(size=500)
 weights = rng.exponential(size=500)  # non-negative weights
 
-c = Distribution().fit(data, support=(-np.inf, np.inf), sample_weights=weights)
+c = Distribution().fit(data, support=(-np.inf, np.inf), sample_weight=weights)
 ```
 
 For point-data mixtures, the unconstrained mixture likelihood has the usual

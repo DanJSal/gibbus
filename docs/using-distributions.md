@@ -262,11 +262,11 @@ One accumulated affine map belongs to the whole `Distribution` and applies unifo
 ---
 ## Serialization — Save & Load
 
-The fitted state is stored as a NumPy structured scalar with the same model envelope for single-component fits and mixtures, enabling save/load without pickle. The envelope stores the accumulated public `(mu, sigma)` once, together with component payloads, weights, and model metadata. Loading validates the required fields and their values.
+`Distribution.data` returns the versioned durable persistence representation for a fitted model. It is a NumPy structured scalar with no object dtype, so it can be saved and loaded without pickle:
 
 ```python
 # Save
-state = c.data  # numpy structured scalar (deep copy)
+state = c.data
 np.save("model.npy", state)
 
 # Load — from state object
@@ -280,17 +280,27 @@ c4 = Distribution()
 c4.load(state)
 ```
 
-**`Distribution.data`** (property): Returns a deep copy of the structured fitted state.
+**`Distribution.data`** (property): Returns a deep copy of the current versioned serialization envelope.
 
-**`Distribution.load(state)`**: Validate and install a saved model envelope, including its component count. Returns `self`. An invalid state leaves the existing model unchanged.
+**`Distribution.load(state)`**: Validate and install a saved model. The current instance changes only after the complete durable state has validated; an invalid state leaves the existing model unchanged.
 
-For multi-component models, the structured state includes all components, their weights, and mixture metadata. `pickle.dumps(c)` / `pickle.loads(...)` are also supported; `Distribution.__reduce__` delegates to the same structured state so compiled evaluator objects are never pickled directly.
+Serialization format v1 separates three concerns:
+
+- **`model`** is the frozen durable mathematical model and public presentation state.
+- **`provenance`** is optional historical fit/optimizer metadata.
+- **`cache`** is optional implementation-specific derived numerical state used only when it is compatible with the running Gibbus version and the durable model.
+
+A missing, stale, or invalid cache is rebuilt rather than making the model unreadable. This allows future Gibbus versions to change spectral CDF/PPF implementations without changing the mathematical meaning of serialization format v1.
 
 ### State compatibility
 
-Saved states are validated structurally when loaded: required fields, shapes, values, and reconstructed spectral geometry must all be valid. Incompatible or malformed states fail during `Distribution.load(...)` with `ValueError` rather than being partially accepted.
+The durable format has its own `format_version`, independent of the Gibbus package version. Released serialization formats are never silently reinterpreted: a newer Gibbus version either reads a supported format correctly, explicitly migrates it, or rejects it with a clear compatibility error.
 
-The structured NumPy state returned by `Distribution.data` is the package's current persistence representation. Cross-version compatibility guarantees have not yet been formalized; do not assume that a state written by one Gibbus version will necessarily remain readable by all future versions. Private Python objects, internal cache layouts, and pickle byte streams should not be treated as a durable cross-version format. The state intentionally has no independent format-version tag.
+Compatibility means preservation of the fitted mathematical distribution and documented public state within the numerical accuracy of the running implementation. It does not promise bit-for-bit identity of derived panels, cached moments, or floating-point query results across releases.
+
+Python pickle is supported for convenience, but pickle byte streams are not the durable cross-version contract. Persist models with `.data` and `np.save` / `np.load(..., allow_pickle=False)` when cross-version readability matters.
+
+See [Serialization and compatibility](serialization.md) for the exact v1 schema, mathematical interpretation, cache/provenance rules, and format-evolution policy.
 
 ---
 ## Copying

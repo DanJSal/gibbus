@@ -241,7 +241,7 @@ def _coerce_poly_degree(poly_degree, /):
     return degree
 
 
-def _normalize_sample_weights_1d(R, w, /):
+def _normalize_sample_weight_1d(R, w, /):
     """Validate and normalize a 1-D sample-weight array.
 
     Parameters
@@ -271,7 +271,7 @@ def _normalize_sample_weights_1d(R, w, /):
         or np.all(w == 0)
     ):
         raise ValueError(
-            "sample_weights must be non-negative, finite, length R, and not all zero."
+            "sample_weight must be non-negative, finite, length R, and not all zero."
         )
     scale = float(np.max(w))
     scaled = w / scale
@@ -672,7 +672,7 @@ def _normalize_univariate_fit_inputs(
     verbose,
     suppress_warnings,
     init_from,
-    sample_weights,
+    sample_weight,
     /,
 ):
     """Validate and normalize inputs for one component fit.
@@ -704,7 +704,7 @@ def _normalize_univariate_fit_inputs(
         Whether numerical fitting warnings should be suppressed.
     init_from : _Component, Mapping, or None
         Fitted-state warm-start seed.
-    sample_weights : array_like or None
+    sample_weight : array_like or None
         Optional nonnegative observation weights.
 
     Returns
@@ -780,9 +780,7 @@ def _normalize_univariate_fit_inputs(
 
     _check_spread(S)
     weights = (
-        None
-        if sample_weights is None
-        else _normalize_sample_weights_1d(R, sample_weights)
+        None if sample_weight is None else _normalize_sample_weight_1d(R, sample_weight)
     )
 
     if log_boundary_lower is True and not np.isfinite(L):
@@ -825,7 +823,7 @@ def _normalize_mixture_fit_inputs(
     verbose,
     suppress_warnings,
     /,
-    sample_weights=None,
+    sample_weight=None,
 ):
     """Validate and normalize all inputs for multi-component fitting.
 
@@ -841,7 +839,7 @@ def _normalize_mixture_fit_inputs(
     component_options : list of dict or None
         Per-component keyword arguments forwarded to component fitting.
         Only ``poly_degree`` is allowed as a per-component override;
-        keys ``'support'``, ``'sample_weights'``, ``'init_from'``,
+        keys ``'support'``, ``'sample_weight'``, ``'init_from'``,
         ``'log_boundary_lower'`` and ``'log_boundary_upper'`` are forbidden
         (these are global across all components).  Must be ``None``
         when ``n_components="auto"``.
@@ -849,7 +847,7 @@ def _normalize_mixture_fit_inputs(
         Verbosity level for fitting progress and diagnostics.
     suppress_warnings : bool
         Whether numerical fitting warnings should be suppressed.
-    sample_weights : array_like or None, optional
+    sample_weight : array_like or None, optional
         Non-negative observation weights of length *R*.  Normalized to
         sum to one and returned under the ``weights`` key.
 
@@ -950,11 +948,7 @@ def _normalize_mixture_fit_inputs(
             normalized_options.append(normalized)
         component_options = normalized_options
 
-    w = (
-        None
-        if sample_weights is None
-        else _normalize_sample_weights_1d(R, sample_weights)
-    )
+    w = None if sample_weight is None else _normalize_sample_weight_1d(R, sample_weight)
 
     return {
         "samples_rk": S,

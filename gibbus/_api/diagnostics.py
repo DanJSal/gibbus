@@ -47,12 +47,14 @@ class _DiagnosticsMixin:
             allowed and active sides, marginal standard errors, policy
             p-values, and weakly identified sides once for the whole model.
             ``provenance`` distinguishes fitted from derived distributions;
-            derived models have no applicable fit uncertainty.
+            derived models have no applicable fit uncertainty. If serialized
+            optimizer provenance is unavailable, historical component records
+            and ``n_face_parameters`` are ``None``.
             ``em`` is ``None`` for a
-            single-component fit or for a mixture
-            reconstructed only from the portable structured ``data`` state,
-            which intentionally omits session-level EM diagnostics. Copies
-            and Python pickle preserve the in-process EM record.
+            single-component fit or for a mixture reconstructed from the
+            durable ``data`` state, which intentionally omits session-level
+            EM diagnostics. Copies and Python pickle preserve the in-process
+            EM record.
             ``hazard_is_monotone`` is ``True`` or ``False`` when the numerical
             body check completes and ``None`` when that check is indeterminate
             because of a numerical failure.
@@ -75,30 +77,50 @@ class _DiagnosticsMixin:
         component_records = []
         for index, comp in enumerate(self._components):
             state = comp.data
+            historical = str(state["optimizer_status"]) != "missing"
             component_records.append(
                 {
                     "component": int(index),
-                    "success": bool(int(state["optimizer_success"])),
-                    "status": str(state["optimizer_status"]),
-                    "message": str(state["optimizer_message"]),
-                    "n_iterations": int(state["optimizer_n_iterations"]),
-                    "n_evaluations": int(state["optimizer_n_evaluations"]),
-                    "subproblem_iterations": int(
-                        state["optimizer_subproblem_iterations"]
+                    "success": (
+                        bool(int(state["optimizer_success"])) if historical else None
                     ),
-                    "decrease_bound": float(state["optimizer_decrease_bound"]),
-                    "effective_curvature_degree": int(
-                        state["effective_curvature_degree"]
+                    "status": str(state["optimizer_status"]) if historical else None,
+                    "message": str(state["optimizer_message"]) if historical else None,
+                    "n_iterations": (
+                        int(state["optimizer_n_iterations"]) if historical else None
                     ),
-                    "lower_amplitude_active": bool(
-                        int(state["lower_amplitude_active"])
+                    "n_evaluations": (
+                        int(state["optimizer_n_evaluations"]) if historical else None
                     ),
-                    "upper_amplitude_active": bool(
-                        int(state["upper_amplitude_active"])
+                    "subproblem_iterations": (
+                        int(state["optimizer_subproblem_iterations"])
+                        if historical
+                        else None
                     ),
-                    "separator_certified": bool(int(state["separator_certified"])),
+                    "decrease_bound": (
+                        float(state["optimizer_decrease_bound"]) if historical else None
+                    ),
+                    "effective_curvature_degree": (
+                        int(state["effective_curvature_degree"]) if historical else None
+                    ),
+                    "lower_amplitude_active": (
+                        bool(int(state["lower_amplitude_active"]))
+                        if historical
+                        else None
+                    ),
+                    "upper_amplitude_active": (
+                        bool(int(state["upper_amplitude_active"]))
+                        if historical
+                        else None
+                    ),
+                    "separator_certified": (
+                        bool(int(state["separator_certified"])) if historical else None
+                    ),
                 }
             )
+        historical_fit_available = all(
+            record.get("status") is not None for record in component_records
+        )
         optimizer_ok = all(r.get("success") is True for r in component_records)
         em = None if self._em_diagnostics is None else dict(self._em_diagnostics)
         em_ok = True if em is None else bool(em.get("converged", False))
@@ -128,7 +150,11 @@ class _DiagnosticsMixin:
             ),
             "provenance": self._fit_metadata["provenance"],
             "n_parameters": self._fit_metadata["n_parameters"],
-            "n_face_parameters": self._fit_metadata["n_face_parameters"],
+            "n_face_parameters": (
+                self._fit_metadata["n_face_parameters"]
+                if historical_fit_available
+                else None
+            ),
             "shared_boundary": copy.deepcopy(self._fit_metadata["shared_boundary"]),
             "components": tuple(component_records),
             "em": em,
@@ -147,8 +173,8 @@ class _DiagnosticsMixin:
         -------
         dict or None
             ``None`` when component count was explicit or the model was
-            reconstructed only from the portable structured ``data`` state.
-            Copies and Python pickle preserve this record. Otherwise includes
+            reconstructed from the durable ``data`` state. Copies and Python
+            pickle preserve this record. Otherwise includes
             the KDE proposal, whether selection was subsampled, the selected
             K/BIC, and all candidate score records visited by the sweep.
         """
@@ -175,6 +201,11 @@ class _DiagnosticsMixin:
         CDF that is rebuilt on demand and never packed.  Reading the
         component fields directly therefore says nothing about what a
         mixture's :meth:`cdf` and :meth:`ppf` will do.
+
+        Loading may rebuild these numerical representations when the optional
+        serialized runtime cache is absent or incompatible. Diagnostics then
+        describe the rebuilt representation, and any graceful rebuild
+        fallbacks may appear in :func:`gibbus.suppressed_failures`.
 
         Returns
         -------

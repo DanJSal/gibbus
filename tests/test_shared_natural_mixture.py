@@ -294,14 +294,14 @@ def test_boundary_policy_warmstarts_preserve_coordinates_across_basis_changes():
 def test_subsample_warmstart_recomputes_full_data_posteriors(intervals):
     rows, r, w = _sample(intervals)
     subset = np.arange(0, rows.shape[0], 2)
-    sample_weights = w[subset] / w[subset].sum()
+    sample_weight = w[subset] / w[subset].sum()
     screened = _run_natural_em(
         (0, 1),
         rows[subset],
         (4, 4),
         True,
         True,
-        sample_weights,
+        sample_weight,
         r[subset],
         degree_config=_DegreeSelectionConfig(),
         em_options=_EMOptions(max_steps=3, max_rounds=3),

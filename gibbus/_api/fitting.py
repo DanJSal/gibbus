@@ -84,7 +84,7 @@ class _FitRequest:
         Whether selected numerical warnings are suppressed.
     init_from : object or None
         Public estimator warm-start source before preparation.
-    sample_weights : array_like or None
+    sample_weight : array_like or None
         Optional observation weights.
     component_options : list of dict or None
         Per-component fitting overrides.
@@ -118,7 +118,7 @@ class _FitRequest:
     verbose: int
     suppress_warnings: bool
     init_from: Any
-    sample_weights: ArrayLike | None
+    sample_weight: ArrayLike | None
     component_options: list[dict[str, Any]] | None
     em_max_iter: int | None
     em_tol: float | None
@@ -506,7 +506,7 @@ def _run_single_fit(
         verbose=verbose,
         suppress_warnings=suppress_warnings,
         init_from=init_from,
-        sample_weights=request.sample_weights,
+        sample_weight=request.sample_weight,
         degree_config=request.degree_config,
     )
     return _FitResult(
@@ -537,7 +537,7 @@ def _prepare_mixture_context(request, /):
         request.component_options,
         request.verbose,
         request.suppress_warnings,
-        sample_weights=request.sample_weights,
+        sample_weight=request.sample_weight,
     )
     samples_rk = norm["samples_rk"]
     support = tuple(map(float, norm["support"]))
@@ -707,7 +707,7 @@ def _initialize_mixture(request, context, /):
             context.samples_1d,
             n_components,
             context.generator,
-            weights=request.sample_weights,
+            weights=request.sample_weight,
         )
     _, responsibilities, weights = candidates[0]
     return _MixtureInitialization(

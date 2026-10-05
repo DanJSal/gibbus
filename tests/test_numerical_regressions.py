@@ -22,7 +22,7 @@ import gibbus
 from gibbus import Distribution
 from gibbus._api import selection as _selection
 from gibbus._defaults import TURNBULL_GAP_TOL, TURNBULL_MAX_ITER
-from gibbus._fit.inputs import _normalize_sample_weights_1d
+from gibbus._fit.inputs import _normalize_sample_weight_1d
 from gibbus._fit.mixture import (
     _e_step_intervals,
     _interval_identifiability_diagnostic,
@@ -333,7 +333,7 @@ def test_high_degree_fit_retains_a_sound_likelihood_basin():
 def test_uniform_weights_reproduce_unweighted_bandwidth(n):
     """``_silverman_bandwidth`` must agree with itself at uniform weights.
 
-    ``sample_weights`` are relative.  Kish's effective sample size therefore
+    ``sample_weight`` are relative.  Kish's effective sample size therefore
     supplies the finite-sample scale correction and reduces exactly to ``n``
     when the weights are uniform.
 
@@ -346,10 +346,10 @@ def test_uniform_weights_reproduce_unweighted_bandwidth(n):
 
     unweighted = _silverman_bandwidth(x)
     uniform = _silverman_bandwidth(
-        x, weights=_normalize_sample_weights_1d(n, np.ones(n))
+        x, weights=_normalize_sample_weight_1d(n, np.ones(n))
     )
     rescaled = _silverman_bandwidth(
-        x, weights=_normalize_sample_weights_1d(n, np.full(n, 7.3))
+        x, weights=_normalize_sample_weight_1d(n, np.full(n, 7.3))
     )
 
     assert uniform == pytest.approx(unweighted, rel=1e-12)
@@ -365,9 +365,9 @@ def test_weighted_bandwidth_is_scale_invariant():
     x = rng.normal(0.0, 1.0, 400)
     w = rng.exponential(size=400)
 
-    bandwidth = _silverman_bandwidth(x, weights=_normalize_sample_weights_1d(x.size, w))
+    bandwidth = _silverman_bandwidth(x, weights=_normalize_sample_weight_1d(x.size, w))
     rescaled = _silverman_bandwidth(
-        x, weights=_normalize_sample_weights_1d(x.size, 1000.0 * w)
+        x, weights=_normalize_sample_weight_1d(x.size, 1000.0 * w)
     )
     assert bandwidth > 0.0
     np.testing.assert_array_max_ulp(bandwidth, rescaled, maxulp=2)
@@ -436,7 +436,7 @@ def test_interval_e_step_matches_independent_component_cdf_oracle():
     assert ll == pytest.approx(oracle_ll, rel=2e-11, abs=2e-13)
 
 
-def test_interval_mixture_relative_sample_weights_are_scale_invariant():
+def test_interval_mixture_relative_sample_weight_is_scale_invariant():
     """The weighted interval-mixture path must honor relative-weight semantics.
 
     Multiplying every observation weight by a common constant must leave the
@@ -466,7 +466,7 @@ def test_interval_mixture_relative_sample_weights_are_scale_invariant():
         poly_degree=2,
         progressive=False,
         rng=0,
-        sample_weights=weights,
+        sample_weight=weights,
     )
     b = Distribution().fit(
         intervals,
@@ -474,7 +474,7 @@ def test_interval_mixture_relative_sample_weights_are_scale_invariant():
         poly_degree=2,
         progressive=False,
         rng=0,
-        sample_weights=37.0 * weights,
+        sample_weight=37.0 * weights,
     )
 
     grid = np.linspace(float(intervals.min()), float(intervals.max()), 301)
@@ -1141,7 +1141,7 @@ class TestPointMixtureEstimability:
 
         c = Distribution().fit(
             data,
-            sample_weights=weights,
+            sample_weight=weights,
             n_components=1,
             poly_degree=2,
             support=(-np.inf, np.inf),

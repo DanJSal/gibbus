@@ -12,6 +12,7 @@ If you are new to Gibbus, begin with [Getting started](getting-started.md), then
 - [Modeling concepts](modeling-concepts.md) — log-concavity, support, polynomial potentials, boundary terms, mixtures, and coordinate views.
 - [Fitting](fitting.md) — input formats, `Distribution.fit()`, support selection, weights, mixtures, automatic selection, and warm starts.
 - [Using fitted distributions](using-distributions.md) — density/CDF/quantile evaluation, moments, survival quantities, transforms, coordinate views, serialization, and components.
+- [Serialization and compatibility](serialization.md) — durable format v1, cache/provenance separation, compatibility guarantees, and format evolution.
 - [Diagnostics and model checking](diagnostics.md) — optimizer diagnostics, selection diagnostics, spectral diagnostics, goodness-of-fit tools, bootstrap bands, and numerical fallback records.
 - [Examples](examples.md) — complete examples for common fitting and evaluation tasks.
 - [Limitations and concurrency](limitations.md) — modeling limits, numerical qualifications, and thread/concurrency behavior.

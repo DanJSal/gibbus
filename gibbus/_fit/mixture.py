@@ -593,7 +593,7 @@ def _silverman_bandwidth(samples_1d, /, *, n_effective=None, weights=None):
     ``gaussian_kde`` when counting modes.
 
     The spread is ``ddof=1`` when *weights* is None.  When weights are
-    given there is no count to correct by -- ``sample_weights`` are
+    given there is no count to correct by -- ``sample_weight`` are
     relative, not frequencies -- so the reliability-weight estimator is
     used instead, dividing by ``1 - sum(w^2)`` for normalized ``w``.
     That is Kish's effective sample size ``n_eff = 1 / sum(w^2)`` in the
@@ -628,7 +628,7 @@ def _silverman_bandwidth(samples_1d, /, *, n_effective=None, weights=None):
         m = float(np.dot(w, samples_1d))
         ss = float(np.dot(w, (samples_1d - m) ** 2))
 
-        # Divide by ``1 - sum(w^2)`` rather than by 1.  ``sample_weights``
+        # Divide by ``1 - sum(w^2)`` rather than by 1.  ``sample_weight``
         # are *relative*, so there is no count to correct by; the
         # reliability-weight estimator uses Kish's effective sample size
         # ``n_eff = 1 / sum(w^2)`` instead, and ``1 - sum(w^2)`` is
@@ -679,7 +679,7 @@ def _binned_kde_sweep(samples_1d, grid, bandwidths, /, *, weights=None):
     weights : numpy.ndarray, shape (R,) or None, optional
         Non-negative sample weights.  ``None`` (default) weights every
         sample equally.  Linear binning makes weighting free, which is
-        what lets the initializer honor ``sample_weights``.
+        what lets the initializer honor ``sample_weight``.
 
     Returns
     -------
@@ -1419,7 +1419,7 @@ def _interval_identifiability_diagnostic(
 
 
 # ======================================================================
-# Structured-scalar serialization helpers
+# Runtime-cache structured-state helpers
 # ======================================================================
 
 
@@ -1531,7 +1531,7 @@ def _pack_mixture_struct(
 
 
 def _unpack_mixture_struct(struct):
-    """Unpack weights, default space, and per-component structured states.
+    """Unpack weights, default space, and per-component runtime states.
 
     Inverse of :func:`_pack_mixture_struct`: padded component fields are
     trimmed back to their per-component lengths using the stored

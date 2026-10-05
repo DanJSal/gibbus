@@ -288,7 +288,7 @@ class TestSkewedSelection:
 class TestValleyInitialization:
     """Mixture initialization from KDE modes and the valleys between them.
 
-    The initializer is deterministic, honors ``sample_weights``, and reuses
+    The initializer is deterministic, honors ``sample_weight``, and reuses
     the same KDE structure used by component-count proposal.
     """
 
@@ -332,7 +332,7 @@ class TestValleyInitialization:
         runs = [_valley_init_responsibilities(data, 2)[1] for _ in range(3)]
         assert all(np.array_equal(runs[0], r) for r in runs)
 
-    def test_honors_sample_weights(self):
+    def test_honors_sample_weight(self):
         """The gap GaussianMixture could not close."""
 
         rng = np.random.default_rng(0)

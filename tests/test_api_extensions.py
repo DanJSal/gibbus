@@ -374,115 +374,70 @@ def test_mixture_state_roundtrip_preserves_more_modes_than_components(mixture_fi
     stored_modes = tuple(np.linspace(-3.0, 3.0, 7))
     c._mode_cache = {"base": stored_modes}
     state = c.data
-    assert int(state["n_modes"]) == len(stored_modes)
-    assert np.asarray(state["base_modes"]).size == len(stored_modes)
+    runtime = state["cache"]["runtime_state"]
+    assert int(runtime["n_modes"]) == len(stored_modes)
+    assert np.asarray(runtime["base_modes"]).size == len(stored_modes)
     restored = Distribution(state)
     assert restored._mode_cache["base"] == stored_modes
 
 
-def _rebuild_mixture_state(state, *, drop=(), replace=None):
-    """Copy a structured mixture state, dropping or re-typing named fields."""
-    replace = {} if replace is None else replace
-    values = {
-        name: np.asarray(state[name]) for name in state.dtype.names if name not in drop
-    }
-    values.update({name: np.asarray(value) for name, value in replace.items()})
-    dtype = [
-        (name, value.dtype) if value.ndim == 0 else (name, value.dtype, value.shape)
-        for name, value in values.items()
-    ]
-    rebuilt = np.zeros((), dtype=dtype)
-    for name, value in values.items():
-        rebuilt[name] = value
-    return rebuilt
-
-
-def test_mixture_state_without_cached_modes_uses_canonical_empty_layout(mixture_fit):
+def test_mixture_state_without_cached_modes_recomputes_them(mixture_fit):
     c = mixture_fit.copy()
     c._mode_cache = None
     state = c.data
-    assert int(state["n_modes"]) == 0
-    assert np.asarray(state["base_modes"]).shape == (0,)
+    runtime = state["cache"]["runtime_state"]
+    assert int(runtime["n_modes"]) == 0
+    assert np.asarray(runtime["base_modes"]).shape == (0,)
     restored = Distribution(state)
     assert restored._mode_cache is None
     assert restored.modes == mixture_fit.modes
 
 
 @pytest.mark.parametrize(
-    "missing",
-    [
-        ("base_modes",),
-        ("n_modes",),
-        ("base_modes", "n_modes"),
-    ],
-)
-def test_mixture_state_missing_mode_fields_is_rejected(mixture_fit, missing):
-    state = _rebuild_mixture_state(mixture_fit.data, drop=missing)
-    with pytest.raises(
-        ValueError,
-        match="not a gibbus mixture state; missing fields: " + ", ".join(missing),
-    ):
-        Distribution(state)
-
-
-@pytest.mark.parametrize(
     "base_modes,n_modes",
     [
-        pytest.param([-1.0, 1.0], 1, id="n_modes-smaller"),
-        pytest.param([-1.0, 1.0], 3, id="n_modes-larger"),
-        pytest.param([-1.0, 1.0], -1, id="n_modes-negative"),
-        pytest.param([-1.0, 1.0, np.nan], 2, id="nan-padded"),
-        pytest.param([[-1.0, 1.0]], 2, id="two-dimensional"),
-        pytest.param([-1.0, 1.0], [2], id="n_modes-not-scalar"),
-        pytest.param([-1.0, 1.0], 2.0, id="n_modes-not-integer"),
+        pytest.param([-1.0, 1.0], 1, id="count-mismatch"),
+        pytest.param([-1.0, np.nan], 2, id="non-finite"),
     ],
 )
-def test_mixture_state_inconsistent_mode_layout_is_rejected(
-    mixture_fit, base_modes, n_modes
+def test_malformed_optional_mode_cache_is_ignored(mixture_fit, base_modes, n_modes):
+    state = np.array(mixture_fit.data, copy=True)
+    runtime = state["cache"]["runtime_state"]
+    # The existing fixed-shape cache can represent these two malformed cases
+    # without rebuilding its dtype. They must not make the durable model fail.
+    raw = np.asarray(runtime["base_modes"])
+    if raw.size != len(base_modes):
+        _ = mixture_fit.modes  # populate the cached mode tuple
+        state = np.array(mixture_fit.data, copy=True)
+        runtime = state["cache"]["runtime_state"]
+        raw = np.asarray(runtime["base_modes"])
+    if raw.size == 0:
+        # Force a cached mode array first, then corrupt its metadata.
+        c = mixture_fit.copy()
+        c._mode_cache = {"base": (-1.0, 1.0)}
+        state = np.array(c.data, copy=True)
+        runtime = state["cache"]["runtime_state"]
+        raw = np.asarray(runtime["base_modes"])
+    runtime["base_modes"][:] = np.asarray(base_modes, dtype=np.float64)
+    runtime["n_modes"] = np.asarray(n_modes)
+    restored = Distribution(state)
+    assert restored._mode_cache is None
+    assert len(restored.modes) >= 1
+
+
+def test_invalid_durable_mixture_state_load_is_exception_safe(
+    gaussian_fit, mixture_fit
 ):
-    state = _rebuild_mixture_state(
-        mixture_fit.data,
-        replace={
-            "base_modes": np.asarray(base_modes, dtype=np.float64),
-            "n_modes": np.asarray(n_modes),
-        },
-    )
-    with pytest.raises(ValueError, match="inconsistent n_modes/base_modes"):
-        Distribution(state)
-
-
-@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
-def test_mixture_state_non_finite_base_modes_are_rejected(mixture_fit, bad):
-    state = _rebuild_mixture_state(
-        mixture_fit.data,
-        replace={
-            "base_modes": np.array([-1.0, bad], dtype=np.float64),
-            "n_modes": np.int64(2),
-        },
-    )
-    with pytest.raises(ValueError, match="base_modes must be finite"):
-        Distribution(state)
-
-
-def test_malformed_mixture_mode_state_load_is_exception_safe(gaussian_fit, mixture_fit):
-    bad = _rebuild_mixture_state(mixture_fit.data, drop=("n_modes",))
-    target = gaussian_fit.copy()
-    before = target.mean
-    with pytest.raises(ValueError, match="missing fields: n_modes"):
-        target.load(bad)
-    assert target.n_components == 1
-    assert target.mean == before
-
-
-def test_invalid_mixture_state_load_is_exception_safe(gaussian_fit, mixture_fit):
     bad = np.array(mixture_fit.data, copy=True)
-    bad["weights"] = [0.9, 0.9]
+    bad["model"]["weights"] = [0.9, 0.9]
     target = gaussian_fit.copy()
     before = target.mean
+    before_bytes = target.data.tobytes()
     with pytest.raises(ValueError, match="component weights"):
         target.load(bad)
     assert target.is_fitted
     assert np.isclose(target.mean, before, rtol=0.0, atol=0.0)
+    assert target.data.tobytes() == before_bytes
 
 
 def test_copy_and_pickle_preserve_diagnostic_records(mixture_fit):

@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from gibbus import Distribution
-from gibbus._fit.inputs import _canon_univariate_samples, _normalize_sample_weights_1d
+from gibbus._fit.inputs import _canon_univariate_samples, _normalize_sample_weight_1d
 
 
 @pytest.fixture
@@ -250,7 +250,7 @@ class TestWeightValidation:
             Distribution().fit(
                 rng.normal(size=50),
                 support=(-np.inf, np.inf),
-                sample_weights=-np.ones(50),
+                sample_weight=-np.ones(50),
             )
 
     def test_wrong_length_rejected(self, rng):
@@ -258,7 +258,7 @@ class TestWeightValidation:
             Distribution().fit(
                 rng.normal(size=50),
                 support=(-np.inf, np.inf),
-                sample_weights=np.ones(49),
+                sample_weight=np.ones(49),
             )
 
     def test_all_zero_rejected(self, rng):
@@ -266,12 +266,12 @@ class TestWeightValidation:
             Distribution().fit(
                 rng.normal(size=50),
                 support=(-np.inf, np.inf),
-                sample_weights=np.zeros(50),
+                sample_weight=np.zeros(50),
             )
 
     def test_large_finite_weights_normalize_without_overflow(self):
         weights = np.full(50, np.finfo(np.float64).max)
-        normalized = _normalize_sample_weights_1d(50, weights)
+        normalized = _normalize_sample_weight_1d(50, weights)
         assert np.all(np.isfinite(normalized))
         assert normalized.sum() == pytest.approx(1.0)
         np.testing.assert_allclose(normalized, np.full(50, 1.0 / 50.0))
@@ -484,7 +484,7 @@ class TestBoundaryEndpointValidation:
             n_components=1,
             poly_degree=2,
             support=(0.0, 1.0),
-            sample_weights=weights,
+            sample_weight=weights,
             progressive=False,
         )
         assert fitted.is_fitted

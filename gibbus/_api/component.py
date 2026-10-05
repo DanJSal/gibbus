@@ -18,7 +18,19 @@ from numpy.polynomial import Chebyshev, Polynomial
 from numpy.typing import ArrayLike, NDArray
 
 from .._defaults import (
+    BACKTRACK_MAX_ITERS,
+    BACKTRACK_REDUCE,
     BOUNDARY_ALPHA,
+    BOUNDARY_EPS_MULT,
+    BRACKET_INIT_STEP,
+    BRACKET_MAX_EXPAND,
+    BRACKET_STEP_GROWTH,
+    GRAD_TOL,
+    HESS_TOL,
+    LOG_THRESH,
+    MAX_CACHED_MOMENTS,
+    NEWT_MAX,
+    NEWT_TOL,
     NUMERIC_FAILURES,
     SUPPRESSED_WARNINGS,
     _maybe_suppress,
@@ -35,6 +47,7 @@ from .._fit.natural_objective import (
     _prepare_natural_interval_objective,
     _prepare_natural_point_objective,
 )
+from .._model._state_kernels import _q_window_and_mode
 from .._postfit import analytics as _pf
 from .._postfit.evaluators import (
     _pdf_func,
@@ -51,7 +64,11 @@ from .._postfit.fitted_state import (
 from .._postfit.logspace import log_mass_between
 from .._spectral._certify import chebyshev_lower_bound
 from .._spectral._tail_integrals import TailIntegrator
-from .._spectral.cdf import SpectralCDF, density_spec
+from .._spectral.cdf import (
+    SpectralCDF,
+    boundary_aware_breaks_from_amplitudes,
+    density_spec,
+)
 from .._spectral.chebyshev import chebyshev_bernstein_matrix
 from .._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 from .._spectral.ppf import SpectralPPF
@@ -75,7 +92,7 @@ class _Presentation:
 
 
 def _natural_seed_params(seed, layout, coordinate, /):
-    """Reconstruct affine natural parameters from a portable fitted state.
+    """Reconstruct affine natural parameters from a fitted component state.
 
     The stored normalized potential is sufficient for this conversion.
 
@@ -319,6 +336,264 @@ def _fit_natural_fixed_degree(norm, degree, lower, upper, /):
     return final
 
 
+def _rebuild_component_state(model, provenance=None, /):
+    """Rebuild one current runtime component state from durable v1 model data.
+
+    The durable serialization stores the normalized potential and fitting
+    coordinate, not the spectral panels, moments, or optimizer payload used by
+    the current evaluator.  This function reconstructs those derived fields
+    when a serialized cache is absent or cannot be reused.
+
+    Parameters
+    ----------
+    model : Mapping
+        Durable per-component fields from serialization format v1.
+    provenance : Mapping or None, optional
+        Historical solver fields retained by the writer.  Missing provenance
+        produces a valid derived component whose fit diagnostics are marked
+        unavailable rather than guessed.
+
+    Returns
+    -------
+    numpy.ndarray
+        Current internal fitted-state scalar accepted by :class:`_Component`.
+    """
+    q_poly = np.asarray(model["q_poly"], dtype=np.float64).reshape(-1).copy()
+    canonical_support = np.asarray(
+        model["canonical_support"], dtype=np.float64
+    ).reshape(2)
+    boundary_amplitudes = np.asarray(
+        model["boundary_amplitudes"], dtype=np.float64
+    ).reshape(2)
+    boundary_allowed = np.asarray(model["boundary_allowed"], dtype=bool).reshape(2)
+    support = np.asarray(model["support"], dtype=np.float64).reshape(2)
+    center = float(model["fit_center"])
+    scale = float(model["fit_scale"])
+    direction = float(model["fit_direction"])
+    requested_degree = int(model["requested_poly_degree"])
+    effective_degree = int(q_poly.size - 1)
+    canonical_amps = _canonical_boundary_amplitudes(boundary_amplitudes, direction)
+
+    # The potential anchors remain the original canonical support after a
+    # truncation.  The active support may be a strict interior subset.
+    with np.errstate(over="ignore", invalid="ignore"):
+        active_z = np.sort(direction * (support - center) / scale)
+
+    finite_active = active_z[np.isfinite(active_z)]
+    if finite_active.size == 2:
+        guide = finite_active
+    elif finite_active.size == 1:
+        guide = np.repeat(finite_active[0], 2)
+    else:
+        # Zero is merely a window-search landmark; it does not alter the
+        # model.  Clamp it into a finite part of the canonical support when a
+        # bounded endpoint excludes zero.
+        anchor = 0.0
+        lo, hi = map(float, canonical_support)
+        if np.isfinite(lo) and anchor <= lo:
+            anchor = lo + max(1.0, abs(lo))
+        if np.isfinite(hi) and anchor >= hi:
+            anchor = hi - max(1.0, abs(hi))
+        if not np.isfinite(anchor):
+            anchor = 0.0
+        guide = np.array([anchor, anchor], dtype=np.float64)
+
+    window0, potential_mode, _qmin, q2_mode, _core = _q_window_and_mode(
+        canonical_support,
+        q_poly,
+        canonical_amps,
+        guide,
+        LOG_THRESH,
+        GRAD_TOL,
+        HESS_TOL,
+        NEWT_TOL,
+        NEWT_MAX,
+        BOUNDARY_EPS_MULT,
+        BRACKET_INIT_STEP,
+        BRACKET_MAX_EXPAND,
+        BRACKET_STEP_GROWTH,
+        BACKTRACK_MAX_ITERS,
+        BACKTRACK_REDUCE,
+        True,
+    )
+    mode_z = float(np.clip(float(potential_mode), active_z[0], active_z[1]))
+    q2_mode = float(q2_mode)
+    if np.isfinite(q2_mode) and q2_mode > 0.0:
+        z_std = float(1.0 / np.sqrt(q2_mode))
+    else:
+        width = float(np.diff(np.asarray(window0, dtype=np.float64))[0])
+        z_std = max(1.0, width / 6.0) if np.isfinite(width) and width > 0.0 else 1.0
+
+    zl, zu = map(float, canonical_support)
+    density = density_spec(
+        [
+            (
+                q_poly,
+                zl,
+                zu,
+                float(canonical_amps[0]),
+                float(canonical_amps[1]),
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                -np.inf,
+                np.inf,
+            )
+        ],
+        view=False,
+    )
+    initial_breaks = (
+        boundary_aware_breaks_from_amplitudes(canonical_support, canonical_amps)
+        if np.array_equal(active_z, canonical_support)
+        else None
+    )
+    cdf_rep = SpectralCDF(
+        active_z,
+        density=density,
+        mode=mode_z,
+        std=z_std,
+        initial_breaks=initial_breaks,
+        map_scale=None,
+        config=_SpectralCDFOptions(),
+    )
+    spectral = dict(pack_cdf_state(cdf_rep))
+    try:
+        ppf_rep = SpectralPPF(cdf_rep, config=_SpectralPPFOptions())
+    except NUMERIC_FAILURES as exc:
+        _reraise_if_debug(
+            exc, "serialized-state spectral PPF reconstruction", routine=True
+        )
+        ppf_rep = None
+        spectral.update(fallback_ppf_state())
+        spectral["ppf_fallback"] = np.int32(1)
+    else:
+        spectral.update(pack_ppf_state(ppf_rep))
+        spectral["ppf_fallback"] = np.int32(0)
+
+    # Only a valid finite pair is required for the temporary component.  The
+    # quantile-defined material window is installed after the evaluator exists.
+    placeholder = np.asarray(window0, dtype=np.float64).reshape(2)
+    if not np.all(np.isfinite(placeholder)) or not placeholder[0] < placeholder[1]:
+        placeholder = np.array([mode_z - 1.0, mode_z + 1.0], dtype=np.float64)
+    if not np.all(np.isfinite(placeholder)) or not placeholder[0] < placeholder[1]:
+        placeholder = np.array([-1.0, 1.0], dtype=np.float64)
+
+    prov = {} if provenance is None else dict(provenance)
+    n_enabled = int(np.count_nonzero(boundary_allowed))
+    optimizer_size = max(1, effective_degree + n_enabled)
+    canonical_active = canonical_amps > 0.0
+
+    data = {
+        "q_poly": q_poly,
+        "boundary_amplitudes": boundary_amplitudes,
+        "boundary_allowed": boundary_allowed,
+        "support": support,
+        "canonical_support": canonical_support,
+        "window": placeholder,
+        "canonical_mode": mode_z,
+        "mode": float(center + direction * scale * mode_z),
+        "median": np.nan,
+        "mean": np.nan,
+        "var": np.nan,
+        "std": np.nan,
+        "skew": np.nan,
+        "kurt": np.nan,
+        "raw_moments": np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64),
+        "canonical_raw_moments": np.full(
+            int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64
+        ),
+        "fit_center": center,
+        "fit_scale": scale,
+        "fit_direction": direction,
+        "optimizer_params": np.zeros(optimizer_size, dtype=np.float64),
+        "requested_poly_degree": requested_degree,
+        "effective_poly_degree": effective_degree,
+        "nll": float(prov.get("nll", np.nan)),
+        "boundary_standard_errors": np.asarray(
+            prov.get("boundary_standard_errors", (np.nan, np.nan)), dtype=np.float64
+        ).reshape(2),
+        "boundary_p_values": np.asarray(
+            prov.get("boundary_p_values", (np.nan, np.nan)), dtype=np.float64
+        ).reshape(2),
+        "optimizer_success": np.int8(prov.get("optimizer_success", 0)),
+        "optimizer_status": np.str_(prov.get("optimizer_status", "missing")),
+        "optimizer_message": np.str_(prov.get("optimizer_message", "missing")),
+        "optimizer_n_iterations": np.int64(prov.get("optimizer_n_iterations", -1)),
+        "optimizer_n_evaluations": np.int64(prov.get("optimizer_n_evaluations", -1)),
+        "optimizer_subproblem_iterations": np.int64(
+            prov.get("optimizer_subproblem_iterations", -1)
+        ),
+        "optimizer_decrease_bound": float(
+            prov.get("optimizer_decrease_bound", np.nan)
+        ),
+        "effective_curvature_degree": np.int64(
+            prov.get("effective_curvature_degree", max(0, effective_degree - 2))
+        ),
+        "lower_amplitude_active": np.int8(
+            prov.get("lower_amplitude_active", canonical_active[0])
+        ),
+        "upper_amplitude_active": np.int8(
+            prov.get("upper_amplitude_active", canonical_active[1])
+        ),
+        "separator_certified": np.int8(prov.get("separator_certified", 0)),
+    }
+    data.update(spectral)
+    temp = _Component(_structured_scalar(data))
+    base = temp.base
+
+    raw = np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64)
+    craw = np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64)
+    raw[0] = 1.0
+    craw[0] = 1.0
+    mu_eff = -direction * center / scale
+    sigma_eff = direction / scale
+    upto = min(4, raw.size - 1, craw.size - 1)
+    for k in range(1, upto + 1):
+        raw[k] = _expect_vectorized(
+            base.neg_log,
+            support,
+            lambda x, kk=k: x**kk,
+            points=(base.mode,),
+        )
+        craw[k] = _expect_vectorized(
+            base.neg_log,
+            support,
+            lambda x, kk=k: (sigma_eff * x + mu_eff) ** kk,
+            points=(base.mode,),
+        )
+    data["raw_moments"] = raw
+    data["canonical_raw_moments"] = craw
+    if upto >= 4:
+        stats = _pf._stats_from_raw_moments(*map(float, raw[1:5]))
+        for name in ("mean", "var", "std", "skew", "kurt"):
+            data[name] = float(stats[name])
+    data["median"] = float(base.ppf(0.5))
+
+    try:
+        qlo = float(base.ppf(1e-12))
+        qhi = float(base.isf(1e-12))
+    except NUMERIC_FAILURES as exc:
+        _reraise_if_debug(
+            exc, "serialized-state moment-window reconstruction", routine=True
+        )
+    else:
+        with np.errstate(over="ignore", invalid="ignore"):
+            zwin = np.sort(
+                np.array(
+                    [sigma_eff * qlo + mu_eff, sigma_eff * qhi + mu_eff],
+                    dtype=np.float64,
+                )
+            )
+        if np.all(np.isfinite(zwin)) and zwin[0] < zwin[1]:
+            data["window"] = zwin
+
+    result = _structured_scalar(data)
+    _check_state_invariants(result)
+    return result
+
+
 class _Component:
     """Internal single-component log-concave density estimator.
 
@@ -438,7 +713,7 @@ class _Component:
         verbose: int,
         suppress_warnings: bool,
         init_from: Union["_Component", Mapping[str, Any]] | None,
-        sample_weights: ArrayLike | None,
+        sample_weight: ArrayLike | None,
         degree_config: _DegreeSelectionConfig,
     ) -> "_Component":
         """Privately fit and return a new completed read-only component.
@@ -470,7 +745,7 @@ class _Component:
             Whether numerical fitting warnings should be suppressed.
         init_from : _Component, Mapping, or None
             Warm-start seed.
-        sample_weights : array_like or None
+        sample_weight : array_like or None
             Optional non-negative relative weight assigned to each observation.
         degree_config : _DegreeSelectionConfig
             Explicit omitted-information policy owned by the fit request.
@@ -500,7 +775,7 @@ class _Component:
             verbose,
             suppress_warnings,
             init_from,
-            sample_weights,
+            sample_weight,
         )
         with _maybe_suppress(norm["suppress_warnings"], SUPPRESSED_WARNINGS):
             objective, result, effective_n, p_values = _run_natural_fit(
@@ -1121,7 +1396,7 @@ class _Component:
 
     @property
     def data(self):
-        """A deep copy of the structured fitted state."""
+        """Return a deep copy of this component's internal runtime state."""
         self._ensure_fitted()
         return self._data.copy()
 

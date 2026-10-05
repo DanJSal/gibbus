@@ -39,13 +39,13 @@ Switch to the exp-space view to model positive variates::
     c.set_default("exp")
     c.mean   # E[exp(X)]
 
-Save and restore a fitted model::
+Save and restore a fitted model with the versioned durable state::
 
-    state = c.data           # numpy structured scalar
+    state = c.data                  # non-object NumPy structured scalar
     c2 = Distribution(state)        # reconstruct without re-fitting
 
-    np.save('model.npy', c.data)
-    c3 = Distribution(np.load('model.npy', allow_pickle=False))
+    np.save("model.npy", c.data)
+    c3 = Distribution(np.load("model.npy", allow_pickle=False))
 
 Diagnosing a suspect fit
 ------------------------

@@ -10,10 +10,10 @@ everything mixture-specific is gathered here:
 * **Potentials** — the mixture negative-log density and its derivatives,
   evaluated through a batched log-sum-exp recurrence rather than a Python
   loop over points.
-* **Spectral cache** — component spectral states remain the serialized
-  source of truth; the mixture-level CDF/PPF is cheap enough to rebuild
+* **Spectral cache** — component runtime states carry the active spectral
+  representations; the mixture-level CDF/PPF is cheap enough to rebuild
   deterministically after fitting, loading, or an affine transform, and so
-  is never packed.
+  is never retained as durable model state.
 
 This is a mixin because every method needs the model's components, weights
 and active space; splitting it out keeps :mod:`gibbus._api.distribution` about the public
@@ -360,8 +360,8 @@ class _MixtureAnalyticsMixin:
     def _rebuild_spectral_cache(self):
         """Build mixture CDF/PPF from the same spectral machinery as components.
 
-        Component spectral states remain the serialized source of truth.  A
-        mixture-level spectral representation is cheap enough to rebuild
+        Component runtime states carry the active spectral representations.
+        A mixture-level spectral representation is cheap enough to rebuild
         deterministically after fitting, loading, or an affine transform.
         """
         if self._K <= 1:

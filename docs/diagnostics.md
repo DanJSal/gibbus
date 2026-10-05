@@ -128,7 +128,7 @@ if s is not None:
     print(s["selected_n_components"], s["scores"])
 ```
 
-The NumPy `.data` representation retains per-component optimizer termination records. Session-level EM and automatic-selection traces are intentionally not part of that structured model state, so reconstructing with `Distribution(c.data)` or loading a saved `.npy` state does not restore them. `copy.copy`, `copy.deepcopy`, `Distribution.copy()`, and Python pickle preserve those in-process diagnostic records. Persist them separately when the `.data` state is the analysis record.
+Serialization format v1 may retain per-component optimizer termination records in its optional `provenance` section. Session-level EM and automatic-selection traces are not part of the durable state, so reconstructing with `Distribution(c.data)` or loading a saved `.npy` state does not restore those session records. If optional provenance is absent or unusable, historical optimizer fields and the active-face parameter count in `fit_diagnostics` are reported as unavailable, while the model-level provenance is derived from the reconstructed distribution rather than invented. `copy.copy`, `copy.deepcopy`, `Distribution.copy()`, and Python pickle preserve the in-process session records. Persist them separately when they are part of the analysis record. See [Serialization and compatibility](serialization.md).
 
 ---
 ## Diagnostics — `Distribution.spectral_diagnostics`
@@ -155,6 +155,8 @@ if d["error_estimate"] > 1e-6:
 ```
 
 Read it for `K == 1` and `K > 1` alike. A single component is served by its own packed CDF fields, while a mixture is served by a separately built mixture-level CDF, so inspecting component fields directly says nothing about what a mixture's `cdf()` and `ppf()` will do — `scope` tells you which one you are looking at.
+
+When a serialized model is loaded, the optional runtime cache is reused only when it matches the running Gibbus version and the durable model. Otherwise the spectral representation is rebuilt. `spectral_diagnostics` therefore always describes the representation currently serving queries, which may differ from the one present when the model was originally saved. Rebuilding can take the package's normal graceful numerical fallback paths, so `suppressed_failures()` may gain entries during `load()`.
 
 ### Accuracy and limitations
 

@@ -43,9 +43,7 @@ from .._defaults import (
 from .._fit.inputs import _coerce_sample_size, _to_generator
 from .._fit.mixture import (
     _find_mixture_modes_exp,
-    _pack_mixture_struct,
     _sort_components_by_mode,
-    _unpack_mixture_struct,
 )
 from .._postfit.analytics import _cumulant_from_centered, _exp_moment_from_stats
 from .._postfit.expectation import expect as _expect
@@ -77,8 +75,9 @@ from .._postfit.survival import logisf as _logisf
 from .._postfit.survival import logppf as _logppf
 from .._postfit.survival import mean_residual_life as _mean_residual_life
 from .._postfit.survival import residual_entropy as _residual_entropy
+from .._serialization import load_distribution_state, pack_distribution_state
 from .._spectral.tail import refine_tail_quantiles
-from .component import _Component, _Presentation
+from .component import _Component, _Presentation, _rebuild_component_state
 from .diagnostics import _DiagnosticsMixin
 from .fitting import _FitRequest, _prepare_fit_request, _run_fit_request
 from .mixture_stats import _MixtureAnalyticsMixin
@@ -382,7 +381,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         verbose: int = 0,
         suppress_warnings: bool = False,
         init_from: Optional["Distribution"] = None,
-        sample_weights: ArrayLike | None = None,
+        sample_weight: ArrayLike | None = None,
         component_options: list[dict[str, Any]] | None = None,
         em_max_iter: int | None = None,
         em_tol: float | None = None,
@@ -440,7 +439,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             given, ``n_components`` and ``support`` are inherited from
             the seed.  Per-component seeds are threaded automatically
             in seed-component order.
-        sample_weights : array_like or None, optional
+        sample_weight : array_like or None, optional
             Non-negative observation weights.
         component_options : list of dict or None, optional
             Per-component keyword arguments (currently only
@@ -506,7 +505,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             verbose=verbose,
             suppress_warnings=suppress_warnings,
             init_from=init_from,
-            sample_weights=sample_weights,
+            sample_weight=sample_weight,
             component_options=component_options,
             em_max_iter=em_max_iter,
             em_tol=em_tol,
@@ -530,7 +529,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             controller.
         """
         target = Distribution(
-            _pack_mixture_struct(
+            pack_distribution_state(
                 result.weights,
                 "base",
                 [comp.data for comp in result.components],
@@ -1623,7 +1622,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         new_weights = np.exp(kept_log_array - normalizer)
         new_weights /= np.sum(new_weights, dtype=np.float64)
 
-        state = _pack_mixture_struct(
+        state = pack_distribution_state(
             new_weights,
             self._default,
             [comp.data for comp in kept_components],
@@ -1986,18 +1985,24 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
 
     @property
     def data(self):
-        """A deep copy of the structured fitted state.
+        """Return a deep copy of the versioned durable serialized state.
+
+        The non-object NumPy structured scalar can be persisted with
+        :func:`numpy.save` and loaded with ``allow_pickle=False``.  Its
+        durable ``model`` section is versioned independently of optional
+        provenance and same-version runtime cache data.
 
         Returns
         -------
         numpy.void
+            Current Gibbus serialization envelope.
         """
         self._ensure_fitted()
         comp_states = [c.data for c in self._components]
         bm = None
         if self._mode_cache is not None and "base" in self._mode_cache:
             bm = self._mode_cache["base"]
-        return _pack_mixture_struct(
+        return pack_distribution_state(
             self._weights,
             self._default,
             comp_states,
@@ -2008,67 +2013,44 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         )
 
     def load(self, state) -> "Distribution":
-        """Load a previously saved fitted state.
+        """Load a previously saved versioned durable state.
 
-        All component counts use the same model envelope. The current
-        instance changes only after the complete state has validated.
+        The format/version and frozen mathematical model are validated before
+        installation. Optional stale or invalid runtime cache data is rebuilt.
+        The current instance changes only after the durable state has validated.
 
         Parameters
         ----------
         state : numpy.void
-            Structured fitted state previously obtained from :attr:`data`
-            or loaded from a NumPy file.
+            Versioned serialized state previously obtained from :attr:`data`
+            or loaded from a NumPy file with ``allow_pickle=False``.
 
         Returns
         -------
         Distribution
             ``self``.
         """
-        state = np.array(state, copy=True)
+        loaded = load_distribution_state(
+            state, rebuild_component=_rebuild_component_state
+        )
         target = Distribution()
-        weights, default_space, comp_states = _unpack_mixture_struct(state)
-        metadata = {
-            name: state[name].item()
-            for name in ("provenance", "n_parameters", "n_face_parameters")
-        }
-        metadata["shared_boundary"] = {
-            name: state[f"shared_boundary_{name}"]
-            for name in (
-                "allowed",
-                "amplitudes",
-                "active",
-                "standard_errors",
-                "p_values",
-            )
-        }
-        target._fit_metadata = _model_metadata(comp_states, metadata)
-        components = [_Component(cs) for cs in comp_states]
-        components, weights = _sort_components_by_mode(components, weights)
+        metadata = loaded.fit_metadata
+        target._fit_metadata = _model_metadata(
+            loaded.comp_states, metadata if metadata is not None else None
+        )
+        components = [_Component(cs) for cs in loaded.comp_states]
+        components, weights = _sort_components_by_mode(components, loaded.weights)
         target._components = tuple(components)
         target._weights = np.frombuffer(
             np.asarray(weights, dtype=np.float64).tobytes(), dtype=np.float64
         )
         target._K = len(components)
-        target._presentation.affine = (float(state["mu"]), float(state["sigma"]))
-        target._default = default_space
+        target._presentation.affine = (loaded.mu, loaded.sigma)
+        target._default = loaded.default_space
         for comp in components:
             comp._context = target._presentation
-        raw = np.asarray(state["base_modes"], dtype=np.float64)
-        n_modes = np.asarray(state["n_modes"])
-        if (
-            raw.ndim != 1
-            or n_modes.ndim != 0
-            or not np.issubdtype(n_modes.dtype, np.integer)
-            or int(n_modes) != raw.size
-        ):
-            raise ValueError(
-                "model state has inconsistent n_modes/base_modes: expected a "
-                "1-D base_modes array with exactly n_modes entries"
-            )
-        if not np.all(np.isfinite(raw)):
-            raise ValueError("model state base_modes must be finite")
-        if raw.size:
-            target._mode_cache = {"base": tuple(map(float, raw))}
+        if loaded.base_modes:
+            target._mode_cache = {"base": tuple(loaded.base_modes)}
         self.__dict__.update(target.__dict__)
         return self
 

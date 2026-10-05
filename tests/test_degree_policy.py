@@ -183,7 +183,7 @@ def test_component_fit_reuses_explicit_degree_config(monkeypatch):
         verbose=0,
         suppress_warnings=False,
         init_from=None,
-        sample_weights=None,
+        sample_weight=None,
         degree_config=config,
     )
     assert isinstance(fitted, component._Component)

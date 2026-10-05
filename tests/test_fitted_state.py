@@ -6,6 +6,28 @@ import pytest
 from gibbus import Distribution
 
 
+def _replace_section(state, section, value):
+    """Return *state* with one nested serialization section replaced."""
+    dtype = []
+    for name in state.dtype.names:
+        field_dtype = value.dtype if name == section else state.dtype[name]
+        dtype.append((name, field_dtype))
+    out = np.zeros((), dtype=dtype)
+    for name in state.dtype.names:
+        out[name] = value if name == section else state[name]
+    return out
+
+
+def _drop_model_field(state, field):
+    model = state["model"]
+    kept = [name for name in model.dtype.names if name != field]
+    dtype = [(name, model.dtype[name]) for name in kept]
+    reduced = np.zeros((), dtype=dtype)
+    for name in kept:
+        reduced[name] = model[name]
+    return _replace_section(state, "model", reduced)
+
+
 def test_point_state_has_canonical_natural_layout():
     rng = np.random.default_rng(104)
     fitted = Distribution().fit(
@@ -32,13 +54,9 @@ def test_state_missing_required_fields_is_not_loadable():
         support=(-np.inf, np.inf),
         poly_degree=4,
     )
-    state = fitted.data
-    kept = [name for name in state.dtype.names if name != "comp_q_poly"]
-    truncated = np.zeros((), dtype=[(n, state.dtype.fields[n][0]) for n in kept])
-    for name in kept:
-        truncated[name] = state[name]
-    with pytest.raises(ValueError, match="missing fields: q_poly"):
-        Distribution(truncated)
+    state = _drop_model_field(fitted.data, "q_poly_values")
+    with pytest.raises(ValueError, match="missing fields: q_poly_values"):
+        Distribution(state)
 
 
 def test_reflected_upper_half_line_round_trips_pdf_cdf_ppf_and_potential():
@@ -112,36 +130,44 @@ def test_reported_support_is_exactly_the_requested_support():
         data, n_components=1, poly_degree=4, support=(0.0, np.inf), rng=0
     )
     np.testing.assert_array_equal(model.support, [0.0, np.inf])
-    np.testing.assert_array_equal(model.data["comp_support"][0], [0.0, np.inf])
+    np.testing.assert_array_equal(model.data["model"]["support"][0], [0.0, np.inf])
     assert model.ppf(0.0) == 0.0
 
 
 def test_load_rejects_a_non_positive_scale():
     state = _saved_state()
-    state["sigma"] = -1.0
+    state["model"]["sigma"] = -1.0
     with pytest.raises(ValueError, match="sigma must be finite and positive"):
         Distribution().load(state)
 
 
-def test_load_rejects_non_monotone_quantile_breakpoints():
-    state = _saved_state()
-    state["comp_ppf_breaks_z"][0] = state["comp_ppf_breaks_z"][0, ::-1].copy()
-    with pytest.raises(ValueError, match="strictly increasing"):
-        Distribution().load(state)
+def test_load_rebuilds_non_monotone_quantile_cache():
+    clean = _saved_state()
+    state = np.array(clean, copy=True)
+    runtime = state["cache"]["runtime_state"]
+    runtime["comp_ppf_breaks_z"][0] = runtime["comp_ppf_breaks_z"][0, ::-1].copy()
+    expected = Distribution(clean)
+    loaded = Distribution().load(state)
+    x = np.linspace(-2.0, 2.0, 21)
+    np.testing.assert_allclose(loaded.cdf(x), expected.cdf(x), rtol=0.0, atol=2e-12)
 
 
-def test_load_rejects_non_finite_cdf_breakpoints():
-    state = _saved_state()
-    breaks = np.asarray(state["comp_cdf_breaks"][0]).copy()
+def test_load_rebuilds_non_finite_cdf_cache():
+    clean = _saved_state()
+    state = np.array(clean, copy=True)
+    runtime = state["cache"]["runtime_state"]
+    breaks = np.asarray(runtime["comp_cdf_breaks"][0]).copy()
     breaks[2] = np.nan
-    state["comp_cdf_breaks"][0] = breaks
-    with pytest.raises(ValueError, match="cdf_breaks"):
-        Distribution().load(state)
+    runtime["comp_cdf_breaks"][0] = breaks
+    expected = Distribution(clean)
+    loaded = Distribution().load(state)
+    x = np.linspace(-2.0, 2.0, 21)
+    np.testing.assert_allclose(loaded.cdf(x), expected.cdf(x), rtol=0.0, atol=2e-12)
 
 
 def test_load_rejects_an_unknown_default_space():
     state = _saved_state()
-    state["default_space"] = "zzz"
+    state["model"]["default_space"] = "zzz"
     with pytest.raises(ValueError, match="default_space"):
         Distribution().load(state)
 
@@ -155,8 +181,8 @@ def test_load_rejects_invalid_mixture_weights():
         rng=0,
     )
     state = np.array(fitted.data, copy=True)
-    weights = np.asarray(state["weights"]).copy()
+    weights = np.asarray(state["model"]["weights"]).copy()
     weights[0] = 5.0
-    state["weights"] = weights
+    state["model"]["weights"] = weights
     with pytest.raises(ValueError, match="component weights"):
         Distribution().load(state)

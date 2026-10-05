@@ -1,8 +1,10 @@
-"""Packing and validation of the portable fitted-state record.
+"""Packing and validation of the current internal fitted-state record.
 
 The state records the fixed fitting coordinate, normalized natural potential,
 solver diagnostics, and downstream numerical representations used by public
-evaluation and warm starts.
+evaluation and warm starts.  It is a runtime representation, not the durable
+cross-version persistence schema; that boundary is defined in
+:mod:`gibbus._serialization`.
 """
 
 import numpy as np
@@ -27,26 +29,25 @@ from .._spectral.runtime import fallback_ppf_state, pack_cdf_state, pack_ppf_sta
 from .analytics import _powaff_moment_from_z_moments, _stats_from_raw_moments
 
 
-def _model_metadata(comp_states, metadata=None):
-    """Validate shared fitted geometry and return detached model metadata.
+def _shared_model_geometry(comp_states, /):
+    """Validate shared component geometry and return model-level dimensions.
 
     Parameters
     ----------
     comp_states : sequence of numpy.void
         Packed component states sharing support and boundary amplitudes.
-    metadata : Mapping or None, optional
-        Declared model dimensions and shared inference. ``None`` creates
-        derived-state metadata with unavailable inferential errors and p-values.
 
     Returns
     -------
     dict
-        Detached model dimensions, provenance and shared-boundary inference.
+        ``allowed``, ``amplitudes`` and ``active`` boundary arrays in public
+        lower/upper order, plus the integer ``n_parameters`` and
+        ``n_face_parameters`` implied by the components.
 
     Raises
     ------
     ValueError
-        If component geometry or declared metadata is inconsistent.
+        If the component states are invalid or disagree on shared geometry.
     """
     if not comp_states:
         raise ValueError("model state must contain at least one component")
@@ -62,6 +63,7 @@ def _model_metadata(comp_states, metadata=None):
         active = active[::-1]
 
     def anchors(state):
+        """Return the sorted potential anchors of *state* in fitted base coordinates."""
         return np.sort(
             float(state["fit_center"])
             + float(state["fit_direction"])
@@ -101,11 +103,90 @@ def _model_metadata(comp_states, metadata=None):
         + len(comp_states)
         - 1
     )
+    return {
+        "allowed": allowed,
+        "amplitudes": amplitudes,
+        "active": active,
+        "n_parameters": n_parameters,
+        "n_face_parameters": n_face,
+    }
+
+
+def _metadata_conflict(geometry, metadata, /):
+    """Return why declared model metadata disagrees with the components.
+
+    Parameters
+    ----------
+    geometry : Mapping
+        Result of :func:`_shared_model_geometry` for the model's components.
+    metadata : Mapping
+        Declared provenance, dimensions and shared-boundary inference with the
+        keys produced by :func:`_model_metadata`.
+
+    Returns
+    -------
+    str or None
+        A description of the first disagreement, or ``None`` when the
+        metadata is consistent with the components.
+    """
+    if str(metadata["provenance"]) not in ("fitted", "derived"):
+        return "model provenance must be 'fitted' or 'derived'"
+    for key in ("n_parameters", "n_face_parameters"):
+        value = metadata[key]
+        if not np.isfinite(value) or int(value) != value or int(value) != geometry[key]:
+            return f"model {key} disagrees with fitted component dimensions"
+    allowed = geometry["allowed"]
+    shared = metadata["shared_boundary"]
+    for key in ("allowed", "active"):
+        value = np.asarray(shared[key])
+        if value.shape != (2,) or not np.array_equal(value, geometry[key]):
+            return f"shared boundary {key} disagrees with components"
+    declared = np.asarray(shared["amplitudes"], dtype=float)
+    if declared.shape != (2,) or not np.array_equal(
+        declared[allowed], geometry["amplitudes"][allowed]
+    ):
+        return "shared boundary amplitudes disagree with components"
+    if np.any(~(np.isnan(declared[~allowed]) | (declared[~allowed] == 0.0))):
+        return "excluded shared amplitudes must be zero or unavailable"
+    errors = np.asarray(shared["standard_errors"], dtype=float)
+    p_values = np.asarray(shared["p_values"], dtype=float)
+    if errors.shape != (2,) or np.any(errors < 0):
+        return "shared standard errors must be nonnegative or unavailable"
+    if p_values.shape != (2,) or np.any((p_values < 0) | (p_values > 1)):
+        return "shared p-values must lie in [0, 1] or be unavailable"
+    return None
+
+
+def _model_metadata(comp_states, metadata=None):
+    """Validate shared fitted geometry and return detached model metadata.
+
+    Parameters
+    ----------
+    comp_states : sequence of numpy.void
+        Packed component states sharing support and boundary amplitudes.
+    metadata : Mapping or None, optional
+        Declared model dimensions and shared inference. ``None`` creates
+        derived-state metadata with unavailable inferential errors and p-values.
+
+    Returns
+    -------
+    dict
+        Detached model dimensions, provenance and shared-boundary inference.
+
+    Raises
+    ------
+    ValueError
+        If component geometry or declared metadata is inconsistent.
+    """
+    geometry = _shared_model_geometry(comp_states)
+    allowed = geometry["allowed"]
+    amplitudes = geometry["amplitudes"]
+    active = geometry["active"]
     if metadata is None:
         metadata = {
             "provenance": "derived",
-            "n_parameters": n_parameters,
-            "n_face_parameters": n_face,
+            "n_parameters": geometry["n_parameters"],
+            "n_face_parameters": geometry["n_face_parameters"],
             "shared_boundary": {
                 "allowed": allowed,
                 "amplitudes": amplitudes,
@@ -114,43 +195,19 @@ def _model_metadata(comp_states, metadata=None):
                 "p_values": (np.nan, np.nan),
             },
         }
+    conflict = _metadata_conflict(geometry, metadata)
+    if conflict is not None:
+        raise ValueError(conflict)
     provenance = str(metadata["provenance"])
-    if provenance not in ("fitted", "derived"):
-        raise ValueError("model provenance must be 'fitted' or 'derived'")
-    dimensions = []
-    for key, expected in (
-        ("n_parameters", n_parameters),
-        ("n_face_parameters", n_face),
-    ):
-        value = metadata[key]
-        if not np.isfinite(value) or int(value) != value or int(value) != expected:
-            raise ValueError(f"model {key} disagrees with fitted component dimensions")
-        dimensions.append(int(value))
-    shared = metadata["shared_boundary"]
-    for key, expected in (("allowed", allowed), ("active", active)):
-        value = np.asarray(shared[key])
-        if value.shape != (2,) or not np.array_equal(value, expected):
-            raise ValueError(f"shared boundary {key} disagrees with components")
-    declared = np.asarray(shared["amplitudes"], dtype=float)
-    if declared.shape != (2,) or not np.array_equal(
-        declared[allowed], amplitudes[allowed]
-    ):
-        raise ValueError("shared boundary amplitudes disagree with components")
-    if np.any(~(np.isnan(declared[~allowed]) | (declared[~allowed] == 0.0))):
-        raise ValueError("excluded shared amplitudes must be zero or unavailable")
-    errors = np.asarray(shared["standard_errors"], dtype=float)
-    p_values = np.asarray(shared["p_values"], dtype=float)
-    if errors.shape != (2,) or np.any(errors < 0):
-        raise ValueError("shared standard errors must be nonnegative or unavailable")
-    if p_values.shape != (2,) or np.any((p_values < 0) | (p_values > 1)):
-        raise ValueError("shared p-values must lie in [0, 1] or be unavailable")
+    errors = np.asarray(metadata["shared_boundary"]["standard_errors"], dtype=float)
+    p_values = np.asarray(metadata["shared_boundary"]["p_values"], dtype=float)
     if provenance == "derived":
         errors = np.full(2, np.nan)
         p_values = np.full(2, np.nan)
     return {
         "provenance": provenance,
-        "n_parameters": dimensions[0],
-        "n_face_parameters": dimensions[1],
+        "n_parameters": int(metadata["n_parameters"]),
+        "n_face_parameters": int(metadata["n_face_parameters"]),
         "shared_boundary": {
             "allowed": tuple(map(bool, allowed)),
             "amplitudes": tuple(map(float, amplitudes)),

@@ -46,6 +46,20 @@ Diagnostic modes:
 Allocation fallbacks inside `noexcept nogil` Cython code cannot reach the Python
 failure ledger and are outside the debug-mode guarantees.
 
+## Serialization maintenance
+
+Durable persistence is a public compatibility surface. See [Serialization and compatibility](serialization.md) for the v1 wire contract.
+
+- The `model` section of an existing serialization format is frozen. Do not add, remove, reorder, retype, or reinterpret its fields without introducing a new `format_version`.
+- Optional `provenance` may add ignorable fields. Missing or malformed provenance must not make a valid durable model unreadable.
+- Optional runtime `cache` data is not durable schema. Cache-layout changes do not require a new durable format version; incompatible caches must be discarded and rebuilt.
+- Validate optional `provenance` and `cache` sections explicitly (field names, dtypes, shapes, admissible values) before reading them, and treat an unrecognized section as absent. Do not detect malformed optional data by catching exceptions. A cache that passes the version and both digest checks but is still inconsistent indicates a Gibbus defect and must raise.
+- Committed fixtures carry no runtime cache. Pre-release builds share one version string, so a committed cache could be trusted by a build whose cache layout has changed. Test cache reuse with freshly written states.
+- Never silently reinterpret an old format number. Add an explicit reader/migration when a future format requires one, or reject unsupported formats clearly.
+- `tests/data/serialization/` contains immutable released-format fixtures. Do not regenerate old fixtures to make a compatibility failure disappear; add fixtures for a new format instead.
+- Cross-version tests should verify public mathematical behavior with tolerances and retain an independent plain-NumPy oracle for the frozen v1 density formula.
+- Keep durable fields explicitly typed and compatible with `np.save` / `np.load(..., allow_pickle=False)`; object dtype is not permitted.
+
 ## Coding standards
 
 **Boundaries and canonical data**

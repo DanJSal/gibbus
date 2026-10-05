@@ -1,6 +1,7 @@
 """Round-tripping, weighting, transforms, and kernel/NumPy agreement."""
 
 import copy
+import inspect
 import pickle
 
 import numpy as np
@@ -22,11 +23,16 @@ def bimodal(rng):
 class TestSampleWeights:
     """Observation weights must affect single and mixture fits alike."""
 
+    def test_fit_uses_singular_sample_weight_keyword(self):
+        params = inspect.signature(Distribution.fit).parameters
+        assert "sample_weight" in params
+        assert "sample_weight" not in params
+
     def test_weights_shift_single_component_mean(self, rng, bimodal):
         w = np.ones(bimodal.size)
         w[bimodal.size // 2 :] = 20.0
         c = Distribution().fit(
-            bimodal, n_components=1, support=(-np.inf, np.inf), sample_weights=w
+            bimodal, n_components=1, support=(-np.inf, np.inf), sample_weight=w
         )
         assert c.mean == pytest.approx(np.average(bimodal, weights=w), abs=0.05)
 
@@ -34,7 +40,7 @@ class TestSampleWeights:
         w = np.ones(bimodal.size)
         w[bimodal.size // 2 :] = 20.0
         c = Distribution().fit(
-            bimodal, n_components=2, support=(-np.inf, np.inf), rng=0, sample_weights=w
+            bimodal, n_components=2, support=(-np.inf, np.inf), rng=0, sample_weight=w
         )
         expected = w[bimodal.size // 2 :].sum() / w.sum()
         assert c.weights[1] == pytest.approx(expected, abs=0.02)
@@ -47,7 +53,7 @@ class TestSampleWeights:
             bimodal, n_components=2, support=(-np.inf, np.inf), rng=0
         )
         b = Distribution().fit(
-            bimodal, n_components=2, support=(-np.inf, np.inf), rng=0, sample_weights=w
+            bimodal, n_components=2, support=(-np.inf, np.inf), rng=0, sample_weight=w
         )
         assert not np.allclose(a.weights, b.weights)
 
@@ -55,7 +61,7 @@ class TestSampleWeights:
         data = rng.normal(size=600)
         a = Distribution().fit(data, n_components=1, support=(-np.inf, np.inf))
         b = Distribution().fit(
-            data, n_components=1, support=(-np.inf, np.inf), sample_weights=np.ones(600)
+            data, n_components=1, support=(-np.inf, np.inf), sample_weight=np.ones(600)
         )
         assert b.mean == pytest.approx(a.mean, rel=1e-9)
         assert b.var == pytest.approx(a.var, rel=1e-9)
@@ -65,7 +71,7 @@ class TestSampleWeights:
         w = np.ones(bimodal.size)
         w[bimodal.size // 2 :] = 20.0
         explicit = Distribution().fit(
-            bimodal, n_components=1, support=(-np.inf, np.inf), sample_weights=w
+            bimodal, n_components=1, support=(-np.inf, np.inf), sample_weight=w
         )
         assert explicit.mean == pytest.approx(np.average(bimodal, weights=w), abs=0.05)
 
@@ -155,14 +161,16 @@ class TestSerialization:
         } <= names
         assert not any("interp" in name.lower() for name in names)
 
-    def test_mixture_state_is_spectral_only(self, bimodal):
+    def test_mixture_spectral_state_is_optional_cache_only(self, bimodal):
         c = Distribution().fit(
             bimodal, n_components=2, support=(-np.inf, np.inf), rng=0
         )
-        names = set(c.data.dtype.names)
-        assert "comp_cdf_coeffs" in names
-        assert "comp_ppf_coeffs" in names
-        assert not any("interp" in name.lower() for name in names)
+        model_names = set(c.data["model"].dtype.names)
+        cache_names = set(c.data["cache"]["runtime_state"].dtype.names)
+        assert "comp_cdf_coeffs" in cache_names
+        assert "comp_ppf_coeffs" in cache_names
+        assert not any(name.startswith(("cdf_", "ppf_")) for name in model_names)
+        assert not any("interp" in name.lower() for name in cache_names)
 
     def test_roundtrip_preserves_cdf_and_ppf(self, rng, tmp_path):
         c = Distribution().fit(
@@ -176,10 +184,11 @@ class TestSerialization:
         assert np.array_equal(loaded.cdf(xs), c.cdf(xs))
         assert np.array_equal(loaded.ppf(ps), c.ppf(ps))
 
-    def test_load_rejects_invalid_spectral_state_dimensions(self, rng):
+    def test_load_rebuilds_invalid_spectral_state_dimensions(self, rng):
         c = Distribution().fit(
             rng.normal(size=300), n_components=1, support=(-np.inf, np.inf)
         )
+        xs = np.linspace(-3.0, 3.0, 25)
         for field in (
             "cdf_npanels",
             "cdf_coeff_stride",
@@ -187,19 +196,20 @@ class TestSerialization:
             "ppf_coeff_stride",
         ):
             state = np.array(c.data, copy=True)
-            state[f"comp_{field}"][0] = -1
-            with pytest.raises(ValueError, match="must be positive"):
-                Distribution(state)
+            state["cache"]["runtime_state"][f"comp_{field}"][0] = -1
+            loaded = Distribution(state)
+            np.testing.assert_allclose(loaded.pdf(xs), c.pdf(xs), rtol=0.0, atol=0.0)
 
-    def test_load_rejects_invalid_spectral_map_kind(self, rng):
+    def test_load_rebuilds_invalid_spectral_map_kind(self, rng):
         c = Distribution().fit(
             rng.normal(size=300), n_components=1, support=(-np.inf, np.inf)
         )
+        xs = np.linspace(-3.0, 3.0, 25)
         for kind in (-1, 99):
             state = np.array(c.data, copy=True)
-            state["comp_cdf_map_kind"][0] = kind
-            with pytest.raises(ValueError, match=r"cdf_map_kind.*0\.\.5"):
-                Distribution(state)
+            state["cache"]["runtime_state"]["comp_cdf_map_kind"][0] = kind
+            loaded = Distribution(state)
+            np.testing.assert_allclose(loaded.pdf(xs), c.pdf(xs), rtol=0.0, atol=0.0)
 
     @pytest.mark.parametrize(
         "field,stride_field",
@@ -208,19 +218,23 @@ class TestSerialization:
             ("ppf_ncoeff", "ppf_coeff_stride"),
         ],
     )
-    def test_load_rejects_panel_coefficient_count_outside_stride(
+    def test_load_rebuilds_panel_coefficient_count_outside_stride(
         self, rng, field, stride_field
     ):
         c = Distribution().fit(
             rng.normal(size=300), n_components=1, support=(-np.inf, np.inf)
         )
-        for value in (0, int(c.data[f"comp_{stride_field}"][0]) + 1):
+        runtime = c.data["cache"]["runtime_state"]
+        stride = int(runtime[f"comp_{stride_field}"][0])
+        xs = np.linspace(-3.0, 3.0, 25)
+        for value in (0, stride + 1):
             state = np.array(c.data, copy=True)
-            counts = np.array(state[f"comp_{field}"][0], copy=True)
+            runtime = state["cache"]["runtime_state"]
+            counts = np.array(runtime[f"comp_{field}"][0], copy=True)
             counts[-1] = value
-            state[f"comp_{field}"][0] = counts
-            with pytest.raises(ValueError, match=r"ncoeff entries must be in"):
-                Distribution(state)
+            runtime[f"comp_{field}"][0] = counts
+            loaded = Distribution(state)
+            np.testing.assert_allclose(loaded.pdf(xs), c.pdf(xs), rtol=0.0, atol=0.0)
 
 
 class TestTransform:

@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from gibbus import Distribution
-from gibbus._fit.mixture import _pack_mixture_struct, _sort_components_by_mode
+from gibbus._fit.mixture import _sort_components_by_mode
+from gibbus._serialization import pack_distribution_state
 
 
 @pytest.fixture(scope="module", params=[1, 2])
@@ -21,7 +22,7 @@ def original(request):
     if request.param == 1:
         return models[0]
     return Distribution(
-        _pack_mixture_struct(
+        pack_distribution_state(
             np.array([0.35, 0.65]),
             "base",
             [model.components[0].data for model in models],
@@ -62,7 +63,7 @@ def test_public_arrays_cannot_alias_fitted_parameters(original):
         exported = component.data
         exported["q_poly"][:] = 0.0
     exported = original.data
-    exported["comp_q_poly"][:] = 0.0
+    exported["model"]["q_poly_values"][:] = 0.0
     np.testing.assert_array_equal(original.pdf([-1.0, 0.0, 1.0]), before)
 
 
@@ -72,12 +73,12 @@ def test_uniform_envelope_and_portable_roundtrip(original):
     state = model.data
     names = set(state.dtype.names)
     assert not state.dtype.hasobject
-    assert {"mu", "sigma", "default_space", "n_components", "comp_fit_center"} <= names
-    assert (
-        not {"comp_mu", "comp_sigma", "comp_pullback", "comp_default_space", "pullback"}
-        & names
+    assert names == {"format", "format_version", "model", "provenance", "cache"}
+    model_state = state["model"]
+    assert {"mu", "sigma", "default_space", "n_components", "fit_center"} <= set(
+        model_state.dtype.names
     )
-    assert state["mu"] == 0.4 and state["sigma"] == 1.7
+    assert model_state["mu"] == 0.4 and model_state["sigma"] == 1.7
     stream = io.BytesIO()
     np.save(stream, state, allow_pickle=False)
     stream.seek(0)
@@ -86,7 +87,7 @@ def test_uniform_envelope_and_portable_roundtrip(original):
         loaded.pdf([0.2, 1.0, 4.0]), model.pdf([0.2, 1.0, 4.0])
     )
     assert loaded.default == "exp"
-    with pytest.raises(ValueError, match="missing fields"):
+    with pytest.raises(ValueError, match="unversioned"):
         Distribution(model.components[0].data)
 
 
@@ -316,11 +317,13 @@ def test_joint_component_packing_never_claims_independent_inference(monkeypatch)
 
 
 @pytest.mark.parametrize("name", ["n_parameters", "n_face_parameters"])
-def test_load_validates_authoritative_model_dimensions(original, name):
+def test_load_ignores_inconsistent_optional_model_dimensions(original, name):
     state = original.data
-    state[name] += 1
-    with pytest.raises(ValueError, match=name):
-        Distribution(state)
+    state["provenance"][name] += 1
+    loaded = Distribution(state)
+    grid = np.linspace(-1.0, 1.0, 9)
+    np.testing.assert_allclose(loaded.pdf(grid), original.pdf(grid), rtol=0.0, atol=0.0)
+    assert loaded.fit_diagnostics["provenance"] == "derived"
 
 
 def test_failed_fit_and_load_preserve_entire_model(original, monkeypatch):
@@ -339,7 +342,7 @@ def test_failed_fit_and_load_preserve_entire_model(original, monkeypatch):
     assert model.components is components
     assert model.data.tobytes() == before
     bad = model.data
-    bad["shared_boundary_amplitudes"][0] = 5
+    bad["model"]["boundary_amplitudes"][0, 0] = 5
     with pytest.raises(ValueError, match="amplitude"):
         model.load(bad)
     assert model.components is components

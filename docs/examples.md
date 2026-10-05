@@ -47,7 +47,7 @@ Interval rows contribute their fitted probability masses directly; they are not 
 data = rng.normal(size=500)
 weights = rng.exponential(size=500)  # non-negative weights
 
-c = Distribution().fit(data, support=(-np.inf, np.inf), sample_weights=weights)
+c = Distribution().fit(data, support=(-np.inf, np.inf), sample_weight=weights)
 ```
 
 Weights are relative observation weights, not frequency counts. For point-data mixtures, Gibbus also guards against the usual collapsing-component likelihood singularity. See [Fitting](fitting.md#weighted-samples) for the weighting and estimability rules.

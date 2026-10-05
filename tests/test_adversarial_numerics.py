@@ -6,7 +6,6 @@ from scipy.special import erfcx, log_ndtr
 
 from gibbus import Distribution
 from gibbus._fit.conic_newton import _interior_start
-from gibbus._fit.mixture import _pack_mixture_struct
 from gibbus._fit.natural_objective import (
     _prepare_natural_interval_objective,
     _prepare_natural_point_objective,
@@ -18,6 +17,7 @@ from gibbus._postfit.analytics import (
     _log_raw_moment_exp,
     _tail_rate_from_geometry,
 )
+from gibbus._serialization import pack_distribution_state
 
 
 def test_extreme_lower_tail_cdf_roundtrips_single_component():
@@ -110,7 +110,7 @@ def test_point_fit_is_invariant_to_extreme_global_weight_scale():
         n_components=1,
         poly_degree=4,
         support=(-np.inf, np.inf),
-        sample_weights=weights,
+        sample_weight=weights,
         rng=0,
     )
     expected = np.asarray(baseline.cdf(grid), dtype=np.float64)
@@ -121,7 +121,7 @@ def test_point_fit_is_invariant_to_extreme_global_weight_scale():
             n_components=1,
             poly_degree=4,
             support=(-np.inf, np.inf),
-            sample_weights=weights * factor,
+            sample_weight=weights * factor,
             rng=0,
         )
         np.testing.assert_allclose(fitted.cdf(grid), expected, rtol=0.0, atol=2e-13)
@@ -342,10 +342,16 @@ def test_zero_weight_mixture_component_cannot_contaminate_exp_moments():
         support=(-np.inf, np.inf),
         rng=0,
     )
-    dormant = active.transform(mu=1000.0, sigma=1.0, pullback=False, inplace=False)
+    dormant = Distribution().fit(
+        rng.normal(1000.0, 1.0, size=700),
+        n_components=1,
+        poly_degree=2,
+        support=(-np.inf, np.inf),
+        rng=0,
+    )
     assert np.isinf(dormant.exp.moment(1))
 
-    state = _pack_mixture_struct(
+    state = pack_distribution_state(
         np.array([1.0, 0.0]),
         "exp",
         [active.components[0].data, dormant.components[0].data],

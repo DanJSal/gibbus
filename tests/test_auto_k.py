@@ -234,7 +234,7 @@ class TestWeightedSubsampling:
             n_components="auto",
             support=(-np.inf, np.inf),
             rng=0,
-            sample_weights=w,
+            sample_weight=w,
         )
         assert c.mean == pytest.approx(np.average(big_bimodal, weights=w), abs=0.1)
 
