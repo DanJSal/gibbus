@@ -60,3 +60,24 @@ include = ["gibbus*"]
 [tool.setuptools.package-data]
 "gibbus" = ["py.typed"]
 "*" = ["*.pyx"]
+
+[tool.cibuildwheel]
+# Release wheels cover the package's declared CPython support range.
+build = "cp3{10,11,12,13,14}-*"
+
+# PyPI release support is glibc Linux, Windows x86-64, and both macOS
+# architectures. Alpine/musl is not part of the 0.1.0 release target.
+skip = ["*-musllinux_*"]
+
+# cibuildwheel installs each wheel into a fresh test virtual environment and
+# executes tests from a temporary directory outside the source checkout.
+test-requires = ["pytest>=7.0"]
+test-sources = ["tests"]
+test-command = [
+    "python tests/wheel_smoke.py",
+    "python -m pytest -q tests/test_api.py tests/test_serialization_v1.py tests/test_fitted_state.py tests/test_model_ownership.py",
+]
+
+[tool.cibuildwheel.linux]
+# glibc 2.17 provides a deliberately broad x86-64 compatibility floor.
+manylinux-x86_64-image = "manylinux2014"

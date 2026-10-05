@@ -1,0 +1,154 @@
+name: Build release wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/wheels.yml"
+      - "pyproject.toml"
+      - "setup.py"
+      - "MANIFEST.in"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wheels-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-wheels:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            os: ubuntu-latest
+            arch: x86_64
+            artifact: linux-x86_64
+          - name: Windows x86-64
+            os: windows-latest
+            arch: AMD64
+            artifact: windows-amd64
+          - name: macOS Intel
+            os: macos-15-intel
+            arch: x86_64
+            artifact: macos-x86_64
+          - name: macOS Apple Silicon
+            os: macos-14
+            arch: arm64
+            artifact: macos-arm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build and test wheels
+        uses: pypa/cibuildwheel@v4.2.1
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+
+      - name: Upload platform wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.artifact }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
+  verify-wheelhouse:
+    name: Verify release wheel set
+    needs: build-wheels
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Download all platform wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: Verify expected wheel matrix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          wheelhouse = Path("wheelhouse")
+          wheels = sorted(wheelhouse.glob("*.whl"))
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+
+          expected_python = {"cp310", "cp311", "cp312", "cp313", "cp314"}
+          groups = {
+              "linux-x86_64": set(),
+              "windows-amd64": set(),
+              "macos-x86_64": set(),
+              "macos-arm64": set(),
+          }
+
+          if len(wheels) != 20:
+              raise SystemExit(
+                  f"Expected 20 release wheels (5 Python versions x 4 targets), "
+                  f"found {len(wheels)}: {[p.name for p in wheels]}"
+              )
+
+          for wheel in wheels:
+              name = wheel.name
+              if not name.startswith(f"gibbus-{version}-"):
+                  raise SystemExit(f"Unexpected project/version wheel: {name}")
+
+              interpreter = next(
+                  (tag for tag in expected_python if f"-{tag}-" in name),
+                  None,
+              )
+              if interpreter is None:
+                  raise SystemExit(f"Unexpected Python tag: {name}")
+
+              if "manylinux" in name and name.endswith("_x86_64.whl"):
+                  group = "linux-x86_64"
+              elif name.endswith("-win_amd64.whl"):
+                  group = "windows-amd64"
+              elif "macosx" in name and name.endswith("_x86_64.whl"):
+                  group = "macos-x86_64"
+              elif "macosx" in name and name.endswith("_arm64.whl"):
+                  group = "macos-arm64"
+              else:
+                  raise SystemExit(f"Unexpected platform tag: {name}")
+
+              if interpreter in groups[group]:
+                  raise SystemExit(
+                      f"Duplicate {interpreter} wheel for {group}: {name}"
+                  )
+              groups[group].add(interpreter)
+
+          for group, found in groups.items():
+              if found != expected_python:
+                  raise SystemExit(
+                      f"{group}: expected {sorted(expected_python)}, "
+                      f"found {sorted(found)}"
+                  )
+
+          print("Verified 20 release wheels:")
+          for wheel in wheels:
+              print(f"  {wheel.name}")
+          PY
+
+      - name: Upload combined wheelhouse
+        uses: actions/upload-artifact@v4
+        with:
+          name: gibbus-wheelhouse
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 14
