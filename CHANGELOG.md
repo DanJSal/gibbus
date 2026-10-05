@@ -1,8 +1,8 @@
 # Changelog
 
-This file records notable user-visible changes to Gibbus. The first public release is `0.1.0`; its release date will be added when the `v0.1.0` tag is created.
+This file records notable user-visible changes to Gibbus.
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-10-05
 
 ### Added
 
