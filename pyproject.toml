@@ -20,7 +20,16 @@ authors = [
 maintainers = [
     {name = "Daniel Salib"},
 ]
-
+keywords = [
+    "statistics",
+    "probability",
+    "log-concave",
+    "density estimation",
+    "maximum likelihood",
+    "mixture models",
+    "censored data",
+    "survival analysis",
+]
 
 requires-python = ">=3.10"
 classifiers = [
@@ -32,8 +41,11 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Cython",
+    "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
 ]
 dependencies = [
     "numpy>=1.23",
@@ -44,8 +56,8 @@ dependencies = [
 Homepage = "https://github.com/DanJSal/gibbus"
 Repository = "https://github.com/DanJSal/gibbus"
 Issues = "https://github.com/DanJSal/gibbus/issues"
-Documentation = "https://github.com/DanJSal/gibbus#readme"
-
+Documentation = "https://github.com/DanJSal/gibbus/blob/main/docs/README.md"
+Changelog = "https://github.com/DanJSal/gibbus/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0", "pytest-cov"]

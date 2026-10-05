@@ -4,7 +4,15 @@ This guide covers installation and the shortest path from observations to a fitt
 
 ## Installation
 
-Clone the repository and install from the source checkout. Building compiles the Cython extensions and therefore requires a C compiler and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
+For a published release, install Gibbus from PyPI:
+
+```bash
+python -m pip install gibbus
+```
+
+Gibbus 0.1.x is tested on CPython 3.10 through 3.14. When pip selects a compatible release wheel, no compiler is required.
+
+To install from a source checkout instead, clone the repository and build locally. Source builds compile the Cython extensions and therefore require a C compiler and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
 
 ```bash
 git clone https://github.com/DanJSal/gibbus.git
@@ -20,11 +28,11 @@ python -m pip install -e .
 
 Free-threaded CPython (`t` builds such as 3.14t) is not supported or tested yet. The compiled extensions do not declare free-threading compatibility; a source build may therefore re-enable the GIL when `gibbus` is imported. Do not treat an installation on a `t` build as no-GIL support.
 
-On GCC/Clang builds, set `GIBBUS_NATIVE_ARCH=1` at build time to add `-march=native`. This can enable wider machine-specific SIMD and other target tuning, but produces machine-specific binaries, so it is off by default.
+On GCC/Clang builds, set `GIBBUS_NATIVE_ARCH=1` at build time to add `-march=native`. This can enable wider machine-specific SIMD and other target tuning, but produces machine-specific binaries, so it is off by default and is not used for release wheels.
 
 ## Dependencies
 
-- Python 3.10 or later
+- CPython 3.10 through 3.14 are tested for the 0.1.x release line
 - NumPy
 - SciPy
 

@@ -22,6 +22,18 @@ directory with `build_ext --include-dirs` rather than committing
 machine-specific configuration. Generated `.c`/`.h` files and compiled
 extensions are build artifacts and are not versioned.
 
+## Release metadata checks
+
+Before publishing a distribution, build it in a clean tree and validate the metadata and rendered long description:
+
+```bash
+python -m pip install --upgrade build twine
+python -m build
+python -m twine check --strict dist/*
+```
+
+The CI source-distribution job performs the strict Twine metadata check as part of release preparation.
+
 ## Verification workflow
 
 - Black, Ruff, and `cython-lint` are development tools but are not currently included in the `test` extra; install them separately when running the formatting/lint workflow.

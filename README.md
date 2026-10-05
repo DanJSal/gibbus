@@ -1,5 +1,9 @@
 # gibbus
 
+[![CI](https://github.com/DanJSal/gibbus/actions/workflows/ci.yml/badge.svg)](https://github.com/DanJSal/gibbus/actions/workflows/ci.yml)
+[![Python 3.10–3.14](https://img.shields.io/badge/python-3.10%E2%80%933.14-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DanJSal/gibbus/blob/main/LICENSE)
+
 **Flexible maximum-likelihood modeling of smooth univariate log-concave distributions.**
 
 `gibbus` fits explicit, support-aware analytic probability distributions to point or interval-censored data without requiring a fixed named family such as Normal or Gamma. A fitted `Distribution` represents a **Gibbus distribution**. A single component is log-concave and therefore unimodal; finite mixtures extend the model to multimodal data.
@@ -18,11 +22,19 @@ Unlike a histogram, KDE, spline, or piecewise-linear log-density, a fitted Gibbu
 - **Versioned persistence.** Fitted models have a non-pickle NumPy serialization format with an explicit cross-version compatibility contract.
 - **Compiled numerical kernels.** Performance-sensitive fitting, quadrature, certification, and spectral evaluation routines are implemented in Cython.
 
-See [Modeling concepts](docs/modeling-concepts.md) for the statistical model and its relationship to fixed parametric families and nonparametric density estimators.
+See [Modeling concepts](https://github.com/DanJSal/gibbus/blob/main/docs/modeling-concepts.md) for the statistical model and its relationship to fixed parametric families and nonparametric density estimators.
 
 ## Installation
 
-Clone the repository and install from the source checkout:
+For a published release, install from PyPI:
+
+```bash
+python -m pip install gibbus
+```
+
+Gibbus 0.1.x is tested on CPython 3.10 through 3.14. Release wheels are intended to cover the supported Linux, Windows, and macOS targets, so a compiler is not required when pip selects a compatible wheel.
+
+For a source checkout:
 
 ```bash
 git clone https://github.com/DanJSal/gibbus.git
@@ -30,9 +42,7 @@ cd gibbus
 python -m pip install .
 ```
 
-Building compiles the Cython extensions and therefore requires a C compiler and Python development headers. Gibbus requires Python 3.10 or later, NumPy, and SciPy.
-
-For editable development installation and build details, see [Development](docs/development.md).
+Source builds compile the Cython extensions and therefore require a C compiler and Python development headers. For editable development installation and build details, see [Development](https://github.com/DanJSal/gibbus/blob/main/docs/development.md).
 
 ## Quick start
 
@@ -70,24 +80,32 @@ c2.weights
 c2.modes
 ```
 
-Automatic component selection is a staged KDE/BIC search rather than an exhaustive or globally certified search. See [Fitting](docs/fitting.md) for the selection policy and fit options.
+Automatic component selection is a staged KDE/BIC search rather than an exhaustive or globally certified search. See [Fitting](https://github.com/DanJSal/gibbus/blob/main/docs/fitting.md) for the selection policy and fit options.
 
 ## Documentation
 
 The documentation is organized by task and subject rather than kept in one large README:
 
-- [Documentation index](docs/README.md)
-- [Getting started](docs/getting-started.md)
-- [Modeling concepts](docs/modeling-concepts.md)
-- [Fitting](docs/fitting.md)
-- [Using fitted distributions](docs/using-distributions.md)
-- [Serialization and compatibility](docs/serialization.md)
-- [Diagnostics and model checking](docs/diagnostics.md)
-- [API reference](docs/api-reference.md)
-- [Examples](docs/examples.md)
-- [Numerical methods and performance](docs/numerical-methods.md)
-- [Limitations and concurrency](docs/limitations.md)
-- [Development](docs/development.md)
+- [Documentation index](https://github.com/DanJSal/gibbus/blob/main/docs/README.md)
+- [Getting started](https://github.com/DanJSal/gibbus/blob/main/docs/getting-started.md)
+- [Modeling concepts](https://github.com/DanJSal/gibbus/blob/main/docs/modeling-concepts.md)
+- [Fitting](https://github.com/DanJSal/gibbus/blob/main/docs/fitting.md)
+- [Using fitted distributions](https://github.com/DanJSal/gibbus/blob/main/docs/using-distributions.md)
+- [Serialization and compatibility](https://github.com/DanJSal/gibbus/blob/main/docs/serialization.md)
+- [Diagnostics and model checking](https://github.com/DanJSal/gibbus/blob/main/docs/diagnostics.md)
+- [API reference](https://github.com/DanJSal/gibbus/blob/main/docs/api-reference.md)
+- [Examples](https://github.com/DanJSal/gibbus/blob/main/docs/examples.md)
+- [Numerical methods and performance](https://github.com/DanJSal/gibbus/blob/main/docs/numerical-methods.md)
+- [Limitations and concurrency](https://github.com/DanJSal/gibbus/blob/main/docs/limitations.md)
+- [Development](https://github.com/DanJSal/gibbus/blob/main/docs/development.md)
+
+## Compatibility and versioning
+
+The 0.x series is pre-1.0: documented public APIs are intended to remain usable within a release line, but minor releases may still refine the public surface as the project matures. Patch releases are reserved for compatible fixes and maintenance changes.
+
+Durable serialized models use their own explicit format version and compatibility contract; package version numbers do not silently reinterpret an older serialization format. See [Serialization and compatibility](https://github.com/DanJSal/gibbus/blob/main/docs/serialization.md).
+
+Free-threaded CPython builds are not currently supported or tested.
 
 ## Public API
 
@@ -99,6 +117,12 @@ from gibbus import Distribution, suppressed_failures, clear_suppressed_failures
 
 `Distribution` is the fitted-model interface. The two module-level helper functions expose numerical fallbacks that were suppressed during graceful degradation. Other package names are implementation details unless documented otherwise.
 
+## Contributing and citation
+
+Contribution guidance is in [CONTRIBUTING.md](https://github.com/DanJSal/gibbus/blob/main/CONTRIBUTING.md). Release history is tracked in [CHANGELOG.md](https://github.com/DanJSal/gibbus/blob/main/CHANGELOG.md).
+
+For research use, citation metadata is provided in [CITATION.cff](https://github.com/DanJSal/gibbus/blob/main/CITATION.cff).
+
 ## License
 
-`gibbus` is distributed under the MIT License. See [LICENSE](LICENSE) for the full terms.
+`gibbus` is distributed under the MIT License. See [LICENSE](https://github.com/DanJSal/gibbus/blob/main/LICENSE) for the full terms.

@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use Gibbus in research, please cite the software using this metadata."
+title: "Gibbus"
+type: software
+authors:
+  - family-names: "Salib"
+    given-names: "Daniel"
+version: "0.1.0"
+license: "MIT"
+repository-code: "https://github.com/DanJSal/gibbus"
+url: "https://github.com/DanJSal/gibbus"
+abstract: >-
+  Flexible maximum-likelihood modeling of smooth univariate log-concave
+  distributions, with support-aware modeling, interval-censored observations,
+  and optional finite mixtures for multimodal data.
+keywords:
+  - "log-concave distributions"
+  - "maximum likelihood"
+  - "density estimation"
+  - "statistical inference"
+  - "censored data"
+  - "mixture models"
