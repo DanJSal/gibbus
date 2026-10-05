@@ -22,6 +22,7 @@ If you are new to Gibbus, begin with [Getting started](getting-started.md), then
 - [API reference](api-reference.md) — public classes, functions, methods, and properties.
 - [Numerical methods and performance](numerical-methods.md) — optimization, interval likelihoods, spectral CDF/PPF construction, tails, caching, and performance architecture.
 - [Development](development.md) — building, testing, verification, coding standards, and documentation standards.
+- [Releasing](releasing.md) — version/tag rules, Trusted Publishing setup, release workflow behavior, and the maintainer release checklist.
 
 ## Documentation conventions
 

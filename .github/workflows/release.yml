@@ -1,0 +1,327 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    name: Validate release identity
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate package version and tag
+        id: version
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import tomllib
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          event = os.environ["GITHUB_EVENT_NAME"]
+          ref_name = os.environ["GITHUB_REF_NAME"]
+
+          if event == "push":
+              expected_tag = f"v{version}"
+              if ref_name != expected_tag:
+                  raise SystemExit(
+                      f"Release tag {ref_name!r} does not match project version "
+                      f"{version!r}; expected {expected_tag!r}."
+                  )
+              print(f"Validated release tag {ref_name} for gibbus {version}.")
+          else:
+              print(
+                  f"Manual release dry run for gibbus {version}; "
+                  "workflow_dispatch never publishes."
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"version={version}\n")
+          PY
+
+  build-wheels:
+    name: Build and test wheels
+    needs: validate-release
+    uses: ./.github/workflows/wheels.yml
+
+  build-sdist:
+    name: Build and test source distribution
+    needs: validate-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build source distribution
+        run: python -m build --sdist
+
+      - name: Validate source distribution metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Install source distribution and test dependencies
+        shell: bash
+        run: python -m pip install dist/*.tar.gz "pytest>=7.0"
+
+      - name: Copy focused tests outside source checkout
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/sdist-tests"
+          cp -R tests/. "${RUNNER_TEMP}/sdist-tests/"
+
+      - name: Smoke-test installed source distribution
+        working-directory: ${{ runner.temp }}
+        run: python sdist-tests/wheel_smoke.py
+
+      - name: Run focused source-distribution tests
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -m pytest -q
+          sdist-tests/test_api.py
+          sdist-tests/test_serialization_v1.py
+          sdist-tests/test_fitted_state.py
+          sdist-tests/test_model_ownership.py
+
+      - name: Upload source distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: gibbus-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble-release:
+    name: Assemble tested release artifacts
+    needs:
+      - validate-release
+      - build-wheels
+      - build-sdist
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Download tested wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: gibbus-wheelhouse
+          path: dist
+
+      - name: Download tested source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: gibbus-sdist
+          path: dist
+
+      - name: Verify release artifact set
+        shell: bash
+        run: |
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+          import tomllib
+
+          dist = Path("dist")
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+
+          if len(wheels) != 20:
+              raise SystemExit(f"Expected 20 wheels, found {len(wheels)}")
+          if [p.name for p in sdists] != [f"gibbus-{version}.tar.gz"]:
+              raise SystemExit(
+                  f"Expected gibbus-{version}.tar.gz, found {[p.name for p in sdists]}"
+              )
+
+          for path in wheels:
+              if not path.name.startswith(f"gibbus-{version}-"):
+                  raise SystemExit(f"Unexpected wheel project/version: {path.name}")
+
+          files = wheels + sdists
+          if len(files) != 21:
+              raise SystemExit(f"Expected 21 release artifacts, found {len(files)}")
+
+          print(f"Verified 21 release artifacts for gibbus {version}:")
+          for path in files:
+              digest = sha256(path.read_bytes()).hexdigest()
+              print(f"{digest}  {path.name}")
+          PY
+
+      - name: Validate final distribution metadata
+        run: |
+          python -m pip install --upgrade twine
+          python -m twine check --strict dist/*
+
+      - name: Upload immutable release artifact set
+        uses: actions/upload-artifact@v4
+        with:
+          name: gibbus-release-artifacts
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-testpypi:
+    name: Publish tested artifacts to TestPyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - validate-release
+      - assemble-release
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/gibbus
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download tested release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gibbus-release-artifacts
+          path: dist
+
+      - name: Publish package distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+
+  verify-testpypi:
+    name: Verify TestPyPI installation
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - validate-release
+      - publish-testpypi
+    runs-on: ubuntu-latest
+    env:
+      GIBBUS_RELEASE_VERSION: ${{ needs.validate-release.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install runtime dependencies from PyPI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy
+
+      - name: Install Gibbus from TestPyPI
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if python -m pip install               --no-cache-dir               --no-deps               --index-url https://test.pypi.org/simple/               "gibbus==${GIBBUS_RELEASE_VERSION}"; then
+              exit 0
+            fi
+            echo "TestPyPI package not available yet; retrying in 20 seconds."
+            sleep 20
+          done
+          exit 1
+
+      - name: Smoke-test TestPyPI installation
+        working-directory: ${{ runner.temp }}
+        run: python "${GITHUB_WORKSPACE}/tests/wheel_smoke.py"
+
+  publish-pypi:
+    name: Publish same tested artifacts to PyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - validate-release
+      - assemble-release
+      - verify-testpypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/gibbus
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download tested release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gibbus-release-artifacts
+          path: dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  verify-pypi:
+    name: Verify PyPI installation
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - validate-release
+      - publish-pypi
+    runs-on: ubuntu-latest
+    env:
+      GIBBUS_RELEASE_VERSION: ${{ needs.validate-release.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install Gibbus from PyPI
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          for attempt in 1 2 3 4 5 6; do
+            if python -m pip install               --no-cache-dir               "gibbus==${GIBBUS_RELEASE_VERSION}"; then
+              exit 0
+            fi
+            echo "PyPI package not available yet; retrying in 20 seconds."
+            sleep 20
+          done
+          exit 1
+
+      - name: Smoke-test PyPI installation
+        working-directory: ${{ runner.temp }}
+        run: python "${GITHUB_WORKSPACE}/tests/wheel_smoke.py"

@@ -1,10 +1,8 @@
 name: Build release wheels
 
 on:
+  workflow_call:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
   pull_request:
     paths:
       - ".github/workflows/wheels.yml"
