@@ -42,7 +42,7 @@ def test_component_interface_has_no_independent_mutators(original):
             with pytest.raises(AttributeError):
                 setattr(component, name, 1.0)
         with pytest.raises(ValueError):
-            component._data["q_poly"][0] = 99.0
+            component._data["basis_theta"][0] = 99.0
         with pytest.raises(ValueError):
             component._data.setflags(write=True)
 
@@ -61,9 +61,9 @@ def test_public_arrays_cannot_alias_fitted_parameters(original):
             support.setflags(write=True)
             support[:] = -123.0
         exported = component.data
-        exported["q_poly"][:] = 0.0
+        exported["basis_theta"][:] = 0.0
     exported = original.data
-    exported["model"]["q_poly_values"][:] = 0.0
+    exported["model"]["theta_values"][:] = 0.0
     np.testing.assert_array_equal(original.pdf([-1.0, 0.0, 1.0]), before)
 
 
@@ -75,7 +75,7 @@ def test_uniform_envelope_and_portable_roundtrip(original):
     assert not state.dtype.hasobject
     assert names == {"format", "format_version", "model", "provenance", "cache"}
     model_state = state["model"]
-    assert {"mu", "sigma", "default_space", "n_components", "fit_center"} <= set(
+    assert {"mu", "sigma", "default_space", "n_components", "theta_values"} <= set(
         model_state.dtype.names
     )
     assert model_state["mu"] == 0.4 and model_state["sigma"] == 1.7
@@ -292,28 +292,29 @@ def test_component_sorting_retains_immutable_object_identity(original):
 
 
 def test_joint_component_packing_never_claims_independent_inference(monkeypatch):
-    from types import SimpleNamespace
+    """Mixture components carry no per-component inference (G1 rule).
 
-    from gibbus._postfit import fitted_state
+    Shared-boundary standard errors and p-values belong to the joint model;
+    each component of a mixture is packed without an effective sample size,
+    so no component-level standard error is derived from its own fit.
+    """
+    from gibbus._postfit import basis_state
 
-    captured = {}
+    calls = []
+    original = basis_state._pack_basis_state
 
     def capture(*args, **kwargs):
-        captured.update(kwargs)
-        return "packed"
+        calls.append(kwargs)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(fitted_state, "_pack_natural_state", capture)
-    component = SimpleNamespace(
-        state=lambda: None, spec=None, coordinate=None, solver_result=None
-    )
-    assert (
-        fitted_state._pack_natural_component(
-            component, effective_n=100, boundary_p_values=(0.01, 0.02)
-        )
-        == "packed"
-    )
-    assert np.isnan(captured["effective_n"])
-    assert np.isnan(captured["boundary_p_values"]).all()
+    monkeypatch.setattr(basis_state, "_pack_basis_state", capture)
+    rng = np.random.default_rng(7)
+    data = np.r_[rng.normal(-3.0, 0.6, 300), rng.normal(3.0, 0.6, 300)]
+    Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
+    assert len(calls) == 2
+    for kwargs in calls:
+        assert np.isnan(kwargs.get("n_eff", np.nan))
+        assert kwargs.get("result") is None
 
 
 @pytest.mark.parametrize("name", ["n_parameters", "n_face_parameters"])
@@ -342,8 +343,8 @@ def test_failed_fit_and_load_preserve_entire_model(original, monkeypatch):
     assert model.components is components
     assert model.data.tobytes() == before
     bad = model.data
-    bad["model"]["boundary_amplitudes"][0, 0] = 5
-    with pytest.raises(ValueError, match="amplitude"):
+    bad["model"]["theta_values"][0] = np.nan
+    with pytest.raises(ValueError, match="must be finite"):
         model.load(bad)
     assert model.components is components
     assert model.data.tobytes() == before
@@ -380,7 +381,6 @@ def test_transformed_truncation_preserves_original_potential_anchors():
         "boundary_amplitudes",
         "fit_center",
         "fit_scale",
-        "fit_direction",
     ):
         np.testing.assert_array_equal(a[name], b[name])
     x = np.array([2.8, 3.5, 4.2])
@@ -420,36 +420,3 @@ def test_transformed_component_seed_refits_in_current_coordinates(support):
     )
     assert (fitted.mu, fitted.sigma) == (0.0, 1.0)
     assert seed.components[0].data.tobytes() == before
-
-
-def test_seed_polynomial_is_reexpressed_in_target_conditioning():
-    from types import SimpleNamespace
-
-    from gibbus._api.component import _natural_seed_params
-
-    captured = {}
-
-    def pack(gamma, curvature, boundary):
-        captured.update(gamma=gamma, curvature=curvature, boundary=boundary)
-        return np.r_[gamma, curvature, boundary]
-
-    layout = SimpleNamespace(
-        curvature_degree=0, lower_a_index=2, upper_a_index=3, pack=pack
-    )
-    seed = {
-        "q_poly": np.array([0.0, 2.0, 3.0]),
-        "fit_direction": -1.0,
-        "fit_scale": 2.0,
-        "fit_center": 5.0,
-        "boundary_amplitudes": np.array([0.0, 4.0]),
-    }
-    target = SimpleNamespace(direction=-1.0, scale=4.0, center=7.0)
-    _natural_seed_params(seed, layout, target)
-    # z_old = -1 + 2*z_new: 2*z_old + 3*z_old**2 = 1 - 8*z_new + 12*z_new**2.
-    assert captured["gamma"] == -8.0
-    np.testing.assert_array_equal(captured["curvature"], [24.0])
-    np.testing.assert_array_equal(captured["boundary"], [4.0, 0.0])
-    seed["q_poly"] = np.array([1.0, 0.0, 0.0])
-    _natural_seed_params(seed, layout, target)
-    assert captured["gamma"] == 0.0
-    np.testing.assert_array_equal(captured["curvature"], [0.0])

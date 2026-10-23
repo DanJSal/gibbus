@@ -11,9 +11,9 @@ import pytest
 from scipy.integrate import trapezoid
 
 from gibbus import Distribution
-from gibbus._api import fitting as _fitting
-from gibbus._api import selection as _selection
 from gibbus._defaults import AUTO_KDE_GRID_POINTS
+from gibbus._fit import basis_mixture as _basis_mixture
+from gibbus._fit import basis_selection as _basis_selection
 from gibbus._fit.mixture import (
     _binned_kde_sweep,
     _count_modes_kde,
@@ -21,6 +21,7 @@ from gibbus._fit.mixture import (
     _silverman_bandwidth,
     _stratified_subsample,
 )
+from gibbus._postfit import basis_state as _basis_state
 
 
 class TestStratifiedSubsample:
@@ -154,29 +155,20 @@ class TestSelectionAgreement:
             if bimodal
             else rng.normal(size=150)
         )
-        original = _fitting._pack_natural_component
-        original_single = _fitting._pack_natural_fit
+        original = _basis_state._pack_basis_state
         calls = 0
-        single_calls = 0
 
-        def counted_pack(component, **kwargs):
+        def counted_pack(*args, **kwargs):
             nonlocal calls
             calls += 1
-            return original(component, **kwargs)
+            return original(*args, **kwargs)
 
-        def counted_single(*args, **kwargs):
-            nonlocal single_calls
-            single_calls += 1
-            return original_single(*args, **kwargs)
-
-        monkeypatch.setattr(_fitting, "_pack_natural_component", counted_pack)
-        monkeypatch.setattr(_fitting, "_pack_natural_fit", counted_single)
+        monkeypatch.setattr(_basis_state, "_pack_basis_state", counted_pack)
         c = Distribution().fit(x, n_components="auto", support=(-np.inf, np.inf), rng=0)
 
-        # Selection candidates stay in natural solver state; only components
-        # of the final selected model build spectral CDF/PPF state.
-        assert calls + single_calls == c.n_components
-        assert single_calls == int(c.n_components == 1)
+        # Selection candidates stay in solver state; only components of the
+        # final selected model build spectral CDF/PPF state.
+        assert calls == c.n_components
 
 
 class TestSubsampleOption:
@@ -246,18 +238,19 @@ def test_full_data_endpoint_exclusion_is_resolved_before_auto_k_thinning(
     x = np.r_[0.0, np.random.default_rng(96).beta(2, 3, 199)]
     rows = np.column_stack((x, x)) if intervals else x
     monkeypatch.setattr(
-        _selection,
+        _basis_mixture,
         "_stratified_subsample",
         lambda x, count, rng: np.arange(1, count + 1),
     )
     seen = []
-    original = _selection._single_selection_fit
+    original = _basis_selection._fit_basis
 
-    def single(support, sample, degree, lower, upper, weights, degree_config):
-        seen.append((lower, upper, sample))
-        return original(support, sample, degree, lower, upper, weights, degree_config)
+    def single(spec, sample, *args, **kwargs):
+        seen.append((spec.log_lower, spec.log_upper, np.asarray(sample)))
+        return original(spec, sample, *args, **kwargs)
 
-    monkeypatch.setattr(_selection, "_single_selection_fit", single)
+    monkeypatch.setattr(_basis_selection, "_fit_basis", single)
+    monkeypatch.setattr(_basis_mixture, "_fit_basis", single)
     fitted = Distribution().fit(
         rows,
         n_components="auto",
@@ -359,3 +352,39 @@ class TestGMMInit:
         a, _ = _gmm_init_responsibilities(x, 2, np.random.default_rng(0))
         b, _ = _gmm_init_responsibilities(10.0 * x, 2, np.random.default_rng(0))
         assert np.allclose(np.sort(a, axis=1), np.sort(b, axis=1), atol=1e-6)
+
+
+def test_screen_accuracy_is_separate_from_final_refinement(monkeypatch):
+    """Cheap screens retain strict candidate refinement and the degree set."""
+    from gibbus import BasisSpec
+    from gibbus._defaults import AUTO_LC_SWEEP_NEWTON_TOL, AUTO_LC_VALIDATION_DEGREES
+    from gibbus._fit.conic_newton import _NewtonOptions
+
+    policy = _NewtonOptions()
+    observed = []
+    refined = []
+    original = _basis_mixture._run_em
+    original_refine = _basis_mixture._fit_mixture_auto
+
+    def capture(problem, *args, **kwargs):
+        em = kwargs.get("em_options")
+        if em is not None and not em.accelerate and not kwargs.get("polish", True):
+            observed.append(problem.options)
+        return original(problem, *args, **kwargs)
+
+    def capture_refinement(*args, **kwargs):
+        refined.append(kwargs["options"])
+        return original_refine(*args, **kwargs)
+
+    monkeypatch.setattr(_basis_mixture, "_run_em", capture)
+    monkeypatch.setattr(_basis_mixture, "_fit_mixture_auto", capture_refinement)
+    x = np.random.default_rng(190).normal(size=150)
+    result = _basis_mixture._select_components(
+        BasisSpec(bulk_degree="auto", expansion="minimal"), x, options=policy, rng=0
+    )
+    assert observed
+    assert all(o.certified_tolerance == AUTO_LC_SWEEP_NEWTON_TOL for o in observed)
+    assert all(o.tolerance == AUTO_LC_SWEEP_NEWTON_TOL for o in observed)
+    assert refined and all(o is policy for o in refined)
+    assert result.diagnostics["screen_degrees"] == AUTO_LC_VALIDATION_DEGREES
+    assert result.diagnostics["screen_newton_tolerance"] == AUTO_LC_SWEEP_NEWTON_TOL

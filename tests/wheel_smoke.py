@@ -4,28 +4,26 @@ from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
 
-import gibbus
 import numpy
 import scipy
 
+import gibbus
 
 EXTENSIONS = (
+    "gibbus._fit._series_search",
+    "gibbus._model._series_kernels",
+    "gibbus._fit._tail_likelihood_kernels",
+    "gibbus._fit._basis_newton_kernels",
     "gibbus._fit._conic_kernels",
-    "gibbus._fit._curvature_certificate",
-    "gibbus._fit._mixture_kernels",
-    "gibbus._fit._shared_mixture_kernels",
-    "gibbus._model._moment_kernels",
-    "gibbus._model._quad_integrals",
-    "gibbus._model._state_kernels",
-    "gibbus._observations._finite_reductions",
-    "gibbus._observations._interval_integrals",
+    "gibbus._fit._curvature_kernels",
+    "gibbus._model._basis_kernels",
+    "gibbus._model._normalizer_kernels",
     "gibbus._postfit._mix_kernels",
     "gibbus._spectral._builders",
     "gibbus._spectral._cdf_eval",
     "gibbus._spectral._certify",
     "gibbus._spectral._panel_kernels",
     "gibbus._spectral._ppf_eval",
-    "gibbus._spectral._tail_integrals",
 )
 
 

@@ -308,8 +308,11 @@ def test_ledger_quadrature_reports_problems_without_emitting_warnings():
 
 
 def test_tail_rate_reports_infinite_for_growing_polynomial_tail():
+    # A normal sample on the half-line: the selected bulk keeps a quadratic
+    # upper tail.  (A gamma sample's exact upper tail is linear, the finite
+    # rate G3 fits, G3-047.)
     rng = np.random.default_rng(731)
-    x = rng.gamma(shape=3.0, scale=1.0, size=800)
+    x = np.abs(rng.normal(4.0, 1.0, size=800))
     c = Distribution().fit(
         x,
         n_components=1,

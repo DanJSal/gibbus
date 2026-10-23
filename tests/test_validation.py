@@ -73,6 +73,8 @@ class TestSampleValidation:
         assert fitted.ppf(0.0) == 0.0
         assert np.isposinf(fitted.ppf(1.0))
         assert 0.0 < fitted.cdf(fitted.mean) < 1.0
+        assert not fitted.fit_diagnostics["shared_boundary"]["allowed"][0]
+        assert fitted.fit_diagnostics["shared_boundary"]["p_values"][0] == 1.0
 
     def test_large_offset_tiny_spread_degree_four_is_stable(self):
         """A direct degree-four fit must remain stable at extreme offset/scale."""
@@ -87,8 +89,18 @@ class TestSampleValidation:
         )
 
         assert fitted.is_fitted
-        assert int(fitted.components[0].data["requested_poly_degree"]) == 4
+        assert int(fitted.components[0].data["bulk_degree"]) == 4
         assert np.isfinite(fitted.std) and 2e-10 < fitted.std < 5e-9
+
+    def test_large_negative_offset_auto_upper_log_is_unresolvable(self):
+        """The mirrored remote upper endpoint is likewise excluded only when auto."""
+        x = -1e6 + 1e-9 * np.random.default_rng(0).standard_normal(800)
+        fitted = Distribution().fit(
+            x, n_components=1, poly_degree=2, support=(-np.inf, 0.0)
+        )
+        assert fitted.is_fitted and 2e-10 < fitted.std < 5e-9
+        assert not fitted.fit_diagnostics["shared_boundary"]["allowed"][1]
+        assert fitted.fit_diagnostics["shared_boundary"]["p_values"][1] == 1.0
 
     def test_single_extreme_outlier_does_not_make_auto_degree_fail(self):
         """Auto-degree screening should retain a valid low-degree candidate."""
@@ -127,7 +139,7 @@ class TestPolynomialDegreeValidation:
             poly_degree="auto",
             support=(-np.inf, np.inf),
         )
-        assert int(fitted.components[0].data["requested_poly_degree"]) % 2 == 0
+        assert int(fitted.components[0].data["bulk_degree"]) % 2 == 0
 
 
 class TestSupportValidation:
@@ -158,7 +170,6 @@ class TestSupportValidation:
             n_components=1,
             poly_degree=2,
             support=None,
-            progressive=False,
         )
         assert tuple(float(v) for v in fitted.support) == (-np.inf, np.inf)
         assert np.isneginf(fitted.ppf(0.0))
@@ -177,14 +188,12 @@ class TestSupportValidation:
             n_components=1,
             poly_degree=2,
             support=None,
-            progressive=False,
         )
         b = Distribution().fit(
             crossed,
             n_components=1,
             poly_degree=2,
             support=None,
-            progressive=False,
         )
 
         assert tuple(float(v) for v in a.support) == (-np.inf, np.inf)
@@ -201,7 +210,6 @@ class TestSupportValidation:
             n_components=1,
             poly_degree=2,
             support=(0.0, np.inf),
-            progressive=False,
         )
         assert tuple(float(v) for v in fitted.support) == (0.0, np.inf)
         assert fitted.ppf(0.0) == 0.0
@@ -217,7 +225,6 @@ class TestSupportValidation:
             n_components=2,
             poly_degree=2,
             support=None,
-            progressive=False,
             rng=0,
         )
         assert tuple(float(v) for v in fitted.support) == (-np.inf, np.inf)
@@ -415,7 +422,6 @@ class TestBoundaryEndpointValidation:
                 n_components=1,
                 poly_degree=2,
                 support=(0.0, 1.0),
-                progressive=False,
                 **{f"log_boundary_{side}": True},
             )
 
@@ -433,7 +439,6 @@ class TestBoundaryEndpointValidation:
             n_components=1,
             poly_degree=2,
             support=(0.0, 1.0),
-            progressive=False,
         )
         allowed = fitted.components[0].data["boundary_allowed"]
         assert not bool(allowed[0 if side == "lower" else 1])
@@ -446,7 +451,6 @@ class TestBoundaryEndpointValidation:
             poly_degree=2,
             support=(0.0, 1.0),
             log_boundary_lower=False,
-            progressive=False,
         )
         assert fitted.is_fitted
         assert not bool(fitted.components[0].data["boundary_allowed"][0])
@@ -458,7 +462,6 @@ class TestBoundaryEndpointValidation:
             n_components=1,
             poly_degree=2,
             support=(0.0, 1.0),
-            progressive=False,
         )
         assert fitted.is_fitted
 
@@ -473,7 +476,6 @@ class TestBoundaryEndpointValidation:
                 poly_degree=2,
                 support=(0.0, 1.0),
                 log_boundary_lower=True,
-                progressive=False,
             )
 
     def test_zero_weight_endpoint_point_is_ignored(self):
@@ -485,7 +487,6 @@ class TestBoundaryEndpointValidation:
             poly_degree=2,
             support=(0.0, 1.0),
             sample_weight=weights,
-            progressive=False,
         )
         assert fitted.is_fitted
 
@@ -498,7 +499,6 @@ class TestBoundaryEndpointValidation:
                 poly_degree=2,
                 support=(-np.inf, np.inf),
                 log_boundary_lower=True,
-                progressive=False,
             )
 
 

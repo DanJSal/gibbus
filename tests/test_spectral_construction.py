@@ -332,6 +332,10 @@ def test_half_line_map_resolves_a_body_far_from_the_endpoint():
     from numpy.polynomial.polynomial import polyval
     from scipy.integrate import quad
 
+    from gibbus._model.basis import _build_basis
+    from gibbus._model.basis_eval import _evaluate_basis
+    from gibbus._model.basis_spec import BasisSpec
+
     q_poly = np.array([0.0, -0.23727801, 0.52290041, 0.54643843, 0.2141385])
     q_poly[0] = np.log(quad(lambda z: np.exp(-polyval(z, q_poly)), -np.inf, np.inf)[0])
     support = (-24.09277201100829, np.inf)
@@ -339,18 +343,30 @@ def test_half_line_map_resolves_a_body_far_from_the_endpoint():
     def pdf(z):
         return np.exp(-polyval(np.asarray(z, dtype=np.float64), q_poly))
 
+    # The same quartic as a G3 basis (monomials of its fitting coordinate):
+    # coefficients by least squares on a grid, exact to rounding.
+    model = _build_basis(
+        BasisSpec(support=support, bulk_degree=4, expansion="minimal"),
+        np.linspace(-2.0, 2.0, 41),
+    )
+    grid = np.linspace(-3.0, 3.0, 61)
+    phi = _evaluate_basis(model, grid, max_order=0).phi
+    theta, *_ = np.linalg.lstsq(phi, polyval(grid, q_poly) - q_poly[0], rcond=None)
+    np.testing.assert_allclose(
+        phi @ theta + q_poly[0], polyval(grid, q_poly), atol=1e-12
+    )
+    c, h = model.geometry.center, model.geometry.scale
     density = density_spec(
         [
             (
-                q_poly,
-                support[0],
+                model.kernel,
+                theta,
+                (support[0] - c) / h,
                 support[1],
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                1.0,
+                q_poly[0] - math.log(h),
+                -c / h,
+                1.0 / h,
+                1.0 / h,
                 1.0,
                 -np.inf,
                 np.inf,

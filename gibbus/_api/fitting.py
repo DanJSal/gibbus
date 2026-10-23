@@ -12,54 +12,60 @@ without violating the package dependency graph: the controller may compose
 lives in the API layer rather than importing API objects from ``_fit``.
 """
 
-from dataclasses import asdict, dataclass, field, replace
+import warnings
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 from .._defaults import (
-    AUTO_K_MAX,
-    BOUNDARY_ALPHA,
     EM_MAX_ITER,
     EM_TOL,
     SUPPRESSED_WARNINGS,
     _maybe_suppress,
 )
-from .._fit.boundary import AUTO, _effective_n, _select_boundary_terms
+from .._fit.basis_mixture import (
+    _EMOptions,
+    _fit_mixture_auto,
+    _PointMixtureEstimabilityFailure,
+    _select_components,
+)
+from .._fit.basis_selection import _fit_basis
+from .._fit.boundary import _effective_n
+from .._fit.conic_newton import _CONVERGED, _UNCERTIFIED
 from .._fit.degree import _DegreeSelectionConfig
 from .._fit.inputs import (
     _boundary_policy,
     _coerce_poly_degree,
+    _is_poly_degree_admissible,
     _normalize_degree_policies,
     _normalize_mixture_fit_inputs,
-    _normalize_univariate_fit_inputs,
-    _prepare_component_selection_policy,
     _resolve_endpoint_observations,
     _to_generator,
 )
 from .._fit.mixture import (
     _e_step,
     _e_step_intervals,
-    _initial_responsibility_candidates,
     _interval_identifiability_diagnostic,
     _interval_initial_representatives,
-    _propose_n_components,
     _sort_components_by_mode,
 )
-from .._fit.natural_mixture import (
-    _EMOptions,
-    _fit_natural_mixture,
-    _MixtureSearchOptions,
-    _NaturalComponent,
-    _PointMixtureEstimabilityFailure,
+from .._fit.tail_estimation import alternative_spec, resolve_auto_tails
+from .._model.basis import _compile_basis
+from .._model.basis_spec import (
+    _EXPONENTIAL,
+    _FULL,
+    _POLYNOMIAL,
+    BasisSpec,
+    Exponential,
+    Polynomial,
+    SoftPower,
+    TanhSpec,
 )
-from .._observations.empirical import _normalized_weights
-from .._postfit.fitted_state import _pack_natural_component, _pack_natural_fit
-from .._postfit.mixture_inference import _mixture_fit_metadata, _single_fit_metadata
-from .component import _Component, _run_natural_fit
+from .._postfit.basis_state import _pack_basis_fit, _pack_selected
+from .component import _Component
 from .errors import _PointMixtureEstimabilityError
-from .selection import _SingleSelectionFit, select_n_components
 
 
 @dataclass(frozen=True)
@@ -96,14 +102,18 @@ class _FitRequest:
         Random-number source for initialization and selection.
     k_max : int or None
         Maximum component count considered during automatic selection.
-    progressive : bool
-        Whether explicit high-degree mixture fits use a degree ladder.
     auto_k_subsample : str, int, or bool
         Automatic-component-count scoring subsample policy.
     seed_components : list of _Component or None
         Prepared component warm starts, populated from ``init_from``.
     seed_weights : numpy.ndarray or None
         Prepared mixture weights matching ``seed_components``.
+    basis : BasisSpec or None
+        Full G3 basis request (tails, spans) in place of ``poly_degree``,
+        ``support`` and ``log_boundary_*``.
+    seed_basis : BasisSpec or None
+        The warm-start seed's basis family in public units (tails, span
+        policy, tanh geometry), used when ``basis`` is not given.
     degree_config : _DegreeSelectionConfig
         Immutable diagnostic policy created once for this request and reused by
         automatic candidates, component selection, degree growth and warm refits.
@@ -124,10 +134,11 @@ class _FitRequest:
     em_tol: float | None
     rng: Any
     k_max: int | None
-    progressive: bool
     auto_k_subsample: str | int | bool
     seed_components: list[_Component] | None = None
     seed_weights: np.ndarray | None = None
+    basis: Any = None
+    seed_basis: Any = None
     degree_config: _DegreeSelectionConfig = field(
         default_factory=_DegreeSelectionConfig
     )
@@ -156,6 +167,7 @@ class _FitResult:
     selection_diagnostics: dict[str, Any] | None = None
     em_diagnostics: dict[str, Any] | None = None
     fit_metadata: dict[str, Any] | None = None
+    tail_parameter_diagnostics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -216,38 +228,6 @@ class _MixtureContext:
     em_max_iter: int
     em_tol: float
     degree_config: _DegreeSelectionConfig
-
-
-@dataclass(frozen=True)
-class _MixtureInitialization:
-    """Initial responsibilities and policy resolved before final EM.
-
-    Parameters
-    ----------
-    n_components : int
-        Effective component count.
-    responsibilities : numpy.ndarray or None
-        Initial row responsibilities; ``None`` when auto-selection chose one
-        component and the caller should use the single-component path.
-    weights : numpy.ndarray or None
-        Initial mixture weights matching ``responsibilities``.
-    component_options : list of dict
-        Effective per-component options.
-    candidates : list or None
-        Alternative explicit-K initializers to compare by converged likelihood.
-    selection_diagnostics : dict or None
-        Automatic-K diagnostic record.
-    completed_fit : dict or None
-        Private refinement payload, separate from exposed selection diagnostics.
-    """
-
-    n_components: int
-    responsibilities: np.ndarray | None
-    weights: np.ndarray | None
-    component_options: list[dict[str, Any]]
-    candidates: list | None
-    selection_diagnostics: dict[str, Any] | None
-    completed_fit: dict[str, Any] | None = None
 
 
 def _as_integer(value, name, /):
@@ -374,6 +354,13 @@ def _prepare_fit_request(model_type, request, /):
             dtype=np.float64,
         )
         support = (float(np.min(supports[:, 0])), float(np.max(supports[:, 1])))
+        if request.basis is not None and tuple(
+            map(float, request.basis.support)
+        ) != tuple(support):
+            raise ValueError(
+                f"init_from fixes the support {support}; the basis support "
+                f"{tuple(request.basis.support)} differs"
+            )
 
         seed_data = seed_components[0].data
         allowed = np.asarray(seed_data["boundary_allowed"], dtype=bool).reshape(-1)
@@ -430,6 +417,76 @@ def _prepare_fit_request(model_type, request, /):
         init_from=None,
         seed_components=seed_components,
         seed_weights=seed_weights,
+        seed_basis=(
+            None
+            if seed_components is None or request.basis is not None
+            else _seed_basis_spec(seed_components[0])
+        ),
+    )
+
+
+def _seed_basis_spec(component, /):
+    """The basis family of a warm-start seed, in its public units.
+
+    The seed's canonical request lives in model units; the presentation
+    ``x = shift + scale u`` maps tanh locations, steepnesses, exponential
+    rates and soft-power smoothings into public units (a negative scale
+    swaps the ends).  The span policy is ``"full"`` for a full-span seed,
+    ``"auto"`` when the seed's span grew beyond the minimal one, else
+    ``"minimal"``.  Support, degree and endpoint logs are set by the caller.
+
+    Parameters
+    ----------
+    component : _Component
+        First seed component (the family is shared by all components).
+    """
+    parent = component._basis.parent
+    req = parent.request
+    shift, scale = map(float, component._affine())
+    size = abs(scale)
+
+    def tail(t):
+        if t is None:
+            return None
+        if t.kind == _POLYNOMIAL:
+            return Polynomial(int(t.value))
+        if t.kind == _EXPONENTIAL:
+            return Exponential(float(t.value) / size)
+        return SoftPower(
+            float(t.value), "auto" if t.delta is None else float(t.delta) * size**2
+        )
+
+    def location(v):
+        return "auto" if v is None else shift + scale * float(v)
+
+    def steepness(v):
+        return "auto" if v is None else float(v) / size
+
+    tails = (tail(req.lower_tail), tail(req.upper_tail))
+    tanh = (
+        (location(req.lower_location), steepness(req.lower_steepness)),
+        (location(req.upper_location), steepness(req.upper_steepness)),
+    )
+    if scale < 0.0:
+        tails, tanh = tails[::-1], tanh[::-1]
+    if req.expansion == _FULL:
+        expansion = _FULL
+    else:
+        minimal = _compile_basis(req, parent.geometry)
+        expansion = (
+            "auto" if parent.n_coefficients > minimal.n_coefficients else "minimal"
+        )
+    return BasisSpec(
+        lower_tail=tails[0],
+        upper_tail=tails[1],
+        independent_equal_rate_coefficients=req.independent,
+        expansion=expansion,
+        tanh=TanhSpec(
+            lower_location=tanh[0][0],
+            upper_location=tanh[1][0],
+            lower_steepness=tanh[0][1],
+            upper_steepness=tanh[1][1],
+        ),
     )
 
 
@@ -446,74 +503,7 @@ def _run_fit_request(request, /):
     _FitResult
         Completed component state and diagnostics.
     """
-    if request.n_components != "auto" and request.n_components == 1:
-        seed = request.seed_components[0] if request.seed_components else None
-        return _run_single_fit(
-            request,
-            poly_degree=request.poly_degree,
-            support=request.support,
-            log_boundary_lower=request.log_boundary_lower,
-            log_boundary_upper=request.log_boundary_upper,
-            verbose=request.verbose,
-            suppress_warnings=request.suppress_warnings,
-            init_from=seed,
-        )
-    return _run_mixture_fit(request)
-
-
-def _run_single_fit(
-    request,
-    /,
-    *,
-    poly_degree,
-    support,
-    log_boundary_lower,
-    log_boundary_upper,
-    verbose,
-    suppress_warnings,
-    init_from,
-):
-    """Fit one component and package it as a fit result.
-
-    Parameters
-    ----------
-    request : _FitRequest
-        Prepared public request supplying samples and observation weights.
-    poly_degree : int, str, or None
-        Effective polynomial degree for this component.
-    support : tuple of (float, float) or None
-        Effective user-coordinate support.
-    log_boundary_lower, log_boundary_upper : bool or None
-        Effective endpoint-log basis policy.
-    verbose : int
-        Effective verbosity level.
-    suppress_warnings : bool
-        Effective warning-suppression policy.
-    init_from : _Component or None
-        Optional component warm start.
-
-    Returns
-    -------
-    _FitResult
-        Single fitted component with unit weight.
-    """
-    comp = _Component._fit(
-        request.samples,
-        poly_degree=poly_degree,
-        support=support,
-        log_boundary_lower=log_boundary_lower,
-        log_boundary_upper=log_boundary_upper,
-        verbose=verbose,
-        suppress_warnings=suppress_warnings,
-        init_from=init_from,
-        sample_weight=request.sample_weight,
-        degree_config=request.degree_config,
-    )
-    return _FitResult(
-        components=[comp],
-        weights=np.array([1.0], dtype=np.float64),
-        fit_metadata=_single_fit_metadata(comp.data),
-    )
+    return _run_basis_request(request)
 
 
 def _prepare_mixture_context(request, /):
@@ -538,6 +528,7 @@ def _prepare_mixture_context(request, /):
         request.verbose,
         request.suppress_warnings,
         sample_weight=request.sample_weight,
+        allow_odd_degree=request.basis is not None or request.seed_basis is not None,
     )
     samples_rk = norm["samples_rk"]
     support = tuple(map(float, norm["support"]))
@@ -589,292 +580,6 @@ def _prepare_mixture_context(request, /):
     )
 
 
-def _initialize_mixture(request, context, /):
-    """Resolve seeded, automatic-K, or explicit-K initialization.
-
-    Parameters
-    ----------
-    request : _FitRequest
-        Prepared public fit request.
-    context : _MixtureContext
-        Canonicalized mixture inputs.
-
-    Returns
-    -------
-    _MixtureInitialization
-        Effective component count, responsibilities, options, candidates, and
-        any automatic-selection diagnostics.
-    """
-    is_seeded = request.seed_components is not None
-    if is_seeded:
-        n_components = int(context.n_components)
-        component_options = context.component_options
-        if component_options is None:
-            component_options = [{} for _ in range(n_components)]
-        if context.n_columns == 2:
-            responsibilities, _ = _e_step_intervals(
-                context.samples_rk,
-                request.seed_components,
-                request.seed_weights,
-                obs_weights=context.observation_weights,
-            )
-        else:
-            responsibilities, _ = _e_step(
-                context.samples_1d,
-                request.seed_components,
-                request.seed_weights,
-                "base",
-                obs_weights=context.observation_weights,
-            )
-        return _MixtureInitialization(
-            n_components=n_components,
-            responsibilities=responsibilities,
-            weights=request.seed_weights.copy(),
-            component_options=component_options,
-            candidates=None,
-            selection_diagnostics=None,
-        )
-
-    if context.n_components == "auto":
-        requested_k_max = (
-            int(request.k_max) if request.k_max is not None else AUTO_K_MAX
-        )
-        with _maybe_suppress(
-            context.suppress_warnings,
-            SUPPRESSED_WARNINGS,
-        ):
-            k_modes, effective_k_max = _propose_n_components(
-                context.samples_1d,
-                requested_k_max,
-                context.generator,
-                verbose=context.verbose,
-            )
-
-        policy = _prepare_component_selection_policy(
-            len(context.samples_rk),
-            context.support,
-            k_modes,
-            effective_k_max,
-            request.auto_k_subsample,
-            request.poly_degree,
-            context.log_boundary_lower,
-            context.log_boundary_upper,
-        )
-
-        def refine_candidate(candidate):
-            return _refine_component_count(
-                request,
-                context,
-                candidate.rows,
-                candidate.samples_1d,
-                candidate.observation_weights,
-                candidate.n_components,
-                candidate.responsibilities,
-                candidate.rng,
-                candidate.initial_fit,
-            )
-
-        n_components, responsibilities, weights, diagnostics = select_n_components(
-            S=context.samples_rk,
-            samples_1d=context.samples_1d,
-            supp=context.support,
-            k_modes=k_modes,
-            gen=context.generator,
-            obs_w=context.observation_weights,
-            verb=context.verbose,
-            policy=policy,
-            degree_config=context.degree_config,
-            refine_candidate=refine_candidate,
-        )
-        completed_fit = diagnostics.pop("_selected_fit")
-        return _MixtureInitialization(
-            n_components=int(n_components),
-            responsibilities=responsibilities,
-            weights=weights,
-            component_options=[{} for _ in range(int(n_components))],
-            candidates=None,
-            selection_diagnostics=diagnostics,
-            completed_fit=completed_fit,
-        )
-
-    n_components = int(context.n_components)
-    component_options = context.component_options
-    with _maybe_suppress(
-        context.suppress_warnings,
-        SUPPRESSED_WARNINGS,
-    ):
-        candidates = _initial_responsibility_candidates(
-            context.samples_1d,
-            n_components,
-            context.generator,
-            weights=request.sample_weight,
-        )
-    _, responsibilities, weights = candidates[0]
-    return _MixtureInitialization(
-        n_components=n_components,
-        responsibilities=responsibilities,
-        weights=weights,
-        component_options=component_options,
-        candidates=candidates,
-        selection_diagnostics=None,
-    )
-
-
-def _refine_component_count(
-    request,
-    context,
-    rows,
-    representatives,
-    observation_weights,
-    n_components,
-    responsibilities,
-    generator,
-    initial_fit,
-    /,
-):
-    """Refine a screening candidate using the actual final fitting policies.
-
-    Parameters
-    ----------
-    request : _FitRequest
-        Prepared public request carrying the final degree and fitting controls.
-    context : _MixtureContext
-        Canonical shared support, boundary policy and fitting controls.
-    rows : numpy.ndarray, shape (R, 1) or (R, 2)
-        Canonical observations for the refinement sample.
-    representatives : numpy.ndarray, shape (R,)
-        Point values or interval representatives used by initialization.
-    observation_weights : numpy.ndarray or None
-        Normalized weights for the refinement rows.
-    n_components : int
-        Candidate component count.
-    responsibilities : numpy.ndarray or None
-        Initial row responsibilities for a multi-component candidate.
-    generator : numpy.random.Generator
-        Random stream for refinement initialization.
-    initial_fit : _NaturalMixtureFit or None
-        Completed screening fit available for continuation.
-
-    Returns
-    -------
-    dict
-        Completed numerical fit and its likelihood, dimensions and boundary
-        selection metadata.
-    """
-    degree = "auto" if request.poly_degree is None else request.poly_degree
-    if n_components == 1:
-        norm = _normalize_univariate_fit_inputs(
-            _Component,
-            rows,
-            degree,
-            context.support,
-            context.log_boundary_lower,
-            context.log_boundary_upper,
-            0,
-            context.suppress_warnings,
-            None,
-            observation_weights,
-        )
-        with _maybe_suppress(context.suppress_warnings, SUPPRESSED_WARNINGS):
-            objective, result, effective_n, p_values = _run_natural_fit(
-                norm, context.degree_config
-            )
-        component = _NaturalComponent(
-            coordinate=objective.spec.coordinate,
-            spec=objective.spec,
-            layout=objective.layout,
-            z_data_bounds=objective.z_data_bounds,
-            params=result.params,
-            effective_curvature_degree=result.effective_curvature_degree,
-            lower_amplitude_active=result.lower_amplitude_active,
-            upper_amplitude_active=result.upper_amplitude_active,
-            solver_result=result,
-        )
-        dimension = (
-            2
-            + int(result.effective_curvature_degree)
-            + int(result.lower_amplitude_active)
-            + int(result.upper_amplitude_active)
-        )
-        fitted = _SingleSelectionFit(
-            objective=objective,
-            result=result,
-            components=(component,),
-            weights=np.ones(1),
-            log_likelihood=-float(result.objective_value),
-            n_face_parameters=dimension,
-        )
-        return {
-            "fit": fitted,
-            "log_likelihood": fitted.log_likelihood,
-            "n_face_parameters": dimension,
-            "weights": fitted.weights,
-            "components": fitted.components,
-            "boundary_p_values": p_values,
-            "status": str(result.status),
-            "effective_n": float(effective_n),
-            "degrees": (int(objective.spec.requested_poly_degree),),
-        }
-
-    candidate_context = replace(
-        context,
-        samples_rk=rows,
-        samples_1d=representatives,
-        observation_weights=observation_weights,
-        n_components=int(n_components),
-        fit_generator=generator,
-        verbose=0,
-    )
-    fitted, p_values = _fit_mixture_with_boundary_policy(
-        candidate_context,
-        n_components,
-        (degree,) * n_components,
-        responsibilities,
-        (("direct", "raw"),),
-        initial_fit=initial_fit,
-    )
-    return {
-        "fit": fitted,
-        "log_likelihood": float(fitted.log_likelihood),
-        "n_face_parameters": int(fitted.n_face_parameters),
-        "weights": fitted.weights,
-        "components": fitted.components,
-        "boundary_p_values": p_values,
-        "status": str(fitted.status),
-        "degrees": tuple(
-            int(component.spec.requested_poly_degree) for component in fitted.components
-        ),
-    }
-
-
-def _resolve_seeded_component_options(request, initialization, /):
-    """Apply per-component degree precedence for a warm-started mixture.
-
-    Parameters
-    ----------
-    request : _FitRequest
-        Prepared request containing component seeds and the global degree.
-    initialization : _MixtureInitialization
-        Seeded mixture initialization with validated component options.
-
-    Returns
-    -------
-    list of dict
-        Independent per-component option dictionaries with ``poly_degree``
-        resolved for every component.
-    """
-    resolved = [dict(opts) for opts in initialization.component_options]
-    for index in range(initialization.n_components):
-        if "poly_degree" in resolved[index]:
-            continue
-        if request.poly_degree is not None:
-            resolved[index]["poly_degree"] = request.poly_degree
-            continue
-        seed_data = request.seed_components[index].data
-        resolved[index]["poly_degree"] = int(seed_data["requested_poly_degree"])
-    return resolved
-
-
 def _natural_degree_policy(global_degree, component_options, /):
     """Resolve public global/per-component degree precedence for natural EM.
 
@@ -897,345 +602,381 @@ def _natural_degree_policy(global_degree, component_options, /):
     return _normalize_degree_policies(policies, len(component_options))
 
 
-def _fit_mixture_with_boundary_policy(
-    context,
-    n_components,
-    degree_policy,
-    responsibilities,
-    paths,
-    /,
-    *,
-    initial_fit,
-):
-    """Fit the final mixture, deciding ``"auto"`` boundary terms from the data.
-
-    Automatic sides are tested globally at locked degrees, using the fitted
-    mixture as a numerical warm start. After removing a side, automatic
-    degrees are reselected under the remaining allowed boundary basis.
-
-    Parameters
-    ----------
-    context : _MixtureContext
-        Shared mixture inputs.
-    n_components : int
-        Number of components.
-    degree_policy : tuple of int or str
-        Canonical degree policies of the multi-start.
-    responsibilities : numpy.ndarray or None
-        Explicit initial responsibilities, or ``None`` for the candidates.
-    paths : tuple
-        Multi-start paths.
-    initial_fit : _NaturalMixtureFit or None
-        Shared numerical fit supplying fixed coordinates and a warm start.
-
-    Returns
-    -------
-    fitted : _NaturalMixtureFit
-        Final mixture.
-    p_values : tuple of float
-        Boundary-term test p-values per physical side (``nan`` where no test
-        ran).
-    """
-    rows = context.samples_rk
-    em_options = _EMOptions(
-        tolerance=context.em_tol,
-        max_steps=context.em_max_iter,
-    )
-    reduced_fits = {}
-
-    def fit(lo, up):
-        return _fit_natural_mixture(
-            context.support,
-            rows,
-            n_components,
-            degree_policy,
-            lo,
-            up,
-            context.observation_weights,
-            rng=context.fit_generator,
-            responsibilities=responsibilities,
-            search_options=_MixtureSearchOptions(paths=tuple(paths)),
-            initial_fit=initial_fit,
-            em_options=em_options,
-            degree_config=context.degree_config,
-        )
-
-    lower, upper = context.log_boundary_lower, context.log_boundary_upper
-    if lower != AUTO and upper != AUTO:
-        return fit(bool(lower), bool(upper)), (np.nan, np.nan)
-
-    def fit_reduced(model, lo, up):
-        locked = tuple(int(c.spec.requested_poly_degree) for c in model.components)
-        reduced = _fit_natural_mixture(
-            context.support,
-            rows,
-            n_components,
-            locked,
-            lo,
-            up,
-            context.observation_weights,
-            rng=context.fit_generator,
-            responsibilities=model.responsibilities,
-            search_options=_MixtureSearchOptions(paths=(("direct", "raw"),)),
-            initial_fit=model,
-            em_options=em_options,
-            degree_config=context.degree_config,
-        )
-        reduced_fits[(bool(lo), bool(up))] = reduced
-        return reduced
-
-    def amplitude(model, side):
-        component = model.components[0]
-        index = (
-            component.spec.physical_lower_a_index
-            if side == "lower"
-            else component.spec.physical_upper_a_index
-        )
-        return 0.0 if index is None else float(component.params[index])
-
-    def refit(lo, up):
-        previous = reduced_fits[(bool(lo), bool(up))]
-        return _fit_natural_mixture(
-            context.support,
-            rows,
-            n_components,
-            degree_policy,
-            lo,
-            up,
-            context.observation_weights,
-            rng=context.fit_generator,
-            responsibilities=previous.responsibilities,
-            search_options=_MixtureSearchOptions(paths=(("direct", "raw"),)),
-            initial_fit=previous,
-            em_options=em_options,
-            degree_config=context.degree_config,
-        )
-
-    automatic_degree = "auto" in degree_policy
-    fitted, _, p_values = _select_boundary_terms(
-        fit,
-        lambda model: -float(model.log_likelihood),
-        amplitude,
-        lower,
-        upper,
-        _effective_n(rows.shape[0], context.observation_weights),
-        fit_reduced=fit_reduced,
-        refit=refit if automatic_degree else None,
-        alpha=BOUNDARY_ALPHA,
-    )
-    return fitted, p_values
+# ----------------------------------------------------------------------
+# G3 fit controller (G3-047): public requests on the basis fitters
+# ----------------------------------------------------------------------
 
 
-def _components_from_natural_mixture(fitted, observation_weights, boundary_p_values, /):
-    """Finalize a natural mixture into public query-time component states.
+def _basis_spec_of(request, support, degree, lower, upper, /):
+    """The fit's ``BasisSpec``: the caller's, or G1's arguments mapped onto one.
 
-    Parameters
-    ----------
-    fitted : _NaturalMixtureResult
-        Completed natural mixture fit.
-    observation_weights : numpy.ndarray or None
-        Observation weights (``None`` for equal weights).
-    boundary_p_values : tuple of float
-        Automatic boundary-term test p-values per physical side.
-
-    Returns
-    -------
-    components : list of _Component
-        Finalized public components.
-    weights : numpy.ndarray
-        Mixture weights.
-    diagnostics : dict
-        In-process EM/polish diagnostic record.
-    """
-    r = np.asarray(fitted.responsibilities, dtype=np.float64)
-    w = (
-        np.ones(r.shape[0], dtype=np.float64)
-        if observation_weights is None
-        else np.asarray(observation_weights, dtype=np.float64)
-    )
-    components = [
-        _Component(
-            _pack_natural_component(
-                component,
-                effective_n=_normalized_weights(
-                    r.shape[0], w * r[:, k], "component"
-                ).effective_n,
-                boundary_p_values=(np.nan, np.nan),
-            )
-        )
-        for k, component in enumerate(fitted.components)
-    ]
-    em_diag = {
-        "converged": str(fitted.status) in {"converged", "converged_approximately"},
-        "termination_reason": str(fitted.status),
-        "n_iterations": int(fitted.em_iterations),
-        "polish_iterations": int(fitted.polish_iterations),
-        "rounds": int(fitted.rounds),
-        "last_relative_change": None,
-        "n_failed_component_refits": 0,
-        "final_log_likelihood": float(fitted.log_likelihood),
-        "finalize_rewound": False,
-        "decrease_bound": float(fitted.decrease_bound),
-        "separator_certified": bool(fitted.separator_certified),
-        "initialization": str(fitted.initialization),
-        "degree_diagnostics": tuple(
-            {
-                "degrees": tuple(map(int, record["degrees"])),
-                "diagnostics": tuple(
-                    {"component": int(index), **asdict(diagnostic)}
-                    for index, diagnostic in record["diagnostics"]
-                ),
-                "expanded_component": record["expanded_component"],
-            }
-            for record in fitted.degree_diagnostics
-        ),
-        "degree_component_order": "solver",
-    }
-    return components, np.asarray(fitted.weights, dtype=np.float64), em_diag
-
-
-def _run_mixture_fit(request, /):
-    """Execute automatic or explicit multi-component fitting policy.
+    G1's arguments describe G1's family exactly: ``poly_degree`` is the bulk
+    degree (``"auto"`` by default, as G1), ``log_boundary_*`` the endpoint-log
+    policies (``"auto"`` lets the data decide) and the span is minimal (bulk
+    monomials and logs: no gated slots, which only a ``basis`` request with
+    tails or an expansion policy adds).  A warm start without ``basis``
+    keeps its seed's family (``_seed_basis_spec``) with the request's
+    support, degree and logs.
 
     Parameters
     ----------
     request : _FitRequest
-        Prepared public fit request.
-
-    Returns
-    -------
-    _FitResult
-        Completed single- or multi-component fit.  Automatic selection may
-        return a single component while retaining its selection diagnostics.
+        Prepared public request.
+    support : tuple of float
+        Fit support.
+    degree : int or "auto"
+        Bulk degree.
+    lower : bool or "auto"
+        Lower endpoint-log policy.
+    upper : bool or "auto"
+        Upper endpoint-log policy.
     """
-    context = _prepare_mixture_context(request)
-    initialization = _initialize_mixture(request, context)
-    completed = initialization.completed_fit
-    if completed is not None and initialization.selection_diagnostics is None:
-        raise RuntimeError("a completed selection fit must include its diagnostics")
-    reuse_completed = bool(
-        completed is not None
-        and initialization.selection_diagnostics["reuse_selected_fit"]
-    )
 
-    if initialization.n_components == 1:
-        if reuse_completed:
-            selected = completed["fit"]
-            state = _pack_natural_fit(
-                selected.objective,
-                selected.result,
-                effective_n=completed["effective_n"],
-                boundary_p_values=completed["boundary_p_values"],
-            )
-            result = _FitResult(
-                components=[_Component(state)],
-                weights=np.ones(1),
-                fit_metadata=_single_fit_metadata(state),
-            )
-        else:
-            result = _run_single_fit(
-                request,
-                poly_degree=(
-                    "auto" if request.poly_degree is None else request.poly_degree
-                ),
-                support=context.support,
-                log_boundary_lower=context.log_boundary_lower,
-                log_boundary_upper=context.log_boundary_upper,
-                verbose=context.verbose,
-                suppress_warnings=context.suppress_warnings,
-                init_from=None,
-            )
+    if request.basis is not None:
         return replace(
-            result,
-            selection_diagnostics=initialization.selection_diagnostics,
+            request.basis, bulk_degree=degree, log_lower=lower, log_upper=upper
         )
-
-    component_options = initialization.component_options
-    if request.seed_components is not None:
-        component_options = _resolve_seeded_component_options(request, initialization)
-
-    poly_degree = request.poly_degree
-    if poly_degree is None:
-        poly_degree = "auto"
-
-    degree_policy = _natural_degree_policy(poly_degree, component_options)
-    responsibilities = initialization.responsibilities
-    if initialization.candidates is not None and request.seed_components is None:
-        # Let the multi-start explore the complete initializer set rather
-        # than restricting it to the first candidate.
-        responsibilities = None
-    paths = (
-        (
-            ("ladder", "raw"),
-            ("ladder", "sharpened"),
-            ("direct", "raw"),
-            ("direct", "sharpened"),
+    if request.seed_basis is not None:
+        return replace(
+            request.seed_basis,
+            support=support,
+            bulk_degree=degree,
+            log_lower=lower,
+            log_upper=upper,
         )
-        if request.progressive
-        else (("direct", "raw"), ("direct", "sharpened"))
+    return BasisSpec(
+        support=support,
+        bulk_degree=degree,
+        log_lower=lower,
+        log_upper=upper,
+        expansion="minimal",
     )
-    try:
-        if reuse_completed:
-            fitted = completed["fit"]
-            boundary_p_values = completed["boundary_p_values"]
-        else:
-            fitted, boundary_p_values = _fit_mixture_with_boundary_policy(
-                context,
-                initialization.n_components,
-                degree_policy,
-                responsibilities,
-                paths,
-                initial_fit=None,
-            )
-    except _PointMixtureEstimabilityFailure as exc:
-        k = int(initialization.n_components)
-        raise _PointMixtureEstimabilityError(
-            f"{exc} No initialization of the requested {k}-component "
-            "mixture produced an estimable fit, so the data do not support "
-            f"n_components={k}; use n_components='auto' or fewer "
-            "components."
-        ) from exc
-    components, weights, em_diagnostics = _components_from_natural_mixture(
-        fitted,
-        context.observation_weights,
-        boundary_p_values,
-    )
-    if context.samples_rk.shape[1] == 2:
-        ident = _interval_identifiability_diagnostic(
-            context.samples_rk,
-            components,
-            fitted.log_likelihood,
-            context.support,
+
+
+def _em_diagnostics(fit, /):
+    """In-process EM record of a G3 mixture (G1 ``em_diagnostics`` keys).
+
+    Parameters
+    ----------
+    fit : _MixtureFit
+        Fitted G3 mixture.
+    """
+    status = str(fit.status)
+    return {
+        "converged": status in {"converged", "converged_approximately"},
+        "termination_reason": status,
+        "n_iterations": int(fit.em_iterations),
+        "polish_iterations": int(fit.polish_iterations),
+        "rounds": int(fit.rounds),
+        "final_log_likelihood": float(fit.log_likelihood),
+        "decrease_bound": (
+            float("nan")
+            if fit.result is None
+            else float(fit.result.final_decrease_bound)
+        ),
+        "initialization": str(fit.initialization),
+        "selection": tuple(
+            {
+                "kind": step.kind,
+                "chosen": step.chosen,
+                "lr_p_value": float(step.lr_p_value),
+                "failure": step.failure,
+                "diagnostics": tuple(
+                    {"component": int(c), "label": d.label, "p_value": d.p_value}
+                    for c, d in step.diagnostics
+                ),
+            }
+            for step in fit.selection
+        ),
+    }
+
+
+def _seed_responsibilities(context, seeds, weights, /):
+    """Responsibilities of the seed mixture at the data (G1 warm E-step).
+
+    Parameters
+    ----------
+    context : _MixtureContext
+        Prepared fit context.
+    seeds : sequence of Component
+        Seed mixture components.
+    weights : ndarray
+        Seed mixture weights.
+    """
+    if context.n_columns == 2:
+        resp, _ = _e_step_intervals(
+            context.samples_rk, seeds, weights, obs_weights=context.observation_weights
+        )
+    else:
+        resp, _ = _e_step(
+            context.samples_1d,
+            seeds,
+            weights,
+            "base",
             obs_weights=context.observation_weights,
-            n_parameters=fitted.n_face_parameters,
         )
-        if ident is not None:
-            pattern = "overlapping" if ident["has_overlap"] else "endpoint-partition"
-            raise RuntimeError(
-                "interval-censored fit is non-identifiable at the observed "
-                "resolution: the fitted likelihood reaches the nonparametric "
-                f"interval-likelihood bound (gap={ident['gap']:.3g}) with "
-                f"{ident['n_params']} free parameters but only "
-                f"{ident['observable_dim']} independent probability coordinates "
-                f"in the {pattern} censoring pattern. Component shapes within "
-                "the censoring intervals are not determined by the data. Use "
-                "finer censoring intervals, reduce model complexity, or fit "
-                "n_components=1 if only the coarse distribution is needed."
-            )
-    solver_order = {id(component): index for index, component in enumerate(components)}
-    components, weights = _sort_components_by_mode(components, weights)
-    public_to_solver = tuple(solver_order[id(component)] for component in components)
-    em_diagnostics["solver_to_public"] = tuple(
-        public_to_solver.index(index) for index in range(len(components))
+    return resp
+
+
+def _check_identifiable(context, log_likelihood, n_parameters, /):
+    """G1's interval identifiability rule on a mixture (fails loudly).
+
+    ``log_likelihood`` is the mixture's mean interval log-likelihood, or a
+    nested model's (a mixture contains its one-component model): reaching
+    the nonparametric bound with more parameters than independent interval
+    probabilities leaves the components undetermined.
+
+    Parameters
+    ----------
+    context : _MixtureContext
+        Prepared fit context.
+    log_likelihood : float
+        Mean interval log-likelihood of the model.
+    n_parameters : int
+        Free parameters of the mixture.
+    """
+    if context.samples_rk.shape[1] != 2:
+        return
+    ident = _interval_identifiability_diagnostic(
+        context.samples_rk,
+        None,
+        float(log_likelihood),
+        context.support,
+        obs_weights=context.observation_weights,
+        n_parameters=int(n_parameters),
     )
+    if ident is not None:
+        pattern = "overlapping" if ident["has_overlap"] else "endpoint-partition"
+        raise RuntimeError(
+            "interval-censored fit is non-identifiable at the observed "
+            "resolution: the fitted likelihood reaches the nonparametric "
+            f"interval-likelihood bound (gap={ident['gap']:.3g}) with "
+            f"{ident['n_params']} free parameters but only "
+            f"{ident['observable_dim']} independent probability coordinates "
+            f"in the {pattern} censoring pattern. Component shapes within "
+            "the censoring intervals are not determined by the data. Use "
+            "finer censoring intervals, reduce model complexity, or fit "
+            "n_components=1 if only the coarse distribution is needed."
+        )
+
+
+def _run_basis_request(request, /):
+    """Execute a prepared public request on the G3 fitters.
+
+    Inputs are validated by G1's public rules (``_prepare_mixture_context``:
+    sample layouts, support, weights, endpoint observations, component
+    options); the request becomes a ``BasisSpec``; one component is the
+    single fit, an explicit count ``_fit_mixture_auto`` (a warm start seeds
+    its EM with the seed's responsibilities at the data), ``"auto"``
+    ``_select_components``.  Results are packed G3 component states.
+
+    Parameters
+    ----------
+    request : _FitRequest
+        Prepared public request.
+    """
+
+    context = _prepare_mixture_context(request)
+    seeds = request.seed_components
+    k = context.n_components
+    options = context.component_options
+    degree = request.poly_degree
+    if request.basis is not None:
+        degree = request.basis.bulk_degree
+        degrees = (
+            tuple(opts.get("poly_degree", degree) for opts in options)
+            if options is not None and any("poly_degree" in opts for opts in options)
+            else None
+        )
+    elif seeds is not None and degree is None:
+        degrees = tuple(
+            opts.get("poly_degree", s._basis.model.request.bulk_degree)
+            for opts, s in zip(options, seeds, strict=True)
+        )
+    else:
+        degrees = (
+            None
+            if options is None or k == "auto"
+            else _natural_degree_policy(degree, options)
+        )
+    global_degree = "auto" if degree is None else degree
+    for policy in (
+        ()
+        if request.basis is not None or request.seed_basis is not None
+        else (global_degree, *(() if degrees is None else degrees))
+    ):
+        if policy != "auto" and not _is_poly_degree_admissible(policy, context.support):
+            raise ValueError(
+                f"poly_degree={policy} is odd, which is inadmissible on "
+                "full-infinite support (-inf, +inf). Use an even degree."
+            )
+    if degrees is not None and len(set(degrees)) == 1:
+        global_degree, degrees = degrees[0], None
+    spec = _basis_spec_of(
+        request,
+        context.support,
+        "auto" if degrees is not None else global_degree,
+        context.log_boundary_lower,
+        context.log_boundary_upper,
+    )
+    weights = context.observation_weights
+    samples = context.samples_rk
+    spec, tail_proposals = resolve_auto_tails(spec, samples, weights)
+    tail_diagnostics = {
+        side: {
+            "family": est.family,
+            "estimated_parameter": float(est.primary),
+            "backup_parameter": (
+                None if est.alternative is None else float(est.alternative)
+            ),
+            "tail_n": est.n_tail,
+            "fallback_used": False,
+        }
+        for side, (_, est, _) in tail_proposals.items()
+    }
+    n_eff = _effective_n(samples.shape[0], weights)
+    em = _EMOptions(tolerance=context.em_tol, max_steps=context.em_max_iter)
+    config = context.degree_config
+    selection = None
+    with _maybe_suppress(context.suppress_warnings, SUPPRESSED_WARNINGS):
+        if k == 1:
+            backup = alternative_spec(spec, tail_proposals) if tail_proposals else None
+            original_error = None
+            fit = None
+            try:
+                fit = _fit_basis(spec, samples, weights, config=config)
+                if tail_proposals and fit.result.status not in _CONVERGED:
+                    original_error = RuntimeError(
+                        f"automatic tail primary fit did not converge ({fit.result.status})"
+                    )
+            except (RuntimeError, ArithmeticError, FloatingPointError) as exc:
+                if not tail_proposals or backup is None:
+                    raise
+                original_error = exc
+            if original_error is not None:
+                if backup is None:
+                    raise original_error
+                try:
+                    recovered = _fit_basis(backup, samples, weights, config=config)
+                    if recovered.result.status not in _CONVERGED:
+                        raise RuntimeError(
+                            "automatic tail backup did not converge "
+                            f"({recovered.result.status})"
+                        )
+                except (
+                    RuntimeError,
+                    ArithmeticError,
+                    FloatingPointError,
+                ) as retry_error:
+                    raise RuntimeError(
+                        "automatic tail fit failed with the empirical parameter "
+                        f"({original_error}); single backup failed ({retry_error})"
+                    ) from original_error
+                fit = recovered
+                for side, data in tail_diagnostics.items():
+                    old = getattr(spec, side + "_tail")
+                    new = getattr(backup, side + "_tail")
+                    if old != new:
+                        data["fallback_used"] = True
+                        data["estimated_parameter"] = float(
+                            new.rate if isinstance(new, Exponential) else new.power
+                        )
+            if fit.result.status == _UNCERTIFIED:
+                warnings.warn(
+                    "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+            packed = _pack_basis_fit(fit, n_eff)
+            em_diag = None
+        else:
+            try:
+                if k == "auto":
+                    chosen = _select_components(
+                        spec,
+                        samples,
+                        weights,
+                        k_max=request.k_max,
+                        subsample=request.auto_k_subsample,
+                        rng=context.generator,
+                        config=config,
+                        em_options=em,
+                    )
+                    fit, p_values = chosen.fit, chosen.boundary_p_values
+                    selection = chosen.diagnostics
+                else:
+                    resp = (
+                        None
+                        if seeds is None
+                        else _seed_responsibilities(
+                            context, seeds, request.seed_weights
+                        )
+                    )
+                    fit, _, p_values = _fit_mixture_auto(
+                        spec,
+                        samples,
+                        int(k),
+                        weights,
+                        rng=context.fit_generator,
+                        responsibilities=resp,
+                        degrees=degrees,
+                        config=config,
+                        em_options=em,
+                    )
+            except _PointMixtureEstimabilityFailure as exc:
+                raise _PointMixtureEstimabilityError(
+                    f"{exc} No initialization of the requested {k}-component "
+                    "mixture produced an estimable fit, so the data do not "
+                    f"support n_components={k}; use n_components='auto' or "
+                    "fewer components."
+                ) from exc
+            except RuntimeError:
+                if k == "auto" or samples.shape[1] != 2:
+                    raise
+                # No start of an explicit interval mixture converged.  If the
+                # one-component fit already reaches the nonparametric bound,
+                # the mixture (which contains it) does too: G1's
+                # non-identifiability error, which G1 reported after its EM
+                # reached the bound (G3-047).
+                nested = _fit_basis(spec, samples, weights, config=config)
+                _check_identifiable(
+                    context,
+                    -nested.result.objective_value,
+                    int(k) * nested.model.n_coefficients + int(k) - 1,
+                )
+                raise
+            if str(fit.status) not in _CONVERGED and str(fit.status) != _UNCERTIFIED:
+                # Explicit counts and a selected count's final fit fail loudly
+                # (G3-047); automatic searches end at their last converged
+                # member inside the fitters.
+                raise RuntimeError(
+                    f"the {len(fit.models)}-component G3 mixture did not converge "
+                    f"({fit.status})"
+                )
+            if len(fit.models) > 1:
+                _check_identifiable(context, fit.log_likelihood, fit.n_face_parameters)
+            if fit.status == _UNCERTIFIED:
+                warnings.warn(
+                    "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+            packed = _pack_selected(fit, n_eff, p_values)
+            em_diag = _em_diagnostics(fit) if len(fit.models) > 1 else None
+    mix_weights, states, metadata = packed
+    components = [_Component(state) for state in states]
+    if len(components) > 1:
+        solver_order = {id(c): i for i, c in enumerate(components)}
+        components, mix_weights = _sort_components_by_mode(components, mix_weights)
+        public = tuple(solver_order[id(c)] for c in components)
+        em_diag["solver_to_public"] = tuple(
+            public.index(i) for i in range(len(components))
+        )
     return _FitResult(
         components=components,
-        weights=weights,
-        selection_diagnostics=initialization.selection_diagnostics,
-        em_diagnostics=em_diagnostics,
-        fit_metadata=_mixture_fit_metadata(
-            fitted,
-            _effective_n(context.samples_rk.shape[0], context.observation_weights),
-            boundary_p_values,
-        ),
+        weights=np.asarray(mix_weights, dtype=np.float64),
+        selection_diagnostics=selection,
+        em_diagnostics=em_diag,
+        fit_metadata=metadata,
+        tail_parameter_diagnostics=tail_diagnostics or None,
     )

@@ -1,0 +1,15 @@
+........................................................................ [ 63%]
+..........................................                               [100%]
+=============================== warnings summary ===============================
+tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail3-support0]
+tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail3-support2]
+  /workspace/scratch/4dd42c182dbe/gibbus-working/tests/test_review_regressions.py:235: GibbusBasisWarning: lower SoftPower(power=2) has an integer exponent and is treated as the monomial tail x**2; delta is ignored and no soft-power function is used
+    record = _model_record(_build_basis(spec, x))
+
+tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail3-support0]
+tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail3-support1]
+  /workspace/scratch/4dd42c182dbe/gibbus-working/tests/test_review_regressions.py:235: GibbusBasisWarning: upper SoftPower(power=2) has an integer exponent and is treated as the monomial tail x**2; delta is ignored and no soft-power function is used
+    record = _model_record(_build_basis(spec, x))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+114 passed, 4 warnings in 8.65s

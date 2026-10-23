@@ -62,22 +62,31 @@ DEFINE_MACROS = [("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")]
 
 # Dotted module path -> source file, both relative to the package root.
 MODULES = {
+    "_fit._series_search": "_fit/_series_search.pyx",
+    "_model._series_kernels": "_model/_series_kernels.pyx",
     "_fit._conic_kernels": "_fit/_conic_kernels.pyx",
-    "_fit._curvature_certificate": "_fit/_curvature_certificate.pyx",
-    "_fit._mixture_kernels": "_fit/_mixture_kernels.pyx",
-    "_fit._shared_mixture_kernels": "_fit/_shared_mixture_kernels.pyx",
-    "_model._quad_integrals": "_model/_quad_integrals.pyx",
-    "_model._moment_kernels": "_model/_moment_kernels.pyx",
-    "_model._state_kernels": "_model/_state_kernels.pyx",
-    "_observations._interval_integrals": "_observations/_interval_integrals.pyx",
-    "_observations._finite_reductions": "_observations/_finite_reductions.pyx",
+    "_fit._basis_newton_kernels": "_fit/_basis_newton_kernels.pyx",
     "_postfit._mix_kernels": "_postfit/_mix_kernels.pyx",
     "_spectral._cdf_eval": "_spectral/_cdf_eval.pyx",
     "_spectral._builders": "_spectral/_builders.pyx",
     "_spectral._certify": "_spectral/_certify.pyx",
     "_spectral._ppf_eval": "_spectral/_ppf_eval.pyx",
     "_spectral._panel_kernels": "_spectral/_panel_kernels.pyx",
-    "_spectral._tail_integrals": "_spectral/_tail_integrals.pyx",
+    "_model._basis_kernels": "_model/_basis_kernels.pyx",
+    "_model._normalizer_kernels": "_model/_normalizer_kernels.pyx",
+    "_fit._curvature_kernels": "_fit/_curvature_kernels.pyx",
+    "_fit._tail_likelihood_kernels": "_fit/_tail_likelihood_kernels.pyx",
+}
+
+# G3 enclosure kernels widen every rounded result by a fixed relative margin;
+# that assumes one rounding per operation, so contraction (FMA) is disabled.
+NO_CONTRACTION = {
+    "_fit._series_search",
+    "_model._series_kernels",
+    "_model._basis_kernels",
+    "_model._normalizer_kernels",
+    "_fit._curvature_kernels",
+    "_fit._basis_newton_kernels",
 }
 
 # ---------------------------------------------------------------------
@@ -102,7 +111,12 @@ extensions = [
         sources=[os.path.join("gibbus", src)],
         include_dirs=[np.get_include(), os.path.dirname(os.path.join("gibbus", src))],
         define_macros=DEFINE_MACROS,
-        extra_compile_args=EXTRA_COMPILE_ARGS,
+        extra_compile_args=EXTRA_COMPILE_ARGS
+        + (
+            ["-ffp-contract=off"]
+            if mod in NO_CONTRACTION and sys.platform != "win32"
+            else []
+        ),
         extra_link_args=EXTRA_LINK_ARGS,
     )
     for mod, src in MODULES.items()

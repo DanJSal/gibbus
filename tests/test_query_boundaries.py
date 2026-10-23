@@ -10,7 +10,6 @@ from gibbus._api.validation import (
     _validate_log_probabilities,
     _validate_probabilities,
 )
-from gibbus._postfit.evaluators import _potential_oriented_affine_eval
 from gibbus._postfit.regions import hpd
 
 
@@ -88,23 +87,3 @@ def test_flat_hpd_fallback_uses_prepared_level():
         modes=(),
     )
     np.testing.assert_allclose(result, [[0.1, 0.9]])
-
-
-@pytest.mark.parametrize("order", [0, 1, 2])
-def test_oriented_potential_consumes_canonical_geometry(order):
-    x = np.array([0.0, 1.0, np.nan, np.inf])
-    actual = _potential_oriented_affine_eval(
-        x,
-        np.array([-np.inf, np.inf]),
-        0.0,
-        1.0,
-        np.array([0.0, 0.0, 0.5]),
-        np.array([np.nan, np.nan]),
-        order,
-    )
-    expected = {
-        0: [0.0, 0.5, np.inf, np.inf],
-        1: [0.0, 1.0, np.nan, np.nan],
-        2: [1.0, 1.0, np.nan, np.nan],
-    }[order]
-    np.testing.assert_equal(actual, expected)

@@ -14,11 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gibbus._fit.conic_qp import (
-    _REAL_LINE_KIND,
-    _ConicRepresentation,
-    _support_representation,
-)
+from gibbus._fit.conic_qp import _ConicRepresentation
 
 
 @dataclass(frozen=True)
@@ -54,37 +50,6 @@ class _ReferenceConicQPResult:
     gap: float
     iterations: int
     converged: bool
-
-
-def _real_line_representation(layout, effective_curvature_degree=None, /):
-    """Return the real-line description ``c = L(Q)``, ``Q`` PSD.
-
-    Coefficients above ``effective_curvature_degree`` are exact zeros: their
-    rows carry no Gram entries.  The effective degree must be even, because a
-    nonnegative polynomial on the real line has even degree.
-
-    Parameters
-    ----------
-    layout : _NaturalLayout
-        Real-line natural parameter layout.
-    effective_curvature_degree : int or None
-        Even degree of the represented curvature; ``None`` means the layout's
-        full curvature degree.
-
-    Returns
-    -------
-    _ConicRepresentation
-        One Hankel block of size ``effective_curvature_degree / 2 + 1``.
-
-    Raises
-    ------
-    ValueError
-        If the layout is not real-line or the effective degree is odd or out
-        of range.
-    """
-    if layout.support_kind != _REAL_LINE_KIND:
-        raise ValueError("real-line representation requires a real-line layout")
-    return _support_representation(layout, effective_curvature_degree)
 
 
 def _max_step(matrix, direction, /):
@@ -175,10 +140,13 @@ def _certified_gap(hessian, gradient, params0, representation, params, blocks, d
     # residual has reached roundoff; an infeasible endpoint can sit below the
     # optimum and must not be certified.
     image = representation.gram_map(blocks)
-    residual = float(
-        np.max(np.abs(representation.b_matrix @ endpoint - image), initial=0.0)
+    b = representation.b_matrix
+    residual = np.abs(b @ endpoint - image)
+    floor = 1e-13 * max(1.0, float(np.max(np.abs(image), initial=0.0)))
+    rounding = (
+        8.0 * b.shape[1] * np.finfo(np.float64).eps * (np.abs(b) @ np.abs(endpoint))
     )
-    if residual > 1e-13 * max(1.0, float(np.max(np.abs(image), initial=0.0))):
+    if np.any((residual > floor) & (residual > rounding)):
         return endpoint, model_value, np.inf
     dual = np.asarray(dual, dtype=np.float64)
     # A dual on the boundary of its cone can show roundoff-negative slack

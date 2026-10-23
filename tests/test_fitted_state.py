@@ -28,7 +28,7 @@ def _drop_model_field(state, field):
     return _replace_section(state, "model", reduced)
 
 
-def test_point_state_has_canonical_natural_layout():
+def test_point_state_has_canonical_basis_layout():
     rng = np.random.default_rng(104)
     fitted = Distribution().fit(
         rng.normal(0.5, 1.2, 350),
@@ -38,9 +38,11 @@ def test_point_state_has_canonical_natural_layout():
     )
     state = fitted.components[0].data
     names = set(state.dtype.names)
-    assert "optimizer_params" in names
-    assert "fit_center" in names and "fit_scale" in names and "fit_direction" in names
+    assert {"basis_model", "basis_theta", "basis_log_z", "bulk_degree"} <= names
+    assert "fit_center" in names and "fit_scale" in names
+    assert "fit_direction" not in names
     assert "boundary_amplitudes" in names and state["boundary_amplitudes"].shape == (2,)
+    assert "q_poly" not in names and "optimizer_params" not in names
     assert "q_boundary" not in names
     assert "raw_params" not in names
     assert "center" not in names and "scale" not in names
@@ -54,8 +56,8 @@ def test_state_missing_required_fields_is_not_loadable():
         support=(-np.inf, np.inf),
         poly_degree=4,
     )
-    state = _drop_model_field(fitted.data, "q_poly_values")
-    with pytest.raises(ValueError, match="missing fields: q_poly_values"):
+    state = _drop_model_field(fitted.data, "theta_values")
+    with pytest.raises(ValueError, match="do not match the frozen schema"):
         Distribution(state)
 
 
@@ -69,7 +71,8 @@ def test_reflected_upper_half_line_round_trips_pdf_cdf_ppf_and_potential():
         support=(-np.inf, 8.0),
     )
     state = fitted.components[0].data
-    assert float(state["fit_direction"]) == -1.0
+    # G3 fits are never reflected: the upper end is the basis's own end.
+    assert float(state["support"][1]) == 8.0
     assert tuple(map(float, fitted.support)) == (-np.inf, 8.0)
     assert fitted.ppf(1.0) == 8.0
     assert fitted.cdf(-np.inf) == 0.0

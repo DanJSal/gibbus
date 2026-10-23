@@ -4,6 +4,7 @@ The public top-level API is intentionally small:
 
 ```python
 from gibbus import Distribution, suppressed_failures, clear_suppressed_failures
+from gibbus import BasisSpec, Polynomial, SoftPower, Exponential, TanhSpec, GibbusBasisWarning, FitTimeoutError
 ```
 
 This page is an index of the supported public surface. Detailed parameter semantics and usage guidance are kept in the topical guides, while the source uses NumPy-style docstrings for callable-level reference material.
@@ -26,7 +27,7 @@ Construct an unfitted distribution when `state` is `None`, or reconstruct a fitt
 | `copy()` | Independent distribution object sharing only immutable fitted payload where safe. |
 | `is_fitted` | Whether the instance contains a fitted model. |
 
-See [Fitting](fitting.md), [Using fitted distributions](using-distributions.md#serialization--save--load), and [Serialization and compatibility](serialization.md).
+See [Fitting](fitting.md), [Using fitted distributions](using-distributions.md#serialization--save--load), and [Serialization](serialization.md).
 
 ### Density, probability, and quantiles
 
@@ -70,10 +71,11 @@ See [Fitting](fitting.md), [Using fitted distributions](using-distributions.md#s
 | Member | Purpose |
 |---|---|
 | `goodness_of_fit(...)` | Goodness-of-fit statistics and optional resampling calibration. |
-| `bootstrap_bands(...)` | Bootstrap pointwise/simultaneous uncertainty bands. |
+| `bootstrap_bands(...)` | Bootstrap pointwise uncertainty bands. |
 | `quantile_residuals(x, rng=None)` | Quantile residuals for observations. |
 | `fit_diagnostics` | Optimization and fitted-geometry diagnostics. |
 | `selection_diagnostics` | Automatic component-selection audit trail, or `None`. |
+| `tail_parameter_diagnostics` | Empirical tail proposals and backup-use record; preserved by copy/pickle, omitted from portable numeric state. |
 | `spectral_diagnostics` | CDF/PPF representation health. |
 
 See [Diagnostics and model checking](diagnostics.md).
@@ -106,3 +108,28 @@ Return the thread-local record of numerical fallbacks that have been suppressed 
 Clear the current thread's suppressed-failure record.
 
 See [Diagnostics and model checking](diagnostics.md#module-level-helpers) for usage and debug-mode behavior.
+
+## Basis configuration
+
+| Name | Purpose |
+|---|---|
+| `BasisSpec` | Full potential-basis request for `fit(..., basis=...)`: support, bulk degree, endpoint logs, tail classes, span expansion, tanh geometry. Provisional. |
+| `Polynomial(power="auto")` | Integer polynomial tail class at an infinite end. |
+| `SoftPower(power="auto", delta="auto")` | Noninteger soft-power tail class. |
+| `Exponential(rate="auto")` | Directional exponential tail class. |
+| `TanhSpec` | Locations and steepnesses of the tanh gates. |
+| `GibbusBasisWarning` | Warning for a basis request that was reinterpreted (an integer `SoftPower` becomes `Polynomial`). |
+
+See [Fitting](fitting.md#basis-requests).
+
+
+## Fitting timeout
+
+`FitTimeoutError` subclasses `TimeoutError`. It exposes `max_fit_seconds`,
+`elapsed_seconds`, and `stage`. A shared cooperative deadline covers fitting
+and empirical tail screening; native operations finish before the next check.
+Timeouts preserve an existing fitted model. See [Fitting](fitting.md).
+
+For basis constructor defaults and automatic-parameter limits, see
+[Basis requests](fitting.md#basis-requests) and
+[Automatic tail parameters](AUTOMATIC_TAIL_PARAMETERS.md).

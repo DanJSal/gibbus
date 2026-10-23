@@ -2,20 +2,11 @@
 
 import numpy as np
 import pytest
-from scipy.special import erfcx, log_ndtr
 
 from gibbus import Distribution
-from gibbus._fit.conic_newton import _interior_start
-from gibbus._fit.natural_objective import (
-    _prepare_natural_interval_objective,
-    _prepare_natural_point_objective,
-)
-from gibbus._model.numerics import _terms_for_quad
 from gibbus._postfit.analytics import (
     _exp_moment_from_stats,
     _exp_stats_from_log_moments,
-    _log_raw_moment_exp,
-    _tail_rate_from_geometry,
 )
 from gibbus._serialization import pack_distribution_state
 
@@ -58,45 +49,6 @@ def test_extreme_lower_tail_cdf_roundtrips_mixture():
 
     assert np.all(got > 0.0)
     np.testing.assert_allclose(np.log(got), np.log(p), rtol=0.0, atol=3e-11)
-
-
-def test_point_boundary_statistics_preserve_subulp_physical_distance():
-    points = np.array(
-        [
-            np.nextafter(0.0, 1.0),
-            1e-300,
-            1e-100,
-            1e-20,
-            1e-5,
-            0.01,
-            0.1,
-            0.4,
-            0.8,
-        ]
-    )
-    point = _prepare_natural_point_objective(
-        (0.0, np.inf), points, 2, True, False, None
-    )
-    interval = _prepare_natural_interval_objective(
-        (0.0, np.inf), np.column_stack([points, points]), 2, True, False, None
-    )
-
-    # The smallest physical points round onto the canonical endpoint, but the
-    # preserved distance must keep their boundary-log statistic finite.
-    z = point.spec.coordinate.to_canonical(points)
-    assert z[0] == point.layout.support[0]
-    assert np.isfinite(point.observations.stats.boundary_log[0])
-
-    params = _interior_start(point)
-    point_eval = point(params)
-    interval_eval = interval(params)
-    assert point_eval.nll == pytest.approx(interval_eval.nll, abs=2e-12)
-    np.testing.assert_allclose(
-        point_eval.gradient, interval_eval.gradient, rtol=2e-13, atol=2e-12
-    )
-    np.testing.assert_allclose(
-        point_eval.hessian, interval_eval.hessian, rtol=2e-13, atol=2e-12
-    )
 
 
 def test_point_fit_is_invariant_to_extreme_global_weight_scale():
@@ -154,6 +106,11 @@ def test_bounded_fit_survives_support_only_256_ulps_wide():
 
 
 def test_endpoint_concentrated_bounded_fit_keeps_explicit_lower_boundary_basis():
+    """Formerly open item OI-E2-2 (beta(0.02, 2), Fisher condition 2.5e37).
+
+    The fit certifies since a shape-rejected trial step is shortened by an
+    exact ratio test instead of halved (G3-060).
+    """
     rng = np.random.default_rng(91)
     x = np.clip(
         rng.beta(0.02, 2.0, 1200),
@@ -197,95 +154,6 @@ def test_nearly_coincident_forced_mixture_remains_certified():
     grid = np.linspace(-6.0, 6.0, 301)
     cdf = np.asarray(fitted.cdf(grid), dtype=np.float64)
     assert np.all(np.diff(cdf) >= -2e-13)
-
-
-def _log_halfline_quadratic_integral(a, c):
-    """Return log integral_0^inf exp(-a z^2 - c z) dz stably."""
-    x = float(c) / (2.0 * np.sqrt(float(a)))
-    if x >= 0.0:
-        return float(
-            0.5 * np.log(np.pi) - np.log(2.0) - 0.5 * np.log(a) + np.log(erfcx(x))
-        )
-    return float(
-        0.5 * np.log(np.pi)
-        - 0.5 * np.log(a)
-        + c * c / (4.0 * a)
-        + log_ndtr(-x * np.sqrt(2.0))
-    )
-
-
-def test_exp_moment_expands_beyond_original_material_window():
-    """An exponential tilt must follow its saddle beyond the base-density window."""
-    a = 1e-12
-    b = 0.9
-    support = np.array([0.0, np.inf])
-    amplitudes = np.zeros(2)
-    log_normalizer = _log_halfline_quadratic_integral(a, b)
-    q_poly = np.array([log_normalizer, b, a])
-    window = np.array([0.0, 50.0])
-
-    expected = _log_halfline_quadratic_integral(a, b - 1.0) - log_normalizer
-    got = _log_raw_moment_exp(
-        support,
-        q_poly,
-        amplitudes,
-        window,
-        0.0,
-        1.0,
-        1,
-        _terms_for_quad(support, amplitudes),
-    )
-
-    assert expected > np.log(np.finfo(float).max)
-    assert got == pytest.approx(expected, rel=0.0, abs=2e-6)
-
-
-def test_exp_moment_detects_exact_exponential_threshold():
-    """For an Exp(1) base tail, E[exp(X)] diverges exactly at rate one."""
-    support = np.array([0.0, np.inf])
-    amplitudes = np.zeros(2)
-    q_poly = np.array([0.0, 1.0])  # normalized Exp(1) potential on [0, inf)
-
-    got = _log_raw_moment_exp(
-        support,
-        q_poly,
-        amplitudes,
-        np.array([0.0, 40.0]),
-        0.0,
-        1.0,
-        1,
-        _terms_for_quad(support, amplitudes),
-    )
-    assert np.isposinf(got)
-
-    # A faster Exp(2) tail has E[exp(X)] = 2 exactly.
-    q_fast = np.array([-np.log(2.0), 2.0])
-    finite = _log_raw_moment_exp(
-        support,
-        q_fast,
-        amplitudes,
-        np.array([0.0, 40.0]),
-        0.0,
-        1.0,
-        1,
-        _terms_for_quad(support, amplitudes),
-    )
-    assert finite == pytest.approx(np.log(2.0), abs=2e-13)
-
-
-def test_tail_rate_uses_exact_asymptotic_polynomial_geometry():
-    """Any positive quadratic curvature implies infinite limiting tail slope."""
-    support = np.array([0.0, np.inf])
-    almost_linear = np.array([0.0, 1.0, 1e-30])
-    exactly_linear = np.array([0.0, 1.75])
-
-    assert np.isinf(_tail_rate_from_geometry(support, almost_linear, 0.0, 1.0, "upper"))
-    assert _tail_rate_from_geometry(
-        support, exactly_linear, 0.0, 1.0, "upper"
-    ) == pytest.approx(1.75)
-    assert np.isinf(
-        _tail_rate_from_geometry(support, exactly_linear, 0.0, 1.0, "lower")
-    )
 
 
 def test_exp_statistics_propagate_overflow_instead_of_reporting_degeneracy():

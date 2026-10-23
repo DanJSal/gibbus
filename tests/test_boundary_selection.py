@@ -118,7 +118,11 @@ def test_standard_error_shrinks_like_one_over_root_n():
     rng = np.random.default_rng(11)
     errors = []
     for n in (500, 2000):
-        x = rng.gamma(3.0, 1.0, n)
+        # The square root of a gamma(3) variable: the lower log and the
+        # quadratic bulk stay interior at both sizes (a gamma sample's linear
+        # upper tail puts the degree-2 fit on its leader face at one size and
+        # not the other, G3-047).
+        x = np.sqrt(rng.gamma(3.0, 1.0, n))
         model = Distribution().fit(
             x,
             n_components=1,

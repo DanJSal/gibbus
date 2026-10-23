@@ -20,7 +20,6 @@ def test_point_mixture_components_finalize_to_natural_state():
         n_components=2,
         support=(-np.inf, np.inf),
         poly_degree=4,
-        progressive=False,
         rng=0,
         em_max_iter=12,
     )
@@ -43,7 +42,6 @@ def test_point_mixture_auto_degree_uses_natural_component_selector():
         n_components=2,
         support=(-np.inf, np.inf),
         poly_degree="auto",
-        progressive=False,
         rng=0,
         em_max_iter=8,
     )
@@ -65,7 +63,6 @@ def test_finite_interval_mixture_components_finalize_to_natural_state():
         n_components=2,
         support=(-np.inf, np.inf),
         poly_degree=2,
-        progressive=False,
         rng=0,
         em_max_iter=8,
     )
@@ -94,7 +91,6 @@ def test_infinite_censored_mixture_components_finalize_to_natural_state():
         n_components=2,
         support=(-np.inf, np.inf),
         poly_degree=2,
-        progressive=False,
         rng=0,
         em_max_iter=8,
     )

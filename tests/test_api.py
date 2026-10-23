@@ -536,6 +536,6 @@ def test_infinite_censored_single_component_uses_native_natural_path():
             "converged",
             "converged_approximately",
         )
-    assert int(auto.components[0].data["requested_poly_degree"]) == 2
+    assert int(auto.components[0].data["bulk_degree"]) == 2
     assert explicit.mean == pytest.approx(0.3, abs=0.16)
     assert explicit.std == pytest.approx(1.1, rel=0.18)

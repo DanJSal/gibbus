@@ -1,0 +1,6 @@
+Black: 136 files unchanged
+Ruff: all configured checks passed
+git diff --check: passed
+Relative Markdown file targets outside abandoned design: zero missing
+Installed wheel: 95 passed; four documented integer SoftPower conversion warnings
+Installed-wheel smoke: all 14 native extensions imported

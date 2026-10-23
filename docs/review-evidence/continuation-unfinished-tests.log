@@ -1,0 +1,936 @@
+bringing up nodes...
+bringing up nodes...
+
+.......................................FF.FF                             [100%]
+=================================== FAILURES ===================================
+_________________ TestHeavyTailRobustness.test_every_k_fits[3] _________________
+[gw0] linux -- Python 3.12.14 /workspace/scratch/4dd42c182dbe/audit-env/bin/python
+
+self = <test_selection_battery.TestHeavyTailRobustness object at 0x7f19ff61a2a0>
+k = 3
+
+    @pytest.mark.filterwarnings("error::scipy.integrate.IntegrationWarning")
+    @pytest.mark.parametrize("k", [1, 2, 3, 4])
+    def test_every_k_fits(self, k):
+        rng = np.random.default_rng(0)
+        data = np.ascontiguousarray(rng.lognormal(0, 0.6, N))
+>       c = Distribution().fit(
+            data,
+            n_components=k,
+            support=(0.0, np.inf),
+            poly_degree=6,
+            rng=0,
+        )
+
+tests/test_selection_battery.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gibbus/_api/distribution.py:587: in fit
+    result = _run_fit_request(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+gibbus/_api/fitting.py:506: in _run_fit_request
+    return _run_basis_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+request = _FitRequest(samples=array([1.07835651, 0.92379701, 1.4685178 , ..., 1.39121484, 1.39184339,
+       0.59314607], shape=...Config(probe_block_size=2, alpha=0.05, min_participation=8.0, covariance_rtol=1e-10, max_variance_inflation=1000000.0))
+
+    def _run_basis_request(request, /):
+        """Execute a prepared public request on the G3 fitters.
+    
+        Inputs are validated by G1's public rules (``_prepare_mixture_context``:
+        sample layouts, support, weights, endpoint observations, component
+        options); the request becomes a ``BasisSpec``; one component is the
+        single fit, an explicit count ``_fit_mixture_auto`` (a warm start seeds
+        its EM with the seed's responsibilities at the data), ``"auto"``
+        ``_select_components``.  Results are packed G3 component states.
+    
+        Parameters
+        ----------
+        request : _FitRequest
+            Prepared public request.
+        """
+    
+        context = _prepare_mixture_context(request)
+        seeds = request.seed_components
+        k = context.n_components
+        options = context.component_options
+        degree = request.poly_degree
+        if request.basis is not None:
+            degree = request.basis.bulk_degree
+            degrees = (
+                tuple(opts.get("poly_degree", degree) for opts in options)
+                if options is not None and any("poly_degree" in opts for opts in options)
+                else None
+            )
+        elif seeds is not None and degree is None:
+            degrees = tuple(
+                opts.get("poly_degree", s._basis.model.request.bulk_degree)
+                for opts, s in zip(options, seeds, strict=True)
+            )
+        else:
+            degrees = (
+                None
+                if options is None or k == "auto"
+                else _natural_degree_policy(degree, options)
+            )
+        global_degree = "auto" if degree is None else degree
+        for policy in (
+            ()
+            if request.basis is not None or request.seed_basis is not None
+            else (global_degree, *(() if degrees is None else degrees))
+        ):
+            if policy != "auto" and not _is_poly_degree_admissible(policy, context.support):
+                raise ValueError(
+                    f"poly_degree={policy} is odd, which is inadmissible on "
+                    "full-infinite support (-inf, +inf). Use an even degree."
+                )
+        if degrees is not None and len(set(degrees)) == 1:
+            global_degree, degrees = degrees[0], None
+        spec = _basis_spec_of(
+            request,
+            context.support,
+            "auto" if degrees is not None else global_degree,
+            context.log_boundary_lower,
+            context.log_boundary_upper,
+        )
+        weights = context.observation_weights
+        samples = context.samples_rk
+        spec, tail_proposals = resolve_auto_tails(spec, samples, weights)
+        tail_diagnostics = {
+            side: {
+                "family": est.family,
+                "estimated_parameter": float(est.primary),
+                "backup_parameter": (
+                    None if est.alternative is None else float(est.alternative)
+                ),
+                "tail_n": est.n_tail,
+                "fallback_used": False,
+            }
+            for side, (_, est, _) in tail_proposals.items()
+        }
+        n_eff = _effective_n(samples.shape[0], weights)
+        em = _EMOptions(tolerance=context.em_tol, max_steps=context.em_max_iter)
+        config = context.degree_config
+        selection = None
+        with _maybe_suppress(context.suppress_warnings, SUPPRESSED_WARNINGS):
+            if k == 1:
+                backup = alternative_spec(spec, tail_proposals) if tail_proposals else None
+                original_error = None
+                fit = None
+                try:
+                    fit = _fit_basis(spec, samples, weights, config=config)
+                    if tail_proposals and fit.result.status not in _CONVERGED:
+                        original_error = RuntimeError(
+                            f"automatic tail primary fit did not converge ({fit.result.status})"
+                        )
+                except (RuntimeError, ArithmeticError, FloatingPointError) as exc:
+                    if not tail_proposals or backup is None:
+                        raise
+                    original_error = exc
+                if original_error is not None:
+                    if backup is None:
+                        raise original_error
+                    try:
+                        recovered = _fit_basis(backup, samples, weights, config=config)
+                        if recovered.result.status not in _CONVERGED:
+                            raise RuntimeError(
+                                "automatic tail backup did not converge "
+                                f"({recovered.result.status})"
+                            )
+                    except (
+                        RuntimeError,
+                        ArithmeticError,
+                        FloatingPointError,
+                    ) as retry_error:
+                        raise RuntimeError(
+                            "automatic tail fit failed with the empirical parameter "
+                            f"({original_error}); single backup failed ({retry_error})"
+                        ) from original_error
+                    fit = recovered
+                    for side, data in tail_diagnostics.items():
+                        old = getattr(spec, side + "_tail")
+                        new = getattr(backup, side + "_tail")
+                        if old != new:
+                            data["fallback_used"] = True
+                            data["estimated_parameter"] = float(
+                                new.rate if isinstance(new, Exponential) else new.power
+                            )
+                if fit.result.status == _UNCERTIFIED:
+                    warnings.warn(
+                        "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
+                packed = _pack_basis_fit(fit, n_eff)
+                em_diag = None
+            else:
+                try:
+                    if k == "auto":
+                        chosen = _select_components(
+                            spec,
+                            samples,
+                            weights,
+                            k_max=request.k_max,
+                            subsample=request.auto_k_subsample,
+                            rng=context.generator,
+                            config=config,
+                            em_options=em,
+                        )
+                        fit, p_values = chosen.fit, chosen.boundary_p_values
+                        selection = chosen.diagnostics
+                    else:
+                        resp = (
+                            None
+                            if seeds is None
+                            else _seed_responsibilities(
+                                context, seeds, request.seed_weights
+                            )
+                        )
+                        fit, _, p_values = _fit_mixture_auto(
+                            spec,
+                            samples,
+                            int(k),
+                            weights,
+                            rng=context.fit_generator,
+                            responsibilities=resp,
+                            degrees=degrees,
+                            config=config,
+                            em_options=em,
+                        )
+                except _PointMixtureEstimabilityFailure as exc:
+                    raise _PointMixtureEstimabilityError(
+                        f"{exc} No initialization of the requested {k}-component "
+                        "mixture produced an estimable fit, so the data do not "
+                        f"support n_components={k}; use n_components='auto' or "
+                        "fewer components."
+                    ) from exc
+                except RuntimeError:
+                    if k == "auto" or samples.shape[1] != 2:
+                        raise
+                    # No start of an explicit interval mixture converged.  If the
+                    # one-component fit already reaches the nonparametric bound,
+                    # the mixture (which contains it) does too: G1's
+                    # non-identifiability error, which G1 reported after its EM
+                    # reached the bound (G3-047).
+                    nested = _fit_basis(spec, samples, weights, config=config)
+                    _check_identifiable(
+                        context,
+                        -nested.result.objective_value,
+                        int(k) * nested.model.n_coefficients + int(k) - 1,
+                    )
+                    raise
+                if str(fit.status) not in _CONVERGED and str(fit.status) != _UNCERTIFIED:
+                    # Explicit counts and a selected count's final fit fail loudly
+                    # (G3-047); automatic searches end at their last converged
+                    # member inside the fitters.
+>                   raise RuntimeError(
+                        f"the {len(fit.models)}-component G3 mixture did not converge "
+                        f"({fit.status})"
+                    )
+E                   RuntimeError: the 3-component G3 mixture did not converge (iteration_limit)
+
+gibbus/_api/fitting.py:952: RuntimeError
+________ TestHeavyTailRobustness.test_more_components_do_not_fit_worse _________
+[gw1] linux -- Python 3.12.14 /workspace/scratch/4dd42c182dbe/audit-env/bin/python
+
+self = <test_selection_battery.TestHeavyTailRobustness object at 0x7f6400561fd0>
+
+    def test_more_components_do_not_fit_worse(self):
+        """BIC across K should be well-ordered, not jump around."""
+        rng = np.random.default_rng(0)
+        data = np.ascontiguousarray(rng.lognormal(0, 0.6, N))
+        lls = []
+        for k in (1, 2, 3):
+>           c = Distribution().fit(
+                data,
+                n_components=k,
+                support=(0.0, np.inf),
+                poly_degree=6,
+                rng=0,
+            )
+
+tests/test_selection_battery.py:155: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gibbus/_api/distribution.py:587: in fit
+    result = _run_fit_request(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+gibbus/_api/fitting.py:506: in _run_fit_request
+    return _run_basis_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+request = _FitRequest(samples=array([1.07835651, 0.92379701, 1.4685178 , ..., 1.39121484, 1.39184339,
+       0.59314607], shape=...Config(probe_block_size=2, alpha=0.05, min_participation=8.0, covariance_rtol=1e-10, max_variance_inflation=1000000.0))
+
+    def _run_basis_request(request, /):
+        """Execute a prepared public request on the G3 fitters.
+    
+        Inputs are validated by G1's public rules (``_prepare_mixture_context``:
+        sample layouts, support, weights, endpoint observations, component
+        options); the request becomes a ``BasisSpec``; one component is the
+        single fit, an explicit count ``_fit_mixture_auto`` (a warm start seeds
+        its EM with the seed's responsibilities at the data), ``"auto"``
+        ``_select_components``.  Results are packed G3 component states.
+    
+        Parameters
+        ----------
+        request : _FitRequest
+            Prepared public request.
+        """
+    
+        context = _prepare_mixture_context(request)
+        seeds = request.seed_components
+        k = context.n_components
+        options = context.component_options
+        degree = request.poly_degree
+        if request.basis is not None:
+            degree = request.basis.bulk_degree
+            degrees = (
+                tuple(opts.get("poly_degree", degree) for opts in options)
+                if options is not None and any("poly_degree" in opts for opts in options)
+                else None
+            )
+        elif seeds is not None and degree is None:
+            degrees = tuple(
+                opts.get("poly_degree", s._basis.model.request.bulk_degree)
+                for opts, s in zip(options, seeds, strict=True)
+            )
+        else:
+            degrees = (
+                None
+                if options is None or k == "auto"
+                else _natural_degree_policy(degree, options)
+            )
+        global_degree = "auto" if degree is None else degree
+        for policy in (
+            ()
+            if request.basis is not None or request.seed_basis is not None
+            else (global_degree, *(() if degrees is None else degrees))
+        ):
+            if policy != "auto" and not _is_poly_degree_admissible(policy, context.support):
+                raise ValueError(
+                    f"poly_degree={policy} is odd, which is inadmissible on "
+                    "full-infinite support (-inf, +inf). Use an even degree."
+                )
+        if degrees is not None and len(set(degrees)) == 1:
+            global_degree, degrees = degrees[0], None
+        spec = _basis_spec_of(
+            request,
+            context.support,
+            "auto" if degrees is not None else global_degree,
+            context.log_boundary_lower,
+            context.log_boundary_upper,
+        )
+        weights = context.observation_weights
+        samples = context.samples_rk
+        spec, tail_proposals = resolve_auto_tails(spec, samples, weights)
+        tail_diagnostics = {
+            side: {
+                "family": est.family,
+                "estimated_parameter": float(est.primary),
+                "backup_parameter": (
+                    None if est.alternative is None else float(est.alternative)
+                ),
+                "tail_n": est.n_tail,
+                "fallback_used": False,
+            }
+            for side, (_, est, _) in tail_proposals.items()
+        }
+        n_eff = _effective_n(samples.shape[0], weights)
+        em = _EMOptions(tolerance=context.em_tol, max_steps=context.em_max_iter)
+        config = context.degree_config
+        selection = None
+        with _maybe_suppress(context.suppress_warnings, SUPPRESSED_WARNINGS):
+            if k == 1:
+                backup = alternative_spec(spec, tail_proposals) if tail_proposals else None
+                original_error = None
+                fit = None
+                try:
+                    fit = _fit_basis(spec, samples, weights, config=config)
+                    if tail_proposals and fit.result.status not in _CONVERGED:
+                        original_error = RuntimeError(
+                            f"automatic tail primary fit did not converge ({fit.result.status})"
+                        )
+                except (RuntimeError, ArithmeticError, FloatingPointError) as exc:
+                    if not tail_proposals or backup is None:
+                        raise
+                    original_error = exc
+                if original_error is not None:
+                    if backup is None:
+                        raise original_error
+                    try:
+                        recovered = _fit_basis(backup, samples, weights, config=config)
+                        if recovered.result.status not in _CONVERGED:
+                            raise RuntimeError(
+                                "automatic tail backup did not converge "
+                                f"({recovered.result.status})"
+                            )
+                    except (
+                        RuntimeError,
+                        ArithmeticError,
+                        FloatingPointError,
+                    ) as retry_error:
+                        raise RuntimeError(
+                            "automatic tail fit failed with the empirical parameter "
+                            f"({original_error}); single backup failed ({retry_error})"
+                        ) from original_error
+                    fit = recovered
+                    for side, data in tail_diagnostics.items():
+                        old = getattr(spec, side + "_tail")
+                        new = getattr(backup, side + "_tail")
+                        if old != new:
+                            data["fallback_used"] = True
+                            data["estimated_parameter"] = float(
+                                new.rate if isinstance(new, Exponential) else new.power
+                            )
+                if fit.result.status == _UNCERTIFIED:
+                    warnings.warn(
+                        "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
+                packed = _pack_basis_fit(fit, n_eff)
+                em_diag = None
+            else:
+                try:
+                    if k == "auto":
+                        chosen = _select_components(
+                            spec,
+                            samples,
+                            weights,
+                            k_max=request.k_max,
+                            subsample=request.auto_k_subsample,
+                            rng=context.generator,
+                            config=config,
+                            em_options=em,
+                        )
+                        fit, p_values = chosen.fit, chosen.boundary_p_values
+                        selection = chosen.diagnostics
+                    else:
+                        resp = (
+                            None
+                            if seeds is None
+                            else _seed_responsibilities(
+                                context, seeds, request.seed_weights
+                            )
+                        )
+                        fit, _, p_values = _fit_mixture_auto(
+                            spec,
+                            samples,
+                            int(k),
+                            weights,
+                            rng=context.fit_generator,
+                            responsibilities=resp,
+                            degrees=degrees,
+                            config=config,
+                            em_options=em,
+                        )
+                except _PointMixtureEstimabilityFailure as exc:
+                    raise _PointMixtureEstimabilityError(
+                        f"{exc} No initialization of the requested {k}-component "
+                        "mixture produced an estimable fit, so the data do not "
+                        f"support n_components={k}; use n_components='auto' or "
+                        "fewer components."
+                    ) from exc
+                except RuntimeError:
+                    if k == "auto" or samples.shape[1] != 2:
+                        raise
+                    # No start of an explicit interval mixture converged.  If the
+                    # one-component fit already reaches the nonparametric bound,
+                    # the mixture (which contains it) does too: G1's
+                    # non-identifiability error, which G1 reported after its EM
+                    # reached the bound (G3-047).
+                    nested = _fit_basis(spec, samples, weights, config=config)
+                    _check_identifiable(
+                        context,
+                        -nested.result.objective_value,
+                        int(k) * nested.model.n_coefficients + int(k) - 1,
+                    )
+                    raise
+                if str(fit.status) not in _CONVERGED and str(fit.status) != _UNCERTIFIED:
+                    # Explicit counts and a selected count's final fit fail loudly
+                    # (G3-047); automatic searches end at their last converged
+                    # member inside the fitters.
+>                   raise RuntimeError(
+                        f"the {len(fit.models)}-component G3 mixture did not converge "
+                        f"({fit.status})"
+                    )
+E                   RuntimeError: the 2-component G3 mixture did not converge (iteration_limit)
+
+gibbus/_api/fitting.py:952: RuntimeError
+_________________ TestHeavyTailRobustness.test_every_k_fits[4] _________________
+[gw0] linux -- Python 3.12.14 /workspace/scratch/4dd42c182dbe/audit-env/bin/python
+
+self = <test_selection_battery.TestHeavyTailRobustness object at 0x7f19ff5da240>
+k = 4
+
+    @pytest.mark.filterwarnings("error::scipy.integrate.IntegrationWarning")
+    @pytest.mark.parametrize("k", [1, 2, 3, 4])
+    def test_every_k_fits(self, k):
+        rng = np.random.default_rng(0)
+        data = np.ascontiguousarray(rng.lognormal(0, 0.6, N))
+>       c = Distribution().fit(
+            data,
+            n_components=k,
+            support=(0.0, np.inf),
+            poly_degree=6,
+            rng=0,
+        )
+
+tests/test_selection_battery.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gibbus/_api/distribution.py:587: in fit
+    result = _run_fit_request(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+gibbus/_api/fitting.py:506: in _run_fit_request
+    return _run_basis_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+request = _FitRequest(samples=array([1.07835651, 0.92379701, 1.4685178 , ..., 1.39121484, 1.39184339,
+       0.59314607], shape=...Config(probe_block_size=2, alpha=0.05, min_participation=8.0, covariance_rtol=1e-10, max_variance_inflation=1000000.0))
+
+    def _run_basis_request(request, /):
+        """Execute a prepared public request on the G3 fitters.
+    
+        Inputs are validated by G1's public rules (``_prepare_mixture_context``:
+        sample layouts, support, weights, endpoint observations, component
+        options); the request becomes a ``BasisSpec``; one component is the
+        single fit, an explicit count ``_fit_mixture_auto`` (a warm start seeds
+        its EM with the seed's responsibilities at the data), ``"auto"``
+        ``_select_components``.  Results are packed G3 component states.
+    
+        Parameters
+        ----------
+        request : _FitRequest
+            Prepared public request.
+        """
+    
+        context = _prepare_mixture_context(request)
+        seeds = request.seed_components
+        k = context.n_components
+        options = context.component_options
+        degree = request.poly_degree
+        if request.basis is not None:
+            degree = request.basis.bulk_degree
+            degrees = (
+                tuple(opts.get("poly_degree", degree) for opts in options)
+                if options is not None and any("poly_degree" in opts for opts in options)
+                else None
+            )
+        elif seeds is not None and degree is None:
+            degrees = tuple(
+                opts.get("poly_degree", s._basis.model.request.bulk_degree)
+                for opts, s in zip(options, seeds, strict=True)
+            )
+        else:
+            degrees = (
+                None
+                if options is None or k == "auto"
+                else _natural_degree_policy(degree, options)
+            )
+        global_degree = "auto" if degree is None else degree
+        for policy in (
+            ()
+            if request.basis is not None or request.seed_basis is not None
+            else (global_degree, *(() if degrees is None else degrees))
+        ):
+            if policy != "auto" and not _is_poly_degree_admissible(policy, context.support):
+                raise ValueError(
+                    f"poly_degree={policy} is odd, which is inadmissible on "
+                    "full-infinite support (-inf, +inf). Use an even degree."
+                )
+        if degrees is not None and len(set(degrees)) == 1:
+            global_degree, degrees = degrees[0], None
+        spec = _basis_spec_of(
+            request,
+            context.support,
+            "auto" if degrees is not None else global_degree,
+            context.log_boundary_lower,
+            context.log_boundary_upper,
+        )
+        weights = context.observation_weights
+        samples = context.samples_rk
+        spec, tail_proposals = resolve_auto_tails(spec, samples, weights)
+        tail_diagnostics = {
+            side: {
+                "family": est.family,
+                "estimated_parameter": float(est.primary),
+                "backup_parameter": (
+                    None if est.alternative is None else float(est.alternative)
+                ),
+                "tail_n": est.n_tail,
+                "fallback_used": False,
+            }
+            for side, (_, est, _) in tail_proposals.items()
+        }
+        n_eff = _effective_n(samples.shape[0], weights)
+        em = _EMOptions(tolerance=context.em_tol, max_steps=context.em_max_iter)
+        config = context.degree_config
+        selection = None
+        with _maybe_suppress(context.suppress_warnings, SUPPRESSED_WARNINGS):
+            if k == 1:
+                backup = alternative_spec(spec, tail_proposals) if tail_proposals else None
+                original_error = None
+                fit = None
+                try:
+                    fit = _fit_basis(spec, samples, weights, config=config)
+                    if tail_proposals and fit.result.status not in _CONVERGED:
+                        original_error = RuntimeError(
+                            f"automatic tail primary fit did not converge ({fit.result.status})"
+                        )
+                except (RuntimeError, ArithmeticError, FloatingPointError) as exc:
+                    if not tail_proposals or backup is None:
+                        raise
+                    original_error = exc
+                if original_error is not None:
+                    if backup is None:
+                        raise original_error
+                    try:
+                        recovered = _fit_basis(backup, samples, weights, config=config)
+                        if recovered.result.status not in _CONVERGED:
+                            raise RuntimeError(
+                                "automatic tail backup did not converge "
+                                f"({recovered.result.status})"
+                            )
+                    except (
+                        RuntimeError,
+                        ArithmeticError,
+                        FloatingPointError,
+                    ) as retry_error:
+                        raise RuntimeError(
+                            "automatic tail fit failed with the empirical parameter "
+                            f"({original_error}); single backup failed ({retry_error})"
+                        ) from original_error
+                    fit = recovered
+                    for side, data in tail_diagnostics.items():
+                        old = getattr(spec, side + "_tail")
+                        new = getattr(backup, side + "_tail")
+                        if old != new:
+                            data["fallback_used"] = True
+                            data["estimated_parameter"] = float(
+                                new.rate if isinstance(new, Exponential) else new.power
+                            )
+                if fit.result.status == _UNCERTIFIED:
+                    warnings.warn(
+                        "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
+                packed = _pack_basis_fit(fit, n_eff)
+                em_diag = None
+            else:
+                try:
+                    if k == "auto":
+                        chosen = _select_components(
+                            spec,
+                            samples,
+                            weights,
+                            k_max=request.k_max,
+                            subsample=request.auto_k_subsample,
+                            rng=context.generator,
+                            config=config,
+                            em_options=em,
+                        )
+                        fit, p_values = chosen.fit, chosen.boundary_p_values
+                        selection = chosen.diagnostics
+                    else:
+                        resp = (
+                            None
+                            if seeds is None
+                            else _seed_responsibilities(
+                                context, seeds, request.seed_weights
+                            )
+                        )
+                        fit, _, p_values = _fit_mixture_auto(
+                            spec,
+                            samples,
+                            int(k),
+                            weights,
+                            rng=context.fit_generator,
+                            responsibilities=resp,
+                            degrees=degrees,
+                            config=config,
+                            em_options=em,
+                        )
+                except _PointMixtureEstimabilityFailure as exc:
+                    raise _PointMixtureEstimabilityError(
+                        f"{exc} No initialization of the requested {k}-component "
+                        "mixture produced an estimable fit, so the data do not "
+                        f"support n_components={k}; use n_components='auto' or "
+                        "fewer components."
+                    ) from exc
+                except RuntimeError:
+                    if k == "auto" or samples.shape[1] != 2:
+                        raise
+                    # No start of an explicit interval mixture converged.  If the
+                    # one-component fit already reaches the nonparametric bound,
+                    # the mixture (which contains it) does too: G1's
+                    # non-identifiability error, which G1 reported after its EM
+                    # reached the bound (G3-047).
+                    nested = _fit_basis(spec, samples, weights, config=config)
+                    _check_identifiable(
+                        context,
+                        -nested.result.objective_value,
+                        int(k) * nested.model.n_coefficients + int(k) - 1,
+                    )
+                    raise
+                if str(fit.status) not in _CONVERGED and str(fit.status) != _UNCERTIFIED:
+                    # Explicit counts and a selected count's final fit fail loudly
+                    # (G3-047); automatic searches end at their last converged
+                    # member inside the fitters.
+>                   raise RuntimeError(
+                        f"the {len(fit.models)}-component G3 mixture did not converge "
+                        f"({fit.status})"
+                    )
+E                   RuntimeError: the 4-component G3 mixture did not converge (iteration_limit)
+
+gibbus/_api/fitting.py:952: RuntimeError
+_ TestHeavyTailRobustness.test_k2_converges_with_certified_natural_components __
+[gw0] linux -- Python 3.12.14 /workspace/scratch/4dd42c182dbe/audit-env/bin/python
+
+self = <test_selection_battery.TestHeavyTailRobustness object at 0x7f19ff621be0>
+
+    def test_k2_converges_with_certified_natural_components(self):
+        """A well-conditioned K=2 fit should converge and certify both components."""
+        rng = np.random.default_rng(0)
+        data = np.ascontiguousarray(rng.lognormal(0, 0.6, 20_000))
+>       c = Distribution().fit(
+            data,
+            n_components=2,
+            support=(0.0, np.inf),
+            poly_degree=6,
+            rng=0,
+            verbose=1,
+        )
+
+tests/test_selection_battery.py:173: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gibbus/_api/distribution.py:587: in fit
+    result = _run_fit_request(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+gibbus/_api/fitting.py:506: in _run_fit_request
+    return _run_basis_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+request = _FitRequest(samples=array([1.07835651, 0.92379701, 1.4685178 , ..., 0.45338748, 1.27691215,
+       1.09772997], shape=...Config(probe_block_size=2, alpha=0.05, min_participation=8.0, covariance_rtol=1e-10, max_variance_inflation=1000000.0))
+
+    def _run_basis_request(request, /):
+        """Execute a prepared public request on the G3 fitters.
+    
+        Inputs are validated by G1's public rules (``_prepare_mixture_context``:
+        sample layouts, support, weights, endpoint observations, component
+        options); the request becomes a ``BasisSpec``; one component is the
+        single fit, an explicit count ``_fit_mixture_auto`` (a warm start seeds
+        its EM with the seed's responsibilities at the data), ``"auto"``
+        ``_select_components``.  Results are packed G3 component states.
+    
+        Parameters
+        ----------
+        request : _FitRequest
+            Prepared public request.
+        """
+    
+        context = _prepare_mixture_context(request)
+        seeds = request.seed_components
+        k = context.n_components
+        options = context.component_options
+        degree = request.poly_degree
+        if request.basis is not None:
+            degree = request.basis.bulk_degree
+            degrees = (
+                tuple(opts.get("poly_degree", degree) for opts in options)
+                if options is not None and any("poly_degree" in opts for opts in options)
+                else None
+            )
+        elif seeds is not None and degree is None:
+            degrees = tuple(
+                opts.get("poly_degree", s._basis.model.request.bulk_degree)
+                for opts, s in zip(options, seeds, strict=True)
+            )
+        else:
+            degrees = (
+                None
+                if options is None or k == "auto"
+                else _natural_degree_policy(degree, options)
+            )
+        global_degree = "auto" if degree is None else degree
+        for policy in (
+            ()
+            if request.basis is not None or request.seed_basis is not None
+            else (global_degree, *(() if degrees is None else degrees))
+        ):
+            if policy != "auto" and not _is_poly_degree_admissible(policy, context.support):
+                raise ValueError(
+                    f"poly_degree={policy} is odd, which is inadmissible on "
+                    "full-infinite support (-inf, +inf). Use an even degree."
+                )
+        if degrees is not None and len(set(degrees)) == 1:
+            global_degree, degrees = degrees[0], None
+        spec = _basis_spec_of(
+            request,
+            context.support,
+            "auto" if degrees is not None else global_degree,
+            context.log_boundary_lower,
+            context.log_boundary_upper,
+        )
+        weights = context.observation_weights
+        samples = context.samples_rk
+        spec, tail_proposals = resolve_auto_tails(spec, samples, weights)
+        tail_diagnostics = {
+            side: {
+                "family": est.family,
+                "estimated_parameter": float(est.primary),
+                "backup_parameter": (
+                    None if est.alternative is None else float(est.alternative)
+                ),
+                "tail_n": est.n_tail,
+                "fallback_used": False,
+            }
+            for side, (_, est, _) in tail_proposals.items()
+        }
+        n_eff = _effective_n(samples.shape[0], weights)
+        em = _EMOptions(tolerance=context.em_tol, max_steps=context.em_max_iter)
+        config = context.degree_config
+        selection = None
+        with _maybe_suppress(context.suppress_warnings, SUPPRESSED_WARNINGS):
+            if k == 1:
+                backup = alternative_spec(spec, tail_proposals) if tail_proposals else None
+                original_error = None
+                fit = None
+                try:
+                    fit = _fit_basis(spec, samples, weights, config=config)
+                    if tail_proposals and fit.result.status not in _CONVERGED:
+                        original_error = RuntimeError(
+                            f"automatic tail primary fit did not converge ({fit.result.status})"
+                        )
+                except (RuntimeError, ArithmeticError, FloatingPointError) as exc:
+                    if not tail_proposals or backup is None:
+                        raise
+                    original_error = exc
+                if original_error is not None:
+                    if backup is None:
+                        raise original_error
+                    try:
+                        recovered = _fit_basis(backup, samples, weights, config=config)
+                        if recovered.result.status not in _CONVERGED:
+                            raise RuntimeError(
+                                "automatic tail backup did not converge "
+                                f"({recovered.result.status})"
+                            )
+                    except (
+                        RuntimeError,
+                        ArithmeticError,
+                        FloatingPointError,
+                    ) as retry_error:
+                        raise RuntimeError(
+                            "automatic tail fit failed with the empirical parameter "
+                            f"({original_error}); single backup failed ({retry_error})"
+                        ) from original_error
+                    fit = recovered
+                    for side, data in tail_diagnostics.items():
+                        old = getattr(spec, side + "_tail")
+                        new = getattr(backup, side + "_tail")
+                        if old != new:
+                            data["fallback_used"] = True
+                            data["estimated_parameter"] = float(
+                                new.rate if isinstance(new, Exponential) else new.power
+                            )
+                if fit.result.status == _UNCERTIFIED:
+                    warnings.warn(
+                        "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
+                packed = _pack_basis_fit(fit, n_eff)
+                em_diag = None
+            else:
+                try:
+                    if k == "auto":
+                        chosen = _select_components(
+                            spec,
+                            samples,
+                            weights,
+                            k_max=request.k_max,
+                            subsample=request.auto_k_subsample,
+                            rng=context.generator,
+                            config=config,
+                            em_options=em,
+                        )
+                        fit, p_values = chosen.fit, chosen.boundary_p_values
+                        selection = chosen.diagnostics
+                    else:
+                        resp = (
+                            None
+                            if seeds is None
+                            else _seed_responsibilities(
+                                context, seeds, request.seed_weights
+                            )
+                        )
+                        fit, _, p_values = _fit_mixture_auto(
+                            spec,
+                            samples,
+                            int(k),
+                            weights,
+                            rng=context.fit_generator,
+                            responsibilities=resp,
+                            degrees=degrees,
+                            config=config,
+                            em_options=em,
+                        )
+                except _PointMixtureEstimabilityFailure as exc:
+                    raise _PointMixtureEstimabilityError(
+                        f"{exc} No initialization of the requested {k}-component "
+                        "mixture produced an estimable fit, so the data do not "
+                        f"support n_components={k}; use n_components='auto' or "
+                        "fewer components."
+                    ) from exc
+                except RuntimeError:
+                    if k == "auto" or samples.shape[1] != 2:
+                        raise
+                    # No start of an explicit interval mixture converged.  If the
+                    # one-component fit already reaches the nonparametric bound,
+                    # the mixture (which contains it) does too: G1's
+                    # non-identifiability error, which G1 reported after its EM
+                    # reached the bound (G3-047).
+                    nested = _fit_basis(spec, samples, weights, config=config)
+                    _check_identifiable(
+                        context,
+                        -nested.result.objective_value,
+                        int(k) * nested.model.n_coefficients + int(k) - 1,
+                    )
+                    raise
+                if str(fit.status) not in _CONVERGED and str(fit.status) != _UNCERTIFIED:
+                    # Explicit counts and a selected count's final fit fail loudly
+                    # (G3-047); automatic searches end at their last converged
+                    # member inside the fitters.
+>                   raise RuntimeError(
+                        f"the {len(fit.models)}-component G3 mixture did not converge "
+                        f"({fit.status})"
+                    )
+E                   RuntimeError: the 2-component G3 mixture did not converge (iteration_limit)
+
+gibbus/_api/fitting.py:952: RuntimeError
+=============================== warnings summary ===============================
+tests/test_selection_battery.py::TestHeavyTailRobustness::test_k2_converges_with_certified_natural_components
+  /workspace/scratch/4dd42c182dbe/gibbus-working/gibbus/_fit/basis_constraints.py:253: RuntimeWarning: overflow encountered in exp
+    return np.exp(gamma)
+
+tests/test_selection_battery.py::TestHeavyTailRobustness::test_k2_converges_with_certified_natural_components
+  /workspace/scratch/4dd42c182dbe/gibbus-working/gibbus/_fit/basis_newton.py:987: RuntimeWarning: invalid value encountered in multiply
+    a = rows.rows * scales[None, :]
+
+tests/test_selection_battery.py::TestHeavyTailRobustness::test_k2_converges_with_certified_natural_components
+  /workspace/scratch/4dd42c182dbe/gibbus-working/gibbus/_fit/basis_newton.py:989: RuntimeWarning: divide by zero encountered in divide
+    psi0 = np.asarray(phi, dtype=np.float64) / scales
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_selection_battery.py::TestHeavyTailRobustness::test_every_k_fits[3]
+FAILED tests/test_selection_battery.py::TestHeavyTailRobustness::test_more_components_do_not_fit_worse
+FAILED tests/test_selection_battery.py::TestHeavyTailRobustness::test_every_k_fits[4]
+FAILED tests/test_selection_battery.py::TestHeavyTailRobustness::test_k2_converges_with_certified_natural_components
+4 failed, 40 passed, 3 warnings in 189.05s (0:03:09)

@@ -1,0 +1,61 @@
+{
+  "collection": 9,
+  "counts": {
+    "passed": 9,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0,
+    "xfailed": 0
+  },
+  "suite_seconds": [
+    33.206
+  ],
+  "unfinished": 0,
+  "cases": [
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_degree8_density_is_scale_equivariant[2-100000000.0]",
+      "outcome": "passed",
+      "seconds": 0.175
+    },
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_degree8_density_is_scale_equivariant[3-1000000000000.0]",
+      "outcome": "passed",
+      "seconds": 0.175
+    },
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_degree8_density_is_scale_equivariant[8-1e+16]",
+      "outcome": "passed",
+      "seconds": 0.168
+    },
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_an_unsupported_explicit_component_count_says_what_to_do",
+      "outcome": "passed",
+      "seconds": 29.66
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_stacked_m_step_without_shared_columns_is_independent_fits",
+      "outcome": "passed",
+      "seconds": 0.12
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_stacked_m_step_is_invariant_to_component_order",
+      "outcome": "passed",
+      "seconds": 0.143
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_two_linear_tails_use_exact_curvature_face[0]",
+      "outcome": "passed",
+      "seconds": 0.377
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_two_linear_tails_use_exact_curvature_face[1]",
+      "outcome": "passed",
+      "seconds": 0.314
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_two_linear_tails_use_exact_curvature_face[2]",
+      "outcome": "passed",
+      "seconds": 0.305
+    }
+  ]
+}

@@ -1,0 +1,149 @@
+performance hint: gibbus/_fit/_basis_newton_kernels.pyx:1274:29: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_basis_newton_kernels.pyx:1274:38: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_basis_newton_kernels.pyx:1274:47: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_basis_newton_kernels.pyx:1275:19: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_basis_newton_kernels.pyx:1275:30: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_basis_newton_kernels.pyx:1275:38: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_basis_newton_kernels.pyx:1275:46: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_conic_kernels.pyx:2053:37: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_conic_kernels.pyx:2053:48: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_conic_kernels.pyx:2053:59: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_conic_kernels.pyx:2053:70: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_normalizer_kernels.pyx:2259:42: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_normalizer_kernels.pyx:2259:76: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_normalizer_kernels.pyx:2260:53: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_normalizer_kernels.pyx:2260:61: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_normalizer_kernels.pyx:2260:72: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_builders.pyx:1401:44: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_builders.pyx:1401:18: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_builders.pyx:1524:53: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_builders.pyx:1706:25: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_builders.pyx:1707:21: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_series_search.pyx:325:56: Use boundscheck(False) for faster access
+performance hint: gibbus/_fit/_series_search.pyx:325:62: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:359:52: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:359:66: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:359:78: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:360:58: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:360:72: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:362:31: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:362:58: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:363:55: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:364:69: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:364:82: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:365:38: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:365:49: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:365:70: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:366:36: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:371:46: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:371:60: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:374:49: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:374:62: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:375:37: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:375:48: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:375:64: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:378:26: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:378:49: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:379:42: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:381:45: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:435:35: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:435:49: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:435:59: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:435:75: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:436:40: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:436:67: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:436:75: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:437:38: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:437:52: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:439:35: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:439:62: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:446:52: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:446:70: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:447:27: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:447:44: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:552:41: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:552:59: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:552:74: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:553:36: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:553:67: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:553:88: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:646:58: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:646:72: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:646:86: Use boundscheck(False) for faster access
+performance hint: gibbus/_model/_series_kernels.pyx:646:94: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_panel_kernels.pyx:24:20: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_panel_kernels.pyx:25:14: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_panel_kernels.pyx:26:14: Use boundscheck(False) for faster access
+performance hint: gibbus/_spectral/_panel_kernels.pyx:29:18: Use boundscheck(False) for faster access
+[ 1/14] Cythonizing gibbus/_fit/_basis_newton_kernels.pyx
+[ 2/14] Cythonizing gibbus/_fit/_conic_kernels.pyx
+[ 3/14] Cythonizing gibbus/_fit/_tail_likelihood_kernels.pyx
+[ 4/14] Cythonizing gibbus/_model/_basis_kernels.pyx
+[ 5/14] Cythonizing gibbus/_model/_normalizer_kernels.pyx
+[ 6/14] Cythonizing gibbus/_spectral/_builders.pyx
+[ 7/14] Cythonizing gibbus/_fit/_curvature_kernels.pyx
+[ 8/14] Cythonizing gibbus/_fit/_series_search.pyx
+[ 9/14] Cythonizing gibbus/_model/_series_kernels.pyx
+[10/14] Cythonizing gibbus/_postfit/_mix_kernels.pyx
+[11/14] Cythonizing gibbus/_spectral/_cdf_eval.pyx
+[12/14] Cythonizing gibbus/_spectral/_certify.pyx
+[13/14] Cythonizing gibbus/_spectral/_panel_kernels.pyx
+[14/14] Cythonizing gibbus/_spectral/_ppf_eval.pyx
+running build_ext
+gcc -g0 -fPIC -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c /workspace/scratch/4dd42c182dbe/debug-build/tmp1zbove06/probe.c -o /workspace/scratch/4dd42c182dbe/debug-build/tmp1zbove06/workspace/scratch/4dd42c182dbe/debug-build/tmp1zbove06/probe.o -fopenmp-simd -Werror
+building 'gibbus._fit._series_search' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_fit -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_fit/_series_search.c -o build/temp.linux-x86_64-cpython-312/gibbus/_fit/_series_search.o -O0 -ffp-contract=off -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_fit/_series_search.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_fit/_series_search.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._model._series_kernels' extension
+g++ -fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall -O3 -fstack-protector -fstack-clash-protection -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fPIC -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -Igibbus/_model -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_model/_series_kernels.cpp -o build/temp.linux-x86_64-cpython-312/gibbus/_model/_series_kernels.o -O0 -ffp-contract=off -fopenmp-simd
+g++ -fno-strict-overflow -Wsign-compare -Wunreachable-code -DNDEBUG -g -O3 -Wall -O3 -fstack-protector -fstack-clash-protection -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fPIC -pthread -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL build/temp.linux-x86_64-cpython-312/gibbus/_model/_series_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_model/_series_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._fit._conic_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_fit -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_fit/_conic_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_fit/_conic_kernels.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_fit/_conic_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_fit/_conic_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._fit._basis_newton_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_fit -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_fit/_basis_newton_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_fit/_basis_newton_kernels.o -O0 -ffp-contract=off -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_fit/_basis_newton_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_fit/_basis_newton_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._postfit._mix_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_postfit -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_postfit/_mix_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_postfit/_mix_kernels.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_postfit/_mix_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_postfit/_mix_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._spectral._cdf_eval' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_spectral -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_spectral/_cdf_eval.c -o build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_cdf_eval.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_cdf_eval.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_cdf_eval.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._spectral._builders' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_spectral -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_spectral/_builders.c -o build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_builders.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_builders.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_builders.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._spectral._certify' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_spectral -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_spectral/_certify.c -o build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_certify.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_certify.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_certify.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._spectral._ppf_eval' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_spectral -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_spectral/_ppf_eval.c -o build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_ppf_eval.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_ppf_eval.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_ppf_eval.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._spectral._panel_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_spectral -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_spectral/_panel_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_panel_kernels.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_spectral/_panel_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_panel_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._model._basis_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_model -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_model/_basis_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_model/_basis_kernels.o -O0 -ffp-contract=off -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_model/_basis_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_model/_basis_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._model._normalizer_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_model -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_model/_normalizer_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_model/_normalizer_kernels.o -O0 -ffp-contract=off -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_model/_normalizer_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_model/_normalizer_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._fit._curvature_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_fit -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_fit/_curvature_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_fit/_curvature_kernels.o -O0 -ffp-contract=off -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_fit/_curvature_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_fit/_curvature_kernels.cpython-312-x86_64-linux-gnu.so
+building 'gibbus._fit._tail_likelihood_kernels' extension
+gcc -g0 -fPIC -DNPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/site-packages/numpy/_core/include -Igibbus/_fit -I/workspace/scratch/4dd42c182dbe/audit-env/include -I/opt/codex/runtimes/codex-primary-runtime/dependencies/python/include/python3.12 -c gibbus/_fit/_tail_likelihood_kernels.c -o build/temp.linux-x86_64-cpython-312/gibbus/_fit/_tail_likelihood_kernels.o -O0 -fopenmp-simd
+gcc -shared -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -Wl,--build-id=sha1 -Wl,--exclude-libs,ALL -g0 build/temp.linux-x86_64-cpython-312/gibbus/_fit/_tail_likelihood_kernels.o -L/install/lib -o build/lib.linux-x86_64-cpython-312/gibbus/_fit/_tail_likelihood_kernels.cpython-312-x86_64-linux-gnu.so
+copying build/lib.linux-x86_64-cpython-312/gibbus/_fit/_series_search.cpython-312-x86_64-linux-gnu.so -> gibbus/_fit
+copying build/lib.linux-x86_64-cpython-312/gibbus/_model/_series_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_model
+copying build/lib.linux-x86_64-cpython-312/gibbus/_fit/_conic_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_fit
+copying build/lib.linux-x86_64-cpython-312/gibbus/_fit/_basis_newton_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_fit
+copying build/lib.linux-x86_64-cpython-312/gibbus/_postfit/_mix_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_postfit
+copying build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_cdf_eval.cpython-312-x86_64-linux-gnu.so -> gibbus/_spectral
+copying build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_builders.cpython-312-x86_64-linux-gnu.so -> gibbus/_spectral
+copying build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_certify.cpython-312-x86_64-linux-gnu.so -> gibbus/_spectral
+copying build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_ppf_eval.cpython-312-x86_64-linux-gnu.so -> gibbus/_spectral
+copying build/lib.linux-x86_64-cpython-312/gibbus/_spectral/_panel_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_spectral
+copying build/lib.linux-x86_64-cpython-312/gibbus/_model/_basis_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_model
+copying build/lib.linux-x86_64-cpython-312/gibbus/_model/_normalizer_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_model
+copying build/lib.linux-x86_64-cpython-312/gibbus/_fit/_curvature_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_fit
+copying build/lib.linux-x86_64-cpython-312/gibbus/_fit/_tail_likelihood_kernels.cpython-312-x86_64-linux-gnu.so -> gibbus/_fit

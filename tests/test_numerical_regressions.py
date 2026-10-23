@@ -20,8 +20,9 @@ from spectral_builder_harness import PythonSpectralCDFBuilder, PythonSpectralPPF
 
 import gibbus
 from gibbus import Distribution
-from gibbus._api import selection as _selection
 from gibbus._defaults import TURNBULL_GAP_TOL, TURNBULL_MAX_ITER
+from gibbus._fit import basis_mixture as _basis_mixture
+from gibbus._fit import basis_selection as _basis_selection
 from gibbus._fit.inputs import _normalize_sample_weight_1d
 from gibbus._fit.mixture import (
     _e_step_intervals,
@@ -29,10 +30,6 @@ from gibbus._fit.mixture import (
     _interval_nonparametric_loglik_bound,
     _silverman_bandwidth,
 )
-from gibbus._fit.natural_objective import _fit_natural_conic_intervals
-from gibbus._model.coords import _build_fit_coordinate
-from gibbus._model.natural import _natural_layout
-from gibbus._model.natural_state import _NaturalCoreState
 
 # --------------------------------------------------------------------------
 # helpers
@@ -159,7 +156,12 @@ def test_reported_nll_matches_training_data(samples, shape):
 
 
 def test_reported_nll_matches_high_degree_lognormal():
-    """The stored NLL must remain exact for a high-degree lognormal fit."""
+    """The stored NLL must remain exact for a high-degree lognormal fit.
+
+    High monomial degrees on a half-line stress numerical conditioning.
+    Likelihood accounting is checked after the fit obtains a convergence
+    certificate; shape feasibility alone is insufficient.
+    """
     rng = np.random.default_rng(0)
     data = rng.lognormal(0.0, 1.0, 1200)
     fitted = Distribution().fit(
@@ -292,7 +294,11 @@ def test_degree8_density_is_scale_equivariant(seed, scale):
     p_scaled = scale * scaled.pdf(scale * grid)
     l1 = float(trapezoid(np.abs(p_ref - p_scaled), grid))
 
-    assert l1 < 5e-8, f"density L1 mismatch under unit change: {l1:.3e}"
+    # The fitting coordinate makes both problems the same to rounding, and
+    # NLL tolerances are absolute (G3-050): with G1's tolerances relative to
+    # |NLL| (which shifts by log(scale)) the scaled fit stopped earlier, 9e-7
+    # apart in L1 at 1e12 (G1's bound was 5e-8).
+    assert l1 < 1e-9, f"density L1 mismatch under unit change: {l1:.3e}"
     assert float(scaled._components[0]._data["nll"]) == pytest.approx(
         float(ref._components[0]._data["nll"]) + np.log(scale),
         abs=2e-10,
@@ -303,12 +309,12 @@ def test_degree8_density_is_scale_equivariant(seed, scale):
 
 
 # --------------------------------------------------------------------------
-# High-degree fitting must retain a numerically sound likelihood basin
+# High-degree fitting must retain numerical likelihood accuracy
 # --------------------------------------------------------------------------
 
 
-def test_high_degree_fit_retains_a_sound_likelihood_basin():
-    """A high-degree fit must avoid a materially inferior numerical basin."""
+def test_high_degree_fit_retains_likelihood_accuracy():
+    """A high-degree fit must reach an accurate requested-family solution."""
     data = np.ascontiguousarray(np.random.default_rng(0).lognormal(0.0, 1.0, 3000))
 
     fitted = Distribution().fit(
@@ -322,6 +328,13 @@ def test_high_degree_fit_retains_a_sound_likelihood_basin():
     training_nll = float(np.mean(fitted.neg_log(data)))
     assert training_nll < 1.6
     assert float(fitted.mean) == pytest.approx(float(np.mean(data)), rel=5e-3)
+    assert float(fitted.components[0].data["nll"]) == pytest.approx(
+        training_nll, abs=2e-9
+    )
+    restored = Distribution(fitted.data)
+    np.testing.assert_allclose(
+        restored.neg_log(data), fitted.neg_log(data), atol=2e-12, rtol=2e-12
+    )
 
 
 # --------------------------------------------------------------------------
@@ -464,7 +477,6 @@ def test_interval_mixture_relative_sample_weight_is_scale_invariant():
         intervals,
         n_components=2,
         poly_degree=2,
-        progressive=False,
         rng=0,
         sample_weight=weights,
     )
@@ -472,7 +484,6 @@ def test_interval_mixture_relative_sample_weight_is_scale_invariant():
         intervals,
         n_components=2,
         poly_degree=2,
-        progressive=False,
         rng=0,
         sample_weight=37.0 * weights,
     )
@@ -508,45 +519,9 @@ def test_interval_mass_probability_invariant_rejects_invalid_em_refit():
         intervals,
         n_components=2,
         poly_degree=2,
-        progressive=False,
         rng=0,
     )
 
-    for comp in fitted.components:
-        masses = comp.cdf(intervals[:, 1]) - comp.cdf(intervals[:, 0])
-        assert np.all(np.isfinite(masses))
-        assert np.all(masses >= -1e-12)
-        assert np.all(masses <= 1.0 + 1e-12)
-
-
-def test_coarse_width2_default_interval_mixture_completes():
-    """A coarse width-2 interval mixture must complete with default degree selection.
-
-    This is broader than the degree-2 invariant above: ``poly_degree`` is
-    left at its public default (per-component auto degree), so the
-    residual path that still failed after the midpoint-only guard was added.
-    """
-    rng = np.random.default_rng(0)
-    data = np.concatenate(
-        [
-            rng.normal(-2.0, 0.7, 500),
-            rng.normal(2.0, 0.7, 500),
-        ]
-    )
-    width = 2.0
-    edges = np.arange(
-        np.floor(data.min() / width) * width,
-        np.ceil(data.max() / width) * width + width,
-        width,
-    )
-    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
-    intervals = np.column_stack([edges[idx], edges[idx + 1]])
-
-    fitted = Distribution().fit(intervals, n_components=2, rng=0)
-
-    assert fitted.n_components == 2
-    assert np.all(np.isfinite(fitted.weights))
-    assert np.isclose(np.sum(fitted.weights), 1.0)
     for comp in fitted.components:
         masses = comp.cdf(intervals[:, 1]) - comp.cdf(intervals[:, 0])
         assert np.all(np.isfinite(masses))
@@ -610,7 +585,6 @@ def test_overlapping_interval_saturation_reports_nonidentifiability():
             intervals,
             n_components=2,
             poly_degree=2,
-            progressive=False,
             em_max_iter=80,
             rng=0,
         )
@@ -743,25 +717,23 @@ def test_interval_auto_k_scores_the_interval_likelihood(monkeypatch):
 
     seen_k1_cols = []
     seen_multi_cols = []
-    original_interval_fit = _selection._fit_natural_conic_intervals
-    original_run = _selection._run_natural_em
+    original_single = _basis_selection._fit_basis
+    original_mixture = _basis_mixture._fit_mixture_auto
 
-    def wrapped_interval_fit(support, samples, *args, **kwargs):
+    def wrapped_single(spec, samples, *args, **kwargs):
         arr = np.asarray(samples)
         seen_k1_cols.append(1 if arr.ndim == 1 else int(arr.shape[1]))
-        return original_interval_fit(support, samples, *args, **kwargs)
+        return original_single(spec, samples, *args, **kwargs)
 
-    def wrapped_run(*args, **kwargs):
-        arr = np.asarray(args[1])
-        resp = np.asarray(args[6])
-        assert args[2] == (2,) * resp.shape[1]
-        seen_multi_cols.append((int(resp.shape[1]), int(arr.shape[1])))
-        return original_run(*args, **kwargs)
+    def wrapped_mixture(spec, samples, k, *args, **kwargs):
+        assert spec.bulk_degree == 2
+        arr = np.asarray(samples)
+        seen_multi_cols.append((int(k), 1 if arr.ndim == 1 else int(arr.shape[1])))
+        return original_mixture(spec, samples, k, *args, **kwargs)
 
-    monkeypatch.setattr(
-        _selection, "_fit_natural_conic_intervals", wrapped_interval_fit
-    )
-    monkeypatch.setattr(_selection, "_run_natural_em", wrapped_run)
+    monkeypatch.setattr(_basis_selection, "_fit_basis", wrapped_single)
+    monkeypatch.setattr(_basis_mixture, "_fit_basis", wrapped_single)
+    monkeypatch.setattr(_basis_mixture, "_fit_mixture_auto", wrapped_mixture)
 
     fitted = Distribution().fit(
         intervals,
@@ -1114,7 +1086,6 @@ class TestPointMixtureEstimability:
                 n_components=2,
                 poly_degree=2,
                 support=(-np.inf, np.inf),
-                progressive=False,
                 em_max_iter=50,
                 rng=0,
             )
@@ -1130,7 +1101,6 @@ class TestPointMixtureEstimability:
                 n_components=2,
                 poly_degree=2,
                 support=(-np.inf, np.inf),
-                progressive=False,
                 rng=0,
             )
 
@@ -1194,7 +1164,7 @@ def test_degree_screening_uses_the_real_boundary_structure():
         chosen = Distribution().fit(
             data, n_components=1, support=support, poly_degree="auto"
         )
-        chosen_deg = int(chosen.components[0].data["requested_poly_degree"])
+        chosen_deg = int(chosen.components[0].data["bulk_degree"])
 
         # Converged BIC over the admissible degrees, using the library's
         # own criterion: 2 * nll * n + p * log(n).
@@ -1216,74 +1186,6 @@ def test_degree_screening_uses_the_real_boundary_structure():
             f"{name}: screening chose degree {chosen_deg}, converged BIC "
             f"prefers {best_deg}"
         )
-
-
-def test_mixed_censoring_roundoff_step_does_not_contract_trust_radius():
-    """Roundoff-scale objective changes must not cause a spurious radius shrink."""
-
-    rng = np.random.default_rng(63103)
-    x = rng.gamma(0.2357, 0.494, 60)
-    sample_scale = float(np.std(x))
-
-    censor_rng = np.random.default_rng(45)
-    selector = censor_rng.random(x.size)
-    narrow_u = censor_rng.random(x.size)
-    lower_u = censor_rng.random(x.size)
-
-    intervals = np.empty((x.size, 2), dtype=np.float64)
-    for i, value in enumerate(x):
-        if selector[i] < 0.05:
-            upper = value + (0.01 + 0.39 * lower_u[i]) * sample_scale
-            intervals[i] = (0.0, upper)
-        elif selector[i] < 0.40:
-            half_width = sample_scale * 10.0 ** (-3.0 + 2.85 * narrow_u[i])
-            intervals[i] = (max(0.0, value - half_width), value + half_width)
-        else:
-            intervals[i] = (value, value)
-
-    _, result = _fit_natural_conic_intervals((0.0, np.inf), intervals, 2, True, False)
-
-    assert result.status in ("converged", "converged_approximately")
-    assert result.final_separation.feasible
-    assert result.final_decrease_bound <= 1e-8
-    assert np.isfinite(result.objective_value)
-
-
-def test_log_partition_is_continuous_as_a_boundary_amplitude_vanishes():
-    """A tiny positive log amplitude must not truncate the normalization window.
-
-    With ``0 < a <~ 1e-11`` the mode solve lands on the singular endpoint where
-    ``q = +inf``; the tail points were then defined relative to an infinite
-    reference and the window dropped real tail mass (2.7e-4 of log Z for this
-    exponential shape).  The density differs from the ``a = 0`` one only in an
-    endpoint layer of width ``~a / q'``, so log Z must be continuous in ``a``.
-    """
-    x = np.random.default_rng(3).exponential(1.0, 120)
-    coordinate = _build_fit_coordinate((0.0, np.inf), x, None, None)
-    z = coordinate.to_canonical(x)
-    layout = _natural_layout(coordinate.canonical_support, 4, True, False)
-    base = layout.pack(0.6943, [0.02837, -0.005811, 0.0002975], [0.0, np.nan])
-    reference = None
-    for amplitude in (0.0, 1e-300, 1e-14, 1e-12, 1e-10):
-        params = base.copy()
-        params[layout.lower_a_index] = amplitude
-        state = _NaturalCoreState(
-            coordinate, layout, params, (float(z.min()), float(z.max()))
-        )
-        candidate = layout.build_candidate(params)
-        lower = layout.support[0]
-
-        def density(value, candidate=candidate):
-            return float(np.exp(-candidate.q(np.array([value]))[0]))
-
-        exact = np.log(
-            quad(density, lower, lower + 1.0, limit=200)[0]
-            + quad(density, lower + 1.0, np.inf, limit=200)[0]
-        )
-        assert state.log_Z == pytest.approx(exact, abs=1e-10)
-        if reference is None:
-            reference = state.log_Z
-        assert state.log_Z == pytest.approx(reference, abs=1e-9)
 
 
 def test_interval_mixture_seed_keeps_the_exact_support_endpoint():

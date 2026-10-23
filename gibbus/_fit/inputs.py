@@ -25,7 +25,6 @@ Sample weights (when provided) are normalized to sum to one and stored
 as a 1-D float64 array of length *R*.
 """
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -37,16 +36,8 @@ from .._defaults import (
     AUTO_LC_SWEEP_MAX_K,
     AUTO_LC_VALIDATION_DEGREES,
 )
+from .._model.basis_spec import BasisSpec
 from .boundary import AUTO
-
-# Fitted-state fields a warm-start seed must provide.
-_SEED_FIELDS = (
-    "q_poly",
-    "boundary_amplitudes",
-    "boundary_allowed",
-    "support",
-    "requested_poly_degree",
-)
 
 
 @dataclass(frozen=True)
@@ -422,32 +413,6 @@ def _default_univariate_support():
     return (-np.inf, np.inf)
 
 
-def _seed_user_support(seed, /):
-    """Return a fitted-state seed's user-coordinate support.
-
-    Parameters
-    ----------
-    seed : Mapping or numpy.void
-        Fitted state.
-
-    Returns
-    -------
-    numpy.ndarray, shape (2,)
-        Physical lower and upper support bounds.
-
-    Raises
-    ------
-    ValueError
-        If the seed has no valid support field.
-    """
-    if not _state_has_field(seed, "support"):
-        raise ValueError("seed is not a fitted state (no support field)")
-    support = np.asarray(seed["support"], dtype=np.float64).reshape(-1)
-    if support.size != 2:
-        raise ValueError("seed has invalid support field")
-    return support
-
-
 def _validate_support(support, /):
     """Check that *support* is a valid ``(lower, upper)`` pair.
 
@@ -579,28 +544,6 @@ def _admissible_degrees(support, target_degree, /):
         return list(range(2, int(target_degree) + 1))
 
 
-def _state_has_field(state, key, /):
-    """Return whether a mapping or structured scalar contains a field.
-
-    Parameters
-    ----------
-    state : Mapping or numpy.void
-        Candidate fitted state.
-    key : str
-        Field name.
-
-    Returns
-    -------
-    bool
-    """
-    names = getattr(getattr(state, "dtype", None), "names", None)
-    if names is not None:
-        return key in names
-    if isinstance(state, Mapping):
-        return key in state
-    return False
-
-
 def _boundary_policy(caller, endpoint, /):
     """Resolve one side's boundary-term policy for a cold fit.
 
@@ -662,159 +605,6 @@ def _resolve_endpoint_observations(samples_rk, support, lower, upper, weights, /
     return lower, upper
 
 
-def _normalize_univariate_fit_inputs(
-    ComponentType,
-    samples,
-    poly_degree,
-    support,
-    log_boundary_lower,
-    log_boundary_upper,
-    verbose,
-    suppress_warnings,
-    init_from,
-    sample_weight,
-    /,
-):
-    """Validate and normalize inputs for one component fit.
-
-    ``log_boundary_lower`` and ``log_boundary_upper`` mean *allow* the
-    corresponding fixed zero-offset logarithmic basis. Their amplitudes are
-    direct nonnegative natural parameters and may fit to exactly zero.
-
-    Parameters
-    ----------
-    ComponentType : type
-        Internal component class, passed to avoid a circular import.
-    samples : array_like
-        Point or interval observations.
-    poly_degree : int, ``"auto"``, or None
-        ``None`` selects automatic degree without a seed and inherits the
-        seed's requested degree with a seed.
-    support : tuple of (float, float) or None
-        Structural user-coordinate support. A seed overrides it.
-    log_boundary_lower, log_boundary_upper : bool or None
-        Whether each finite endpoint may carry a zero-offset logarithmic
-        boundary term. ``None`` lets the data decide on a finite endpoint of
-        a cold fit (``"auto"``; see :mod:`gibbus._fit.boundary`), means no
-        term on an infinite one, and inherits ``boundary_allowed`` from a
-        seed.
-    verbose : int
-        Verbosity level for fitting progress and diagnostics.
-    suppress_warnings : bool
-        Whether numerical fitting warnings should be suppressed.
-    init_from : _Component, Mapping, or None
-        Fitted-state warm-start seed.
-    sample_weight : array_like or None
-        Optional nonnegative observation weights.
-
-    Returns
-    -------
-    dict
-        Canonical validated fitting inputs.
-
-    Raises
-    ------
-    ValueError
-        For invalid shapes/support/degrees/seeds, out-of-support observations,
-        or exact endpoint observations conflicting with an enabled log basis.
-    """
-    seed_state = None
-    caller_log_lower = log_boundary_lower
-    caller_log_upper = log_boundary_upper
-    is_auto_degree = isinstance(poly_degree, str) and poly_degree.lower() == "auto"
-
-    if init_from is not None:
-        seed = init_from.data if isinstance(init_from, ComponentType) else init_from
-        missing = [name for name in _SEED_FIELDS if not _state_has_field(seed, name)]
-        if missing:
-            raise ValueError(
-                "init_from must be a fitted state; missing fields: "
-                + ", ".join(missing)
-            )
-        try:
-            seed_degree = _coerce_poly_degree(seed["requested_poly_degree"])
-        except ValueError as exc:
-            raise ValueError("seed has invalid polynomial degree") from exc
-        if poly_degree is None:
-            poly_degree = seed_degree
-        elif not is_auto_degree:
-            poly_degree = _coerce_poly_degree(poly_degree)
-
-        supp = _validate_support(_seed_user_support(seed))
-        allowed = np.asarray(seed["boundary_allowed"], dtype=bool).reshape(-1)
-        if allowed.size != 2:
-            raise ValueError("seed has invalid boundary_allowed field")
-        log_boundary_lower = (
-            bool(allowed[0]) if caller_log_lower is None else bool(caller_log_lower)
-        )
-        log_boundary_upper = (
-            bool(allowed[1]) if caller_log_upper is None else bool(caller_log_upper)
-        )
-        seed_state = seed
-    else:
-        if poly_degree is None:
-            poly_degree = "auto"
-            is_auto_degree = True
-        elif not is_auto_degree:
-            poly_degree = _coerce_poly_degree(poly_degree)
-        supp = (
-            _default_univariate_support()
-            if support is None
-            else _validate_support(support)
-        )
-        log_boundary_lower = _boundary_policy(caller_log_lower, supp[0])
-        log_boundary_upper = _boundary_policy(caller_log_upper, supp[1])
-
-    S, R = _canon_univariate_samples(samples)
-    L, U = map(float, supp)
-    if S.shape[1] == 1:
-        x = S[:, 0]
-        if (np.isfinite(L) and np.any(x < L)) or (np.isfinite(U) and np.any(x > U)):
-            origin = "seed's" if init_from is not None else "provided"
-            raise ValueError(f"samples fall outside the {origin} support.")
-    else:
-        Ls, Us = S[:, 0], S[:, 1]
-        if (np.isfinite(L) and np.any(Ls < L)) or (np.isfinite(U) and np.any(Us > U)):
-            origin = "seed's" if init_from is not None else "provided"
-            raise ValueError(f"interval samples fall outside the {origin} support.")
-
-    _check_spread(S)
-    weights = (
-        None if sample_weight is None else _normalize_sample_weight_1d(R, sample_weight)
-    )
-
-    if log_boundary_lower is True and not np.isfinite(L):
-        raise ValueError(
-            "log_boundary_lower=True requires a finite lower support endpoint"
-        )
-    if log_boundary_upper is True and not np.isfinite(U):
-        raise ValueError(
-            "log_boundary_upper=True requires a finite upper support endpoint"
-        )
-    log_boundary_lower, log_boundary_upper = _resolve_endpoint_observations(
-        S, supp, log_boundary_lower, log_boundary_upper, weights
-    )
-
-    if not is_auto_degree and not _is_poly_degree_admissible(poly_degree, supp):
-        raise ValueError(
-            f"poly_degree={poly_degree} is odd, which is inadmissible on "
-            "full-infinite support (-inf, +inf). Use an even degree."
-        )
-
-    return {
-        "samples_rk": S,
-        "R": R,
-        "support": supp,
-        "poly_degree": poly_degree,
-        "log_boundary_lower": log_boundary_lower,
-        "log_boundary_upper": log_boundary_upper,
-        "verbose": int(verbose),
-        "suppress_warnings": bool(suppress_warnings),
-        "weights": weights,
-        "seed_state": seed_state,
-    }
-
-
 def _normalize_mixture_fit_inputs(
     samples,
     n_components,
@@ -824,6 +614,7 @@ def _normalize_mixture_fit_inputs(
     suppress_warnings,
     /,
     sample_weight=None,
+    allow_odd_degree=False,
 ):
     """Validate and normalize all inputs for multi-component fitting.
 
@@ -850,6 +641,9 @@ def _normalize_mixture_fit_inputs(
     sample_weight : array_like or None, optional
         Non-negative observation weights of length *R*.  Normalized to
         sum to one and returned under the ``weights`` key.
+    allow_odd_degree : bool, optional
+        Let a general basis establish properness of odd component degrees.
+        The convenience polynomial-only interface keeps its parity rule.
 
     Returns
     -------
@@ -939,7 +733,9 @@ def _normalize_mixture_fit_inputs(
                     normalized["poly_degree"] = "auto"
                 else:
                     degree = _coerce_poly_degree(value)
-                    if not _is_poly_degree_admissible(degree, supp):
+                    if not allow_odd_degree and not _is_poly_degree_admissible(
+                        degree, supp
+                    ):
                         raise ValueError(
                             f"component_options[{i}].poly_degree={degree} is odd, "
                             "which is inadmissible on support infinite at both ends."
@@ -1012,3 +808,94 @@ def _coerce_sample_size(size, /):
     if n < 0:
         raise ValueError(_MSG)
     return n
+
+
+@dataclass(frozen=True)
+class _BasisInputs:
+    """Validated G3 fit inputs (G1 ``_normalize_univariate_fit_inputs`` role).
+
+    Parameters
+    ----------
+    spec : BasisSpec
+        Basis request (``"auto"`` fields still open).
+    samples : numpy.ndarray
+        Canonical observations, shape ``(R, 1)`` (points) or ``(R, 2)``
+        (ordered interval rows; infinite ends are censoring), read-only.
+    weights : numpy.ndarray or None
+        Weights normalized to sum to one (``None`` for equal weights).
+    log_policy : tuple
+        ``(lower, upper)`` boundary-term policy: ``True``, ``False`` or
+        ``"auto"`` after G1's endpoint-observation rule (an automatic term
+        at an infinite end, or at a finite end carrying an exact point
+        observation, resolves to ``False``).
+    effective_n : float
+        Kish effective sample size.
+    """
+
+    spec: object
+    samples: np.ndarray
+    weights: np.ndarray | None
+    log_policy: tuple
+    effective_n: float
+
+    @property
+    def intervals(self):
+        """Whether the observations are interval rows."""
+        return self.samples.shape[1] == 2
+
+
+def _normalize_basis_inputs(spec, samples, weights=None, /):
+    """Validate a G3 fit request with G1's input rules.
+
+    G1 owner adapted: ``_normalize_univariate_fit_inputs`` (sample layout,
+    weights, spread, support and endpoint-observation rules, boundary
+    policy) for a :class:`BasisSpec` instead of G1's degree/boundary flags.
+
+    Parameters
+    ----------
+    spec : BasisSpec
+        Basis request.
+    samples : array_like
+        Point observations, shape ``(R,)`` or ``(R, 1)``, or interval rows,
+        shape ``(R, 2)`` (G1 layouts; reversed rows are swapped).
+    weights : array_like or None
+        Nonnegative observation weights.
+
+    Returns
+    -------
+    _BasisInputs
+
+    Raises
+    ------
+    TypeError
+        If ``spec`` is not a ``BasisSpec``.
+    ValueError
+        If the observations leave the closed support, points are not finite
+        or all coincide, an infinite row has zero width, the weights are
+        invalid, or an explicit log term meets an exact observation at its
+        endpoint.
+    """
+
+    if not isinstance(spec, BasisSpec):
+        raise TypeError("spec must be a BasisSpec")
+    s, r = _canon_univariate_samples(samples)
+    _check_spread(s)
+    w = None if weights is None else _normalize_sample_weight_1d(r, weights)
+    if w is not None and np.all(w == w[0]):
+        # Equal weights carry no information: the unweighted fit, exactly
+        # (the weighted median is the lower median, the unweighted one the
+        # average of the middle pair).
+        w = None
+    lower, upper = (float(v) for v in spec.support)
+    if np.any(s[:, 0] < lower) or np.any(s[:, -1] > upper):
+        kind = "point samples" if s.shape[1] == 1 else "interval samples"
+        raise ValueError(f"{kind} must lie inside the closed support")
+    policy = _resolve_endpoint_observations(
+        s,
+        (lower, upper),
+        _boundary_policy(spec.log_lower, lower),
+        _boundary_policy(spec.log_upper, upper),
+        w,
+    )
+    n_eff = float(r) if w is None else float(1.0 / np.dot(w, w))
+    return _BasisInputs(spec, s, w, tuple(policy), n_eff)

@@ -1,0 +1,480 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="4" time="64.342" timestamp="2026-10-22T18:14:47.964848-06:00" hostname="c183c1932c37"><testcase classname="tests.test_numerical_regressions" name="test_degree8_density_is_scale_equivariant[2-100000000.0]" time="0.179"><failure message="AssertionError: density L1 mismatch under unit change: 7.154e-07&#10;assert 7.153525002118064e-07 &lt; 1e-09">seed = 2, scale = 100000000.0
+
+    @pytest.mark.parametrize(
+        ("seed", "scale"),
+        [(2, 1e8), (3, 1e12), (8, 1e16)],
+    )
+    def test_degree8_density_is_scale_equivariant(seed, scale):
+        """A unit change must not change a degree-8 fit in standardized space.
+    
+        Multiple seeds and large scale factors ensure that the fit depends only on
+        standardized geometry rather than the numerical units of the observations.
+        """
+    
+        data = np.ascontiguousarray(np.random.default_rng(seed).normal(size=2000))
+        grid = np.linspace(-4.0, 4.0, 801)
+    
+        ref = Distribution().fit(
+            data, n_components=1, support=(-np.inf, np.inf), poly_degree=8
+        )
+        scaled = Distribution().fit(
+            data * scale, n_components=1, support=(-np.inf, np.inf), poly_degree=8
+        )
+    
+        p_ref = ref.pdf(grid)
+        p_scaled = scale * scaled.pdf(scale * grid)
+        l1 = float(trapezoid(np.abs(p_ref - p_scaled), grid))
+    
+        # The fitting coordinate makes both problems the same to rounding, and
+        # NLL tolerances are absolute (G3-050): with G1's tolerances relative to
+        # |NLL| (which shifts by log(scale)) the scaled fit stopped earlier, 9e-7
+        # apart in L1 at 1e12 (G1's bound was 5e-8).
+&gt;       assert l1 &lt; 1e-9, f"density L1 mismatch under unit change: {l1:.3e}"
+E       AssertionError: density L1 mismatch under unit change: 7.154e-07
+E       assert 7.153525002118064e-07 &lt; 1e-09
+
+tests/test_numerical_regressions.py:301: AssertionError</failure></testcase><testcase classname="tests.test_numerical_regressions" name="test_degree8_density_is_scale_equivariant[3-1000000000000.0]" time="0.220"><failure message="AssertionError: density L1 mismatch under unit change: 1.252e-08&#10;assert 1.2518265914036087e-08 &lt; 1e-09">seed = 3, scale = 1000000000000.0
+
+    @pytest.mark.parametrize(
+        ("seed", "scale"),
+        [(2, 1e8), (3, 1e12), (8, 1e16)],
+    )
+    def test_degree8_density_is_scale_equivariant(seed, scale):
+        """A unit change must not change a degree-8 fit in standardized space.
+    
+        Multiple seeds and large scale factors ensure that the fit depends only on
+        standardized geometry rather than the numerical units of the observations.
+        """
+    
+        data = np.ascontiguousarray(np.random.default_rng(seed).normal(size=2000))
+        grid = np.linspace(-4.0, 4.0, 801)
+    
+        ref = Distribution().fit(
+            data, n_components=1, support=(-np.inf, np.inf), poly_degree=8
+        )
+        scaled = Distribution().fit(
+            data * scale, n_components=1, support=(-np.inf, np.inf), poly_degree=8
+        )
+    
+        p_ref = ref.pdf(grid)
+        p_scaled = scale * scaled.pdf(scale * grid)
+        l1 = float(trapezoid(np.abs(p_ref - p_scaled), grid))
+    
+        # The fitting coordinate makes both problems the same to rounding, and
+        # NLL tolerances are absolute (G3-050): with G1's tolerances relative to
+        # |NLL| (which shifts by log(scale)) the scaled fit stopped earlier, 9e-7
+        # apart in L1 at 1e12 (G1's bound was 5e-8).
+&gt;       assert l1 &lt; 1e-9, f"density L1 mismatch under unit change: {l1:.3e}"
+E       AssertionError: density L1 mismatch under unit change: 1.252e-08
+E       assert 1.2518265914036087e-08 &lt; 1e-09
+
+tests/test_numerical_regressions.py:301: AssertionError</failure></testcase><testcase classname="tests.test_numerical_regressions" name="test_degree8_density_is_scale_equivariant[8-1e+16]" time="0.177" /><testcase classname="tests.test_numerical_regressions" name="test_an_unsupported_explicit_component_count_says_what_to_do" time="63.622"><failure message="gibbus._fit.basis_mixture._ComponentSelectionError: no component count produced a scored mixture fit">def test_an_unsupported_explicit_component_count_says_what_to_do():
+        """Five copies of one far value are one location: no second component."""
+        data = np.concatenate(
+            [np.random.default_rng(1).normal(0.0, 1.0, 200), np.full(5, 40.0)]
+        )
+        with pytest.raises(
+            RuntimeError, match=r"do not support n_components=2; use n_components='auto'"
+        ):
+            Distribution().fit(data, n_components=2, support=(-np.inf, np.inf), rng=0)
+        assert (
+&gt;           Distribution()
+            .fit(data, n_components="auto", support=(-np.inf, np.inf), rng=0)
+            .n_components
+            == 1
+        )
+
+tests/test_numerical_regressions.py:1258: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+gibbus/_api/distribution.py:587: in fit
+    result = _run_fit_request(request)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+gibbus/_api/fitting.py:506: in _run_fit_request
+    return _run_basis_request(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+gibbus/_api/fitting.py:895: in _run_basis_request
+    chosen = _select_components(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+spec = BasisSpec(support=(-inf, inf), bulk_degree='auto', log_lower=False, log_upper=False, lower_tail=None, upper_tail=None,...'minimal', tanh=TanhSpec(lower_location='auto', upper_location='auto', lower_steepness='auto', upper_steepness='auto'))
+samples = array([[ 3.45584192e-01],
+       [ 8.21618144e-01],
+       [ 3.30437076e-01],
+       [-1.30315723e+00],
+       [ 9.053...00000000e+01],
+       [ 4.00000000e+01],
+       [ 4.00000000e+01],
+       [ 4.00000000e+01],
+       [ 4.00000000e+01]])
+weights = None, k_max = None, subsample = 'auto'
+rng = Generator(PCG64) at 0x7F494D494660
+config = _DegreeSelectionConfig(probe_block_size=2, alpha=0.05, min_participation=8.0, covariance_rtol=1e-10, max_variance_inflation=1000000.0)
+search_options = None
+em_options = _EMOptions(tolerance=0.0001, max_steps=50, max_rounds=4, accelerate=True)
+options = _NewtonOptions(tolerance=1e-12, certified_tolerance=1e-10, accuracy_floor=1e-07, face_trigger=1e-06, max_iterations=60, armijo=0.0001, backtrack=0.5, max_line_search=40, lift_nll_slack=0.001, lift_halvings=60)
+
+    def _select_components(
+        spec,
+        samples,
+        weights=None,
+        /,
+        *,
+        k_max=None,
+        subsample="auto",
+        rng=0,
+        config=None,
+        search_options=None,
+        em_options=None,
+        options=None,
+    ):
+        """Select the component count by G1's staged shared BIC search.
+    
+        G1 owner: ``_api.selection.select_n_components`` (with
+        ``_propose_n_components`` and ``_prepare_component_selection_policy``),
+        moved to the fitting layer over G3 mixture fits.  Retained from G1: the
+        KDE mode proposal and count ceiling; shared screens of ``K = 1 ..
+        initial_hi`` at every screening degree with every automatic endpoint log
+        enabled (``K = 1`` a single fit, ``K &gt; 1`` a short unaccelerated EM from
+        each initializer's sharpened responsibilities, no polish); the BIC
+        ``-2 n_eff LL + dim log n_eff`` on the face dimension, rejecting a
+        component below ``AUTO_LC_MIN_COMPONENT_N`` effective rows and an
+        interval fit saturating the censored likelihood with excess parameters;
+        admission of each degree's winner and neighbours, refinement under the
+        request's actual policies (``_fit_mixture_auto`` from the best screen's
+        responsibilities) and opening the refined winner's edge until closed;
+        purpose-indexed random streams; optional stratified subsampling with the
+        mean likelihood extrapolated to the full effective size.  The search is
+        heuristic, not globally certified (G1).  With a subsample the winner is
+        refitted on all rows from its screen's responsibilities.
+    
+        Parameters
+        ----------
+        spec : BasisSpec
+            Basis request of every component (``"auto"`` fields allowed).
+        samples, weights : array_like
+            Observations and observation weights.
+        k_max : int or None
+            Largest count considered (G1 ``AUTO_K_MAX`` when ``None``).
+        subsample : str, int or bool
+            G1 selection-sample policy.
+        rng : int or numpy.random.Generator
+            Randomness of the proposal, initializers and refinements.
+    
+        Returns
+        -------
+        _ComponentSelection
+    
+        Raises
+        ------
+        _ComponentSelectionError
+            If every refinement failed.
+        """
+    
+        config = _DegreeSelectionConfig() if config is None else config
+        options = _NewtonOptions() if options is None else options
+        failures_caught = (*NUMERIC_FAILURES, _PointMixtureEstimabilityFailure)
+        full = _prepare(spec, samples, weights)
+        rows = full.inputs.samples
+        intervals = full.inputs.intervals
+        support = tuple(map(float, spec.support))
+        n_rows = rows.shape[0]
+        full_w = full.weights / float(np.sum(full.weights))
+        effective_n = float(full.inputs.effective_n)
+        lower, upper = full.inputs.log_policy
+        generator = (
+            rng if isinstance(rng, np.random.Generator) else np.random.default_rng(rng)
+        )
+        with _maybe_suppress(True, SUPPRESSED_WARNINGS):
+            k_modes, effective_k_max = _propose_n_components(
+                full.representatives,
+                AUTO_K_MAX if k_max is None else int(k_max),
+                generator,
+            )
+        policy = _prepare_component_selection_policy(
+            n_rows,
+            support,
+            k_modes,
+            effective_k_max,
+            subsample,
+            spec.bulk_degree,
+            lower,
+            upper,
+        )
+        ceiling, initial_hi, degrees = policy.ceiling, policy.initial_hi, policy.degrees
+        entropy = generator.integers(0, 2**32, size=4, dtype=np.uint32)
+    
+        def rng_for(stage, count):
+            return np.random.default_rng(
+                np.random.SeedSequence(entropy, spawn_key=(stage, count))
+            )
+    
+        # The full data's endpoint policies apply to the selection sample.
+        resolved = dataclasses.replace(spec, log_lower=lower, log_upper=upper)
+        sub_idx = None
+        sample, sample_rows, sample_w = full, samples, weights
+        if policy.subsample_size &lt; n_rows:
+            sub_idx = _stratified_subsample(
+                full.representatives, policy.subsample_size, rng_for(0, 0)
+            )
+            picked = rows[sub_idx]
+            sample_rows = picked if intervals else picked[:, 0]
+            sample_w = full_w[sub_idx] / float(np.sum(full_w[sub_idx]))
+            sample = _prepare(resolved, sample_rows, sample_w)
+        fit_rows = sample.inputs.samples
+        fit_w = sample.weights / float(np.sum(sample.weights))
+        sample_effective_n = _effective_n(fit_rows.shape[0], fit_w)
+        enabled = tuple(flag is True or flag == _AUTO for flag in (lower, upper))
+        screen_expansion = _MINIMAL if spec.expansion == _AUTO_EXPANSION else spec.expansion
+        screen_em = _EMOptions(max_steps=AUTO_LC_SWEEP_EM_MAX_ITER, accelerate=False)
+        # Screens rank short EM explorations. Their component M-steps use a
+        # coarser certified bound; the single-component screens and all admitted
+        # refinements retain the requested optimizer policy and shape checks.
+        screen_options = dataclasses.replace(
+            options,
+            tolerance=max(options.tolerance, AUTO_LC_SWEEP_NEWTON_TOL),
+            certified_tolerance=max(options.certified_tolerance, AUTO_LC_SWEEP_NEWTON_TOL),
+            accuracy_floor=max(options.accuracy_floor, AUTO_LC_SWEEP_NEWTON_TOL),
+        )
+        log_n = math.log(max(effective_n, 1.0))
+        screens, screening_scores, refined, scores = {}, [], {}, []
+        admissions = {1: "mandatory_single"}
+    
+        def score(fit):
+            dimension = int(fit.n_face_parameters)
+            likelihood = float(fit.log_likelihood)
+            if dimension &lt; 1 or not math.isfinite(likelihood):
+                raise _CandidateRejected(
+                    "candidate has invalid likelihood or face dimension"
+                )
+            if fit.weights.size &gt; 1:
+                if float(np.min(fit.weights)) * sample_effective_n &lt; (
+                    AUTO_LC_MIN_COMPONENT_N
+                ):
+                    raise _CandidateRejected("degenerate_component")
+                if (
+                    intervals
+                    and _interval_identifiability_diagnostic(
+                        fit_rows,
+                        None,
+                        likelihood,
+                        support,
+                        obs_weights=fit_w,
+                        n_parameters=dimension,
+                    )
+                    is not None
+                ):
+                    raise _CandidateRejected("unidentified_interval_components")
+            return -2.0 * likelihood * effective_n + dimension * log_n
+    
+        def screen_fit(count, degree, name, resp):
+            concrete = dataclasses.replace(
+                spec,
+                bulk_degree=degree,
+                log_lower=enabled[0],
+                log_upper=enabled[1],
+                expansion=screen_expansion,
+            )
+            if count == 1:
+                single = _fit_basis(
+                    concrete, sample_rows, sample_w, config=config, options=options
+                )
+                return _single_mixture_fit(single, fit_rows.shape[0])
+            r = resp if sub_idx is None else resp[sub_idx]
+            r = np.square(np.asarray(r, dtype=np.float64))
+            r /= r.sum(axis=1, keepdims=True)
+            start = _merge_responsibilities(r, fit_w, sample.inverse, sample.data.size)
+            if not intervals:
+                _check_point_estimability(
+                    sample.data.x[:, None], sample.data.weights, start
+                )
+            models = _component_models(sample, (concrete,) * count, r)
+            problem = _MixtureProblem(models, sample.data, screen_options)
+            return _run_em(
+                problem, start, em_options=screen_em, polish=False, initialization=name
+            )
+    
+        def screen(count):
+            _check_fit_time("component-count screening")
+            if count in screens:
+                return
+            screens[count] = {}
+            candidates = ((None, None, None),)
+            if count &gt; 1:
+                try:
+                    with _maybe_suppress(True, SUPPRESSED_WARNINGS):
+                        candidates = _initial_responsibility_candidates(
+                            full.representatives, count, rng_for(1, count), weights=full_w
+                        )
+                except NUMERIC_FAILURES as exc:
+                    _reraise_if_debug(
+                        exc, f"G3 K screen initialization K={count}", routine=True
+                    )
+                    screens[count] = dict.fromkeys(degrees)
+                    screening_scores.extend(
+                        {
+                            "n_components": count,
+                            "degree": int(degree),
+                            "bic": None,
+                            "initializer": None,
+                            "status": "initialization_failed",
+                            "failures": (f"{type(exc).__name__}: {exc}",),
+                        }
+                        for degree in degrees
+                    )
+                    return
+            for degree in degrees:
+                best, failures = None, []
+                for name, resp, mix_weights in candidates:
+                    try:
+                        fitted = screen_fit(count, degree, name, resp)
+                        bic = score(fitted)
+                    except _CandidateRejected as exc:
+                        # Expected control flow, not a numerical fallback (G1).
+                        failures.append(f"{type(exc).__name__}: {exc}")
+                        continue
+                    except failures_caught as exc:
+                        _reraise_if_debug(
+                            exc, f"G3 K screen K={count}, d={degree}", routine=True
+                        )
+                        failures.append(f"{type(exc).__name__}: {exc}")
+                        continue
+                    if best is None or bic &lt; best["bic"]:
+                        best = {
+                            "bic": float(bic),
+                            "degree": int(degree),
+                            "initializer": name,
+                            "fit": fitted,
+                            "responsibilities": resp,
+                            "weights": mix_weights,
+                        }
+                screens[count][degree] = best
+                screening_scores.append(
+                    {
+                        "n_components": count,
+                        "degree": int(degree),
+                        "bic": None if best is None else best["bic"],
+                        "initializer": None if best is None else best["initializer"],
+                        "status": "failed" if best is None else "ok",
+                        "failures": tuple(failures),
+                    }
+                )
+    
+        for count in range(1, initial_hi + 1):
+            screen(count)
+        for degree in degrees:
+            viable = [
+                (entries[degree]["bic"], count)
+                for count, entries in screens.items()
+                if entries[degree] is not None
+            ]
+            if viable:
+                winner = min(viable)[1]
+                for count in (winner - 1, winner, winner + 1):
+                    if 1 &lt;= count &lt;= ceiling:
+                        admissions.setdefault(
+                            count, f"screen_degree_{degree}_winner_or_neighbor"
+                        )
+    
+        def refine(count):
+            _check_fit_time("component-count refinement")
+            record = {"n_components": count, "admission": admissions[count]}
+            try:
+                screen(count)
+                viable = [e for e in screens[count].values() if e is not None]
+                start = min(viable, key=lambda e: e["bic"]) if viable else None
+                resp = None if start is None else start["responsibilities"]
+                if resp is not None and sub_idx is not None:
+                    resp = resp[sub_idx]
+                fit, steps, p_values = _fit_mixture_auto(
+                    resolved,
+                    sample_rows,
+                    count,
+                    sample_w,
+                    rng=rng_for(2, count),
+                    responsibilities=resp,
+                    config=config,
+                    search_options=search_options,
+                    em_options=em_options,
+                    options=options,
+                )
+                bic = score(fit)
+            except _CandidateRejected as exc:
+                scores.append(
+                    record
+                    | {"bic": None, "status": "failed:_CandidateRejected"}
+                    | {"reason": str(exc)}
+                )
+                return
+            except failures_caught as exc:
+                _reraise_if_debug(exc, f"G3 K refinement K={count}", routine=True)
+                scores.append(
+                    record
+                    | {"bic": None, "status": f"failed:{type(exc).__name__}"}
+                    | {"reason": str(exc)}
+                )
+                return
+            refined[count] = (bic, fit, steps, p_values, start)
+            scores.append(
+                record
+                | {
+                    "bic": float(bic),
+                    "status": "ok",
+                    "degree": tuple(m.request.bulk_degree for m in fit.models),
+                    "n_parameters": int(fit.n_face_parameters),
+                    "mean_log_likelihood": float(fit.log_likelihood),
+                    "initializer": None if start is None else start["initializer"],
+                }
+            )
+    
+        for count in sorted(admissions):
+            refine(count)
+        while refined:
+            winner = min(refined, key=lambda c: (refined[c][0], c))
+            neighbors = [
+                c
+                for c in (winner - 1, winner + 1)
+                if 1 &lt;= c &lt;= ceiling and c not in admissions
+            ]
+            if not neighbors:
+                break
+            for count in neighbors:
+                admissions[count] = "open_refined_winner_edge"
+                refine(count)
+        diagnostics = {
+            "method": "log_concave_bic",
+            "search": "staged_shared_structural_shortlist",
+            "pruning": "heuristic_not_globally_certified",
+            "kde_modes": int(k_modes),
+            "subsample_size": int(policy.subsample_size),
+            "full_sample_size": int(n_rows),
+            "subsampled": sub_idx is not None,
+            # G1 key: the selected candidate is the returned fit (no full-data
+            # refit after a subsampled selection).
+            "reuse_selected_fit": sub_idx is None,
+            "score_effective_n": effective_n,
+            "selection_sample_effective_n": float(sample_effective_n),
+            "likelihood_scale": (
+                "subsample_mean_extrapolated_to_full_effective_n"
+                if sub_idx is not None
+                else "full_data_effective_n"
+            ),
+            "screen_boundary_enabled": enabled,
+            "screen_degrees": degrees,
+            "screen_newton_tolerance": float(screen_options.certified_tolerance),
+            "screening_scores": tuple(screening_scores),
+            "scores": tuple(scores),
+            "admissions": tuple(sorted(admissions.items())),
+            "excluded_components": tuple(
+                c for c in range(1, ceiling + 1) if c not in admissions
+            ),
+            "termination": (
+                "closed_winner_neighborhood_or_k_limit"
+                if refined
+                else "all_refinements_failed"
+            ),
+        }
+        if not refined:
+&gt;           raise _ComponentSelectionError(diagnostics)
+E           gibbus._fit.basis_mixture._ComponentSelectionError: no component count produced a scored mixture fit
+
+gibbus/_fit/basis_mixture.py:2626: _ComponentSelectionError</failure></testcase></testsuite></testsuites>

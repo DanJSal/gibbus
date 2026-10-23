@@ -1,0 +1,804 @@
+--- a/gibbus/_fit/basis_newton.py
++++ b/gibbus/_fit/basis_newton.py
+@@ -45,7 +45,11 @@
+ 
+ from .._defaults import DEBUG, _reraise_if_debug
+ from .._model.basis_eval import _evaluate_basis
+-from .._model.basis_normalizer import _NormalizerOptions, _QuadratureFailure
++from .._model.basis_normalizer import (
++    _ImproperPotential,
++    _NormalizerOptions,
++    _QuadratureFailure,
++)
+ from ._basis_newton_kernels import ALLOCATION, BasisFaceObjective
+ from .basis_constraints import (
+     _column_scales,
+@@ -65,12 +69,14 @@
+     _apply_global_objective_certificate,
+     _NewtonOptions,
+     _NewtonRun,
++    _preconditioned_subproblem,
+ )
+ from .curvature_search import (
+     _CurvatureContext,
+     _CurvatureOptions,
+     _separate_curvature,
+ )
++from .linear_qp import _linear_subproblem
+ 
+ _ZERO_ROW = 1e-12
+ _ACTIVE_SLACK = 1e-7
+@@ -521,6 +527,172 @@
+         return self._compiled
+ 
+     def run(self, representation, phi, blocks, evaluation, options, known, domain):
++        """Solve in projection coordinates when monomial moments lose precision."""
++        if (
++            isinstance(self.objective, _BasisPointObjective)
++            and self.model.request.lower_infinite != self.model.request.upper_infinite
++            and all(
++                self.model.functions[index].kind in ("monomial", "log")
++                and not weights[1]
++                and not weights[2]
++                for column in self.model.columns
++                for index, weights in column.terms
++            )
++        ):
++            diagonal = np.diag(evaluation.hessian)
++            if np.all(diagonal > 0.0):
++                d = 1.0 / np.sqrt(diagonal)
++                metric = d[:, None] * evaluation.hessian * d[None, :]
++                if np.linalg.cond(metric) > 1.0 / np.sqrt(np.finfo(float).eps):
++                    return self._projection_run(
++                        representation, phi, blocks, evaluation, options, known, domain
++                    )
++        return self._native_run(
++            representation, phi, blocks, evaluation, options, known, domain
++        )
++
++    def _projection_run(
++        self, representation, phi, blocks, evaluation, options, known, domain
++    ):
++        """Newton on scalar rows, with independently checked projection bounds.
++
++        Trial points pass the complete curvature search before normalization.
++        A rejected endpoint queues its rows while line search retains one
++        accepted step, as in the native loop. SciPy does not expose NNLS's
++        internal iteration count; ``subproblem_iterations`` continues to count
++        native interior-point iterations only.
++        """
++        params = np.asarray(phi).copy()
++        dual = np.zeros(representation.n_rows)
++        queued = []
++        bound = np.inf
++        status = "iteration_limit"
++        evaluations = 0
++        for iteration in range(options.max_iterations):
++            _check_fit_time("projection Newton")
++            try:
++                sub = _linear_subproblem(
++                    evaluation.hessian,
++                    evaluation.gradient,
++                    params,
++                    representation.b_matrix,
++                )
++            except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
++                _reraise_if_debug(exc, "projection subproblem", routine=True)
++                run, pending = self._native_run(
++                    representation, params, blocks, evaluation, options, known, domain
++                )
++                return (
++                    _NewtonRun(
++                        run.status,
++                        run.params,
++                        run.blocks,
++                        run.dual,
++                        run.evaluation,
++                        iteration + run.iterations,
++                        evaluations + run.evaluations,
++                        run.subproblem_iterations,
++                        run.decrease_bound,
++                    ),
++                    pending,
++                )
++            predicted = max(0.0, -sub.model_value)
++            bound = predicted + max(0.0, sub.gap)
++            dual = sub.dual
++            if bound <= options.certified_tolerance:
++                status = "converged"
++                break
++            if bound <= options.accuracy_floor:
++                status = "converged_approximately"
++                break
++            delta = sub.params - params
++            slope = float(evaluation.gradient @ delta)
++            if not math.isfinite(slope) or slope >= 0.0:
++                status = "non_descent"
++                break
++            alpha = 1.0
++            accepted = False
++            for _ in range(options.max_line_search):
++                _check_fit_time("projection line search")
++                trial = params + alpha * delta
++                full = self.full(trial)
++                separation = self.curvature.separate(full, self.curvature_options)
++                if separation.status != "nonnegative":
++                    if not queued:
++                        queued = [
++                            (
++                                _TrialCuts(
++                                    k, part.cut_points, part.cut_rows, part.domain
++                                ),
++                                full,
++                            )
++                            for k, part in enumerate(separation.parts)
++                        ]
++                    alpha *= options.backtrack
++                    continue
++                evaluations += 1
++                try:
++                    candidate = self(trial)
++                except _ImproperPotential:
++                    alpha *= options.backtrack
++                    continue
++                except (_QuadratureFailure, ValueError, OverflowError) as exc:
++                    _reraise_if_debug(exc, "projection trial evaluation")
++                    alpha *= options.backtrack
++                    continue
++                rounding = 8.0 * np.finfo(float).eps * max(1.0, abs(evaluation.nll))
++                if (
++                    candidate.nll <= evaluation.nll + options.armijo * alpha * slope
++                    or (
++                        predicted <= 1e-9 and candidate.nll <= evaluation.nll + rounding
++                    )
++                ):
++                    accepted = True
++                    break
++                alpha *= options.backtrack
++            if not accepted:
++                status = "line_search_failed"
++                if bound <= options.accuracy_floor:
++                    status = (
++                        "converged"
++                        if bound <= options.certified_tolerance
++                        else "converged_approximately"
++                    )
++                break
++            params, evaluation = trial, candidate
++            slack = representation.b_matrix @ params
++            blocks = (
++                tuple(np.array([[v]]) for v in slack)
++                if np.all(slack > 0.0)
++                else tuple(np.ones((1, 1)) for _ in slack)
++            )
++            if queued:
++                # The bound belongs to the point before this step. The next
++                # exchange must certify its accepted endpoint anew.
++                bound, status = np.inf, "cut_required"
++                iteration += 1
++                break
++        else:
++            iteration = options.max_iterations
++            bound = np.inf
++        return (
++            _NewtonRun(
++                status,
++                params,
++                blocks,
++                dual,
++                evaluation,
++                iteration,
++                evaluations,
++                0,
++                float(bound),
++            ),
++            queued,
++        )
++
++    def _native_run(
++        self, representation, phi, blocks, evaluation, options, known, domain
++    ):
+         """One gated Newton run in the fused compiled loop.
+ 
+         Parameters
+@@ -1039,6 +1211,27 @@
+     return phi
+ 
+ 
++def _checked_row_polish(objective, rows, phi, evaluation, scales, /):
++    """Keep a row repair only when its actual likelihood does not worsen.
++
++    A coefficient-small correction can be large in the Fisher metric.
++    Returning a changed point requires a fresh optimization certificate;
++    the caller must not carry the incumbent's Newton bound to that point.
++    """
++    candidate = _polish(rows, phi, scales)
++    if candidate is phi:
++        return phi, evaluation, False
++    try:
++        trial = objective(candidate)
++    except (_QuadratureFailure, ValueError, OverflowError) as exc:
++        _reraise_if_debug(exc, "row feasibility polish", routine=True)
++        return phi, evaluation, False
++    roundoff = 8.0 * np.finfo(float).eps * max(1.0, abs(evaluation.nll))
++    if not math.isfinite(trial.nll) or trial.nll > evaluation.nll + roundoff:
++        return phi, evaluation, False
++    return candidate, trial, True
++
++
+ @dataclass
+ class _Problem:
+     """Mutable bookkeeping of one fit (rows grow, counters accumulate)."""
+@@ -1058,7 +1251,7 @@
+     exchanges: int = 0
+ 
+ 
+-def _toward_anchor(rows, phi, anchor, scales, /):
++def _toward_anchor(rows, phi, anchor, scales, /, *, objective=None):
+     """Restore new rows exactly by moving toward a globally convex anchor.
+ 
+     A point whose curvature search found ``q'' >= 0`` everywhere satisfies
+@@ -1080,6 +1273,8 @@
+         Globally convex point of the face.
+     scales : numpy.ndarray
+         Subproblem column scales (for the final polish).
++    objective : callable or None
++        When supplied, assess a final rounding repair in the actual objective.
+ 
+     Returns
+     -------
+@@ -1108,7 +1303,11 @@
+     out = phi + t * (anchor - phi)
+     # The ratio test lands on the binding rows up to rounding.
+     if np.min(rows.slack(out)) < 0.0:
+-        out = _polish(rows, out, scales)
++        if objective is None:
++            out = _polish(rows, out, scales)
++        else:
++            evaluation = objective(out)
++            out, _, _ = _checked_row_polish(objective, rows, out, evaluation, scales)
+     return out
+ 
+ 
+@@ -1194,7 +1393,7 @@
+         anchor = _face_anchor(problem, face, basis, face_obj, curvature)
+         start_rows = _active_rows(problem, face, basis)
+         scales = _column_scales(start_rows, face_obj(phi).hessian)
+-        phi = _toward_anchor(start_rows, phi, anchor, scales)
++        phi = _toward_anchor(start_rows, phi, anchor, scales, objective=face_obj)
+     elif start_rows.size and (np.min(slack) < -floor or np.any(slack[growth] <= 0.0)):
+         # A start outside the face's rows or without strict outward growth
+         # (a cold start projected onto a leader face can lose its growth,
+@@ -1204,6 +1403,7 @@
+     status, bound = "iteration_limit", np.inf
+     separation = None
+     queued = []
++    repair_pending = False
+     for exchange in range(problem.max_exchanges + 1):
+         _check_fit_time("curvature exchange")
+         theta = face_obj.full(phi)
+@@ -1224,7 +1424,9 @@
+             + len(problem.scoped_points)
+             - before
+         )
+-        if exchange > 0 and added == 0:
++        must_recertify = repair_pending
++        repair_pending = False
++        if exchange > 0 and added == 0 and not must_recertify:
+             # No new violated curvature row was found.  The unchanged
+             # linear relaxation needs no extra contact-model polish round.
+             break
+@@ -1274,7 +1476,7 @@
+                 representation = _linear_representation(rows)
+                 scales = _column_scales(rows, evaluation.hessian)
+                 slack = rows.slack(phi)
+-            phi = _toward_anchor(rows, phi, anchor, scales)
++            phi = _toward_anchor(rows, phi, anchor, scales, objective=face_obj)
+             evaluation = face_obj(phi)
+             slack = rows.slack(phi)
+         # All Gram blocks are scalar slacks.  A boundary or slightly
+@@ -1298,9 +1500,33 @@
+         problem.subproblem_iterations += run.subproblem_iterations
+         phi, evaluation = run.params, run.evaluation
+         status, bound = run.status, run.decrease_bound
+-        polished = _polish(rows, phi, scales)
+-        if polished is not phi:
+-            phi, evaluation = polished, face_obj(polished)
++        phi, evaluation, repair_pending = _checked_row_polish(
++            face_obj, rows, phi, evaluation, scales
++        )
++        if repair_pending:
++            status, bound = "iteration_limit", np.inf
++            if run.status in _CONVERGED:
++                # Certify the repaired point without taking another step:
++                # another full Newton run can return the same boundary
++                # rounding error and repeat an otherwise harmless repair.
++                slack = rows.slack(phi)
++                gram = (
++                    tuple(np.array([[v]]) for v in slack)
++                    if np.all(slack > 0.0)
++                    else _unit_blocks(rows)
++                )
++                sub, _, _, model = _preconditioned_subproblem(
++                    evaluation.hessian, evaluation.gradient, phi, representation, gram
++                )
++                problem.subproblem_iterations += sub.iterations
++                bound = max(0.0, -model) + max(0.0, sub.gap)
++                if bound <= problem.options.accuracy_floor:
++                    status = (
++                        "converged"
++                        if bound <= problem.options.certified_tolerance
++                        else "converged_approximately"
++                    )
++                    repair_pending = False
+         # A run that did not converge continues the exchange: it may have
+         # failed in a region the missing cuts exclude (a degree-8 fit with 7
+         # rows reached a bimodal q, where the subproblem broke down).  The
+--- a/gibbus/_fit/basis_selection.py
++++ b/gibbus/_fit/basis_selection.py
+@@ -782,20 +782,31 @@
+         )
+     start = _lift_matrix(previous.model, model) @ previous.result.params
+     face = _face_of(previous.model, previous.result)
++    interior_first = (
++        isinstance(data, _PointData)
++        and model.request.bulk_degree >= 10
++        and model.request.lower_infinite != model.request.upper_infinite
++        and model.request.lower_tail is None
++        and model.request.upper_tail is None
++    )
+     result = _solve_basis(
+-        objective, options=options, start=start, start_face=face, leader_restart=True
++        objective,
++        options=options,
++        start=start,
++        start_face=face,
++        interior_lift=interior_first,
++        leader_restart=True,
+     )
+     if result.status not in _CONVERGED:
+-        # The lift lies on this basis's improper boundary (zero new leader),
+-        # where the face's cold start replaces it; the second start moves it
+-        # into the interior instead (G3-047).  Only a converged second start
+-        # replaces the first.
++        # Try the alternative treatment of a zero new leader: a bounded
++        # interior lift or the face's own cold start. Only a converged
++        # second start replaces the first.
+         lifted = _solve_basis(
+             objective,
+             options=options,
+             start=start,
+             start_face=face,
+-            interior_lift=True,
++            interior_lift=not interior_first,
+             leader_restart=True,
+         )
+         if lifted.status in _CONVERGED:
+@@ -812,12 +823,12 @@
+ def _worse_than_nested(result, smaller, options, /):
+     """Whether a converged fit is worse than a fit of a family it contains.
+ 
+-    The larger family's optimum is at most the smaller fit's NLL, and a fit's
+-    status promises its NLL to within that status's tolerance of the optimum
+-    (``certified_tolerance`` for ``converged``, ``accuracy_floor`` for
+-    ``converged_approximately``), so only an excess beyond the promise (and
+-    the NLL's roundoff) is a defect.  A fixed 1e-12 called a correct
+-    ``converged`` fit 2.4e-12 above its nested start an internal error.
++    The larger family's optimum is at most the smaller fit's NLL. An excess
++    beyond the solver's status tolerance and likelihood roundoff therefore
++    signals unresolved optimization, rather than a distinct local minimum.
++    The comparison uses ``certified_tolerance`` for ``converged`` and
++    ``accuracy_floor`` for ``converged_approximately``; the Newton stopping
++    criterion alone is not a global likelihood-error bound.
+ 
+     Parameters
+     ----------
+@@ -899,13 +910,40 @@
+     )
+     if spec.bulk_degree != _AUTO:
+         model = data.build(base)
++        seed = None
++        if (
++            isinstance(data, _PointData)
++            and int(spec.bulk_degree) >= 10
++            and math.isinf(float(spec.support[0])) != math.isinf(float(spec.support[1]))
++            and spec.lower_tail is None
++            and spec.upper_tail is None
++        ):
++            # Keep a well-resolved nested seed even when intermediate high
++            # degrees cannot be fitted. A failed rung must not prevent a
++            # larger requested family from using that valid starting density.
++            seed = _fit_degree(
++                dataclasses.replace(spec, bulk_degree=6),
++                lower,
++                upper,
++                data,
++                config,
++                options,
++            )
++            if seed.result.status in _CONVERGED:
++                result = _warm_fit(model, data, options, seed)
++                if result.status in _CONVERGED:
++                    return _Stage(model, result, ())
+         result = _warm_fit(model, data, options, None)
+         smaller = [
+             d
+             for d in _admissible_degrees(tuple(spec.support), int(spec.bulk_degree) - 1)
+             if int(d) >= int(AUTO_POLY_DEGREE_MIN)
+         ]
+-        if result.status not in _CONVERGED and smaller:
++        if (
++            result.status not in _CONVERGED
++            and smaller
++            and (seed is None or seed.result.status not in _CONVERGED)
++        ):
+             # Second start (G3-047): the lifted fit of the next smaller
+             # admissible degree, itself fitted by this rule.  A cold degree-8
+             # fit of 600 normal draws stalled at NLL 1.39480, above the
+--- /dev/null
++++ b/gibbus/_fit/linear_qp.py
+@@ -0,0 +1,143 @@
++"""Projection solve for homogeneous scalar-inequality Newton models.
++
++For ``H = L L.T``, the coordinates ``x = L.T theta`` turn the model into
++Euclidean projection of its unconstrained optimum ``u`` onto ``C x >= 0``.
++Moreau decomposition reduces its dual to ``nnls(C.T, -u)``. The active span
++is small even when the curvature exchange has retained many similar rows.
++The returned gap is checked against the original model, not the Cholesky
++factor's nearby model. A direction may be useful even when that bound cannot
++be resolved; an infinite bound never licenses convergence.
++"""
++
++from dataclasses import dataclass
++
++import numpy as np
++from scipy.linalg import solve_triangular
++from scipy.optimize import nnls
++
++
++@dataclass(frozen=True)
++class _LinearQPResult:
++    params: np.ndarray
++    dual: np.ndarray
++    model_value: float
++    gap: float
++
++
++def _strict_direction(rows):
++    """Projection solution of a small homogeneous max-margin problem.
++
++    Project ``(0, 1)`` onto ``rows @ v >= t >= 0``. A positive ``t``
++    supplies a strict direction without a separate linear-program solver or
++    process-global scheduler state.
++    """
++    n, m = rows.shape[1], rows.shape[0]
++    augmented = np.vstack([np.c_[rows, -np.ones(m)], np.eye(n + 1)[-1]])
++    target = np.eye(n + 1)[-1]
++    dual, _ = nnls(augmented.T, -target, maxiter=10 * max(augmented.shape))
++    point = target + augmented.T @ dual
++    direction, margin = point[:-1], point[-1]
++    if margin <= 0.0 or np.min(rows @ direction) < 0.5 * margin:
++        raise np.linalg.LinAlgError("unresolved quadratic interior")
++    return direction
++
++
++def _linear_subproblem(hessian, gradient, params, rows, /):
++    """Solve a positive-definite quadratic over ``rows @ theta >= 0``.
++
++    All returned bounds concern the coefficient-space quadratic. A lower
++    eigenvalue estimate includes a conservative matrix/eigensolver rounding
++    allowance. When it is not positive the bound is infinite, even if NNLS
++    finds a useful direction. Residuals and model values are accumulated in
++    extended precision where available, with an arithmetic error allowance.
++    """
++    h = np.asarray(hessian, dtype=float)
++    g = np.asarray(gradient, dtype=float)
++    theta = np.asarray(params, dtype=float)
++    b = np.asarray(rows, dtype=float)
++    diagonal = np.diag(h)
++    if np.any(diagonal <= 0.0) or not np.all(np.isfinite(h)):
++        raise np.linalg.LinAlgError("unresolved quadratic metric")
++    d = 1.0 / np.sqrt(diagonal)
++    hs = d[:, None] * (0.5 * (h + h.T)) * d[None, :]
++    gs = d * g
++    t = theta / d
++    bs = b * d
++    magnitude = np.linalg.norm(bs, axis=1)
++    if np.any(magnitude <= 0.0) or not np.all(np.isfinite(magnitude)):
++        raise np.linalg.LinAlgError("unresolved quadratic constraints")
++    bs = bs / magnitude[:, None]
++    factor = np.linalg.cholesky(hs)
++    a = solve_triangular(factor, bs.T, lower=True)
++    u = factor.T @ t - solve_triangular(factor, gs, lower=True)
++    z, _ = nnls(a, -u, maxiter=10 * max(a.shape))
++    active = z > 0.0
++    if np.any(active):
++        vectors, singular, _ = np.linalg.svd(a[:, active], full_matrices=True)
++        cut = np.finfo(float).eps * max(a.shape) * singular[0]
++        rank = int(np.count_nonzero(singular > cut))
++        null = vectors[:, rank:]
++        x = null @ (null.T @ u)
++    else:
++        x = u
++    p = solve_triangular(factor.T, x, lower=False)
++
++    # A floating projection can miss active inequalities. Restore the QP
++    # endpoint itself; its new objective and residual are certified below.
++    slack = bs @ p
++    if np.min(slack) < 0.0:
++        direction = _strict_direction(bs)
++        margin = bs @ direction
++        if np.min(margin) <= 0.0:
++            raise np.linalg.LinAlgError("unresolved quadratic interior")
++        floor = 16.0 * np.finfo(float).eps * np.maximum(1.0, np.abs(bs) @ np.abs(p))
++        p = p + max(0.0, float(np.max((floor - slack) / margin))) * direction
++
++    endpoint = d * p
++    wide = np.longdouble
++    dw = np.asarray(d, dtype=wide)
++    hw = np.asarray(h, dtype=wide)
++    hw = 0.5 * (hw + hw.T) * dw[:, None] * dw[None, :]
++    gw = np.asarray(g, dtype=wide) * dw
++    bw = np.asarray(b, dtype=wide) * dw / np.asarray(magnitude, dtype=wide)[:, None]
++    zw = np.asarray(z, dtype=wide)
++    pw = np.asarray(endpoint, dtype=wide) / dw
++    delta = (np.asarray(endpoint, dtype=wide) - np.asarray(theta, dtype=wide)) / dw
++    slacks = bw @ pw
++    stationarity = hw @ delta + gw - bw.T @ zw
++    eps = np.finfo(wide).eps
++    error = (
++        16.0
++        * max(b.shape)
++        * eps
++        * (np.abs(hw) @ np.abs(delta) + np.abs(gw) + np.abs(bw).T @ np.abs(zw))
++    )
++    lower = float(np.linalg.eigvalsh(hs)[0]) - (
++        32.0 * t.size * np.finfo(float).eps * np.linalg.norm(hs, ord=np.inf)
++    )
++    gap = np.inf
++    if lower > 0.0 and np.min(slacks) >= 0.0:
++        pairing = zw @ slacks
++        pairing_error = (
++            16.0 * max(b.shape) * eps * (np.abs(zw) @ (np.abs(bw) @ np.abs(pw)))
++        )
++        gap = float(
++            pairing
++            + pairing_error
++            + 0.5 * np.sum((np.abs(stationarity) + error) ** 2) / lower
++        )
++    model = float(gw @ delta + 0.5 * delta @ hw @ delta)
++    if np.isfinite(gap):
++        gap += float(
++            16.0
++            * t.size
++            * eps
++            * (
++                np.abs(gw) @ np.abs(delta)
++                + 0.5 * np.abs(delta) @ np.abs(hw) @ np.abs(delta)
++            )
++            + np.finfo(float).eps * abs(model)
++        )
++    if not np.all(np.isfinite(endpoint)) or not np.isfinite(model):
++        raise np.linalg.LinAlgError("unresolved quadratic endpoint")
++    return _LinearQPResult(endpoint, -z / magnitude, model, gap)
+--- a/tests/test_numerical_regressions.py
++++ b/tests/test_numerical_regressions.py
+@@ -158,9 +158,9 @@
+ def test_reported_nll_matches_high_degree_lognormal():
+     """The stored NLL must remain exact for a high-degree lognormal fit.
+ 
+-    Formerly open item OI-E2-4 (degree 12, Hessian condition 1e20): the fit
+-    now certifies since a shape-rejected trial step is shortened by an exact
+-    ratio test instead of halved (G3-060).
++    High monomial degrees on a half-line stress numerical conditioning.
++    Likelihood accounting is checked after the fit obtains a convergence
++    certificate; shape feasibility alone is insufficient.
+     """
+     rng = np.random.default_rng(0)
+     data = rng.lognormal(0.0, 1.0, 1200)
+@@ -309,7 +309,7 @@
+ 
+ 
+ # --------------------------------------------------------------------------
+-# High-degree fitting must retain a numerically sound likelihood basin
++# High-degree fitting must retain numerical likelihood accuracy
+ # --------------------------------------------------------------------------
+ 
+ 
+@@ -323,8 +323,8 @@
+         "request fails loudly (G3-048)"
+     ),
+ )
+-def test_high_degree_fit_retains_a_sound_likelihood_basin():
+-    """A high-degree fit must avoid a materially inferior numerical basin."""
++def test_high_degree_fit_retains_likelihood_accuracy():
++    """A high-degree fit must reach an accurate requested-family solution."""
+     data = np.ascontiguousarray(np.random.default_rng(0).lognormal(0.0, 1.0, 3000))
+ 
+     fitted = Distribution().fit(
+--- /dev/null
++++ b/tests/test_linear_qp.py
+@@ -0,0 +1,91 @@
++"""Projection QP endpoints and bounds against enumerated active faces."""
++
++import itertools
++
++import numpy as np
++import pytest
++
++from gibbus._fit.linear_qp import _linear_subproblem
++
++
++def _face_optimum(h, g, theta, b):
++    best = np.inf
++    for count in range(h.shape[0] + 1):
++        for subset in itertools.combinations(range(len(b)), count):
++            a = b[list(subset)]
++            kkt = np.block([[h, -a.T], [a, np.zeros((count, count))]])
++            try:
++                solution = np.linalg.solve(kkt, np.r_[h @ theta - g, np.zeros(count)])
++            except np.linalg.LinAlgError:
++                continue
++            point, dual = solution[: len(theta)], solution[len(theta) :]
++            if np.min(b @ point) < -1e-10 or (count and np.min(dual) < -1e-10):
++                continue
++            delta = point - theta
++            best = min(best, g @ delta + 0.5 * delta @ h @ delta)
++    assert np.isfinite(best)
++    return best
++
++
++def _problem(seed):
++    rng = np.random.default_rng(seed)
++    factor = rng.normal(size=(3, 3))
++    h = factor @ factor.T + np.eye(3)
++    g, theta = rng.normal(size=(2, 3))
++    # This cone has a strict interior and several redundant constraints.
++    b = np.array(
++        [
++            [1.0, 1.0, 0.0],
++            [1.0, -1.0, 0.0],
++            [1.0, 0.0, 1.0],
++            [1.0, 0.0, -1.0],
++            [1.0, 0.0, 0.0],
++            [2.0, 0.0, 0.0],
++        ]
++    )
++    return h, g, theta, b
++
++
++@pytest.mark.parametrize("seed", range(8))
++def test_projection_gap_bounds_independent_active_face_solution(seed):
++    h, g, theta, b = _problem(seed)
++    result = _linear_subproblem(h, g, theta, b)
++    assert np.min(b @ result.params) >= -1e-12
++    assert np.all(result.dual <= 0.0)
++    assert 0.0 <= result.gap < 1e-8
++    optimum = _face_optimum(h, g, theta, b)
++    assert result.model_value - optimum <= result.gap + 1e-12
++    assert result.model_value == pytest.approx(optimum, abs=1e-9)
++
++
++def test_projection_does_not_depend_on_an_unrelated_lp_scheduler():
++    from scipy.optimize import linprog
++
++    # Other callers may initialize HiGHS with its default worker settings.
++    # Row restoration must not request a conflicting global scheduler.
++    result = linprog([1.0], bounds=[(0.0, 1.0)], method="highs")
++    assert result.success
++    h, g, theta, b = _problem(0)
++    projection = _linear_subproblem(h, g, theta, b)
++    assert np.isfinite(projection.gap)
++    assert np.min(b @ projection.params) >= -1e-12
++
++
++def test_unresolved_metric_cannot_supply_a_convergence_bound():
++    h = np.array([[1.0, 1.0 - 1e-15], [1.0 - 1e-15, 1.0]])
++    result = _linear_subproblem(h, np.array([1.0, -1.0]), np.ones(2), np.eye(2))
++    assert np.isinf(result.gap)
++
++
++def test_projection_is_invariant_to_large_diagonal_coordinate_changes():
++    h = np.array([[2.0, 0.2, 0.1], [0.2, 3.0, 0.4], [0.1, 0.4, 1.0]])
++    g, theta = np.array([1.0, -2.0, 3.0]), np.ones(3)
++    b = np.eye(3)
++    expected = _linear_subproblem(h, g, theta, b)
++    scale = np.array([1e-10, 1.0, 1e10])
++    result = _linear_subproblem(
++        h * scale[:, None] * scale[None, :], g * scale, theta / scale, b * scale
++    )
++    np.testing.assert_allclose(result.params * scale, expected.params, atol=1e-12)
++    assert result.model_value == pytest.approx(expected.model_value, abs=1e-12)
++    assert np.isfinite(result.gap)
+--- /dev/null
++++ b/tests/test_solver_feasibility_repairs.py
+@@ -0,0 +1,89 @@
++"""Row restoration must preserve objective progress and certify its result."""
++
++from types import SimpleNamespace
++
++import numpy as np
++
++from gibbus._fit.basis_constraints import _ConstraintRows
++from gibbus._fit.basis_newton import _checked_row_polish
++
++
++def test_tiny_coefficient_repair_cannot_hide_large_likelihood_cost():
++    rows = _ConstraintRows(np.array([[1.0, 0.0]]), ("cut",))
++    phi = np.array([-1e-14, 1.0])
++    original = SimpleNamespace(nll=0.0)
++
++    def objective(candidate):
++        # The first coordinate is highly informative despite its tiny size.
++        return SimpleNamespace(nll=0.5e28 * (candidate[0] - phi[0]) ** 2)
++
++    out, evaluation, changed = _checked_row_polish(
++        objective, rows, phi, original, np.ones(2)
++    )
++    assert out is phi
++    assert evaluation is original
++    assert not changed
++
++
++def test_likelihood_improving_row_repair_returns_its_own_evaluation():
++    rows = _ConstraintRows(np.eye(2), ("cut", "log"))
++    phi = np.array([1.0, -np.finfo(float).eps / 4])
++    original = SimpleNamespace(nll=-phi[1])
++
++    def objective(candidate):
++        assert candidate[1] >= 0.0
++        return SimpleNamespace(nll=-candidate[1])
++
++    out, evaluation, changed = _checked_row_polish(
++        objective, rows, phi, original, np.array([1.0, 100.0])
++    )
++    assert changed
++    assert out[1] >= 0.0
++    assert evaluation.nll == -out[1]
++    assert evaluation.nll <= original.nll
++
++
++def test_repaired_endpoint_cannot_keep_a_pre_repair_certificate(monkeypatch):
++    from gibbus import BasisSpec
++    from gibbus._fit import basis_newton as bn
++    from gibbus._fit.basis_objective import _BasisPointObjective, _point_statistics
++    from gibbus._fit.conic_newton import _NewtonRun
++    from gibbus._model.basis import _build_basis
++    from gibbus._model.basis_normalizer import _NormalizerContext
++
++    data = np.linspace(-0.9, 0.9, 21)
++    model = _build_basis(
++        BasisSpec(
++            support=(-1.0, 1.0),
++            bulk_degree=2,
++            log_lower=False,
++            log_upper=False,
++            expansion="minimal",
++        ),
++        data,
++    )
++    objective = _BasisPointObjective(
++        _NormalizerContext(model), _point_statistics(model, data)
++    )
++
++    def supposedly_converged(self, rep, phi, blocks, evaluation, *args):
++        point = np.array([0.0, -1e-14])
++        state = self(point)
++        return (
++            _NewtonRun(
++                "converged", point, blocks, np.zeros(rep.n_rows), state, 0, 1, 0, 1e-14
++            ),
++            [],
++        )
++
++    monkeypatch.setattr(bn._FaceObjective, "run", supposedly_converged)
++    monkeypatch.setattr(
++        bn,
++        "_preconditioned_subproblem",
++        lambda *args: (SimpleNamespace(gap=np.inf, iterations=0), None, None, 0.0),
++    )
++    # One exchange allows the first solve and repair, but not certification
++    # of the changed endpoint. Its inherited tiny bound must be discarded.
++    result = bn._solve_basis(objective, max_exchanges=1)
++    assert result.status not in bn._CONVERGED
++    assert np.isinf(result.final_decrease_bound)

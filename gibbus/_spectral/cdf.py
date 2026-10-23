@@ -87,10 +87,10 @@ def density_spec(components, /, *, view):
     Parameters
     ----------
     components : sequence of tuple
-        Per component ``(q_poly, Lz, Uz, aL, aU, log_norm, mu, sigma, jf,
-        weight, lo, hi)``: the canonical kernel of ``_pdf_vec`` at
-        ``z = sigma x + mu``, times ``jf * weight``, masked to ``[lo, hi]``
-        when ``view``.
+        Per component ``(kernel, theta, Lz, Uz, log_norm, mu, sigma, jf,
+        weight, lo, hi)``: the canonical density of the compiled basis
+        ``kernel`` with coefficients ``theta`` at ``z = sigma x + mu``, times
+        ``jf * weight``, masked to ``[lo, hi]`` when ``view``.
     view : bool
         Whether the components are public-coordinate views.
 
@@ -225,46 +225,6 @@ class _Map:
                 t = -1.0 + (z + 1.0) * dt_dz
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
                 return (2.0 * self.scale * (1.0 + t * t) / (1.0 - t * t) ** 2) * dt_dz
-        raise RuntimeError("unknown map kind")
-
-    def z_from_x(self, x):
-        """Map physical coordinates back to compact ones.
-
-        Parameters
-        ----------
-        x : array_like
-            Physical coordinates.
-
-        Returns
-        -------
-        numpy.ndarray
-            Compact coordinates in ``[-1, 1]``.
-        """
-        x = np.asarray(x, dtype=np.float64)
-        if self.kind == "finite":
-            return (x - self.center) / self.scale
-        if self.kind == "lower":
-            y = (x - self.L) / self.scale
-            with np.errstate(divide="ignore", invalid="ignore"):
-                return (y - 1.0) / (y + 1.0)
-        if self.kind == "upper":
-            y = (self.U - x) / self.scale
-            with np.errstate(divide="ignore", invalid="ignore"):
-                return (1.0 - y) / (1.0 + y)
-        if self.kind == "real":
-            y = (x - self.center) / self.scale
-            # Stable inverse of y = 2 z / (1-z^2).
-            return y / (1.0 + np.hypot(1.0, y))
-        if self.kind in ("lower_centered", "upper_centered"):
-            y = (x - self.center) / self.scale
-            t = y / (1.0 + np.hypot(1.0, y))
-            if self.kind == "lower_centered":
-                y_edge = (self.L - self.center) / self.scale
-                t_edge = y_edge / (1.0 + np.hypot(1.0, y_edge))
-                return 2.0 * (t - t_edge) / (1.0 - t_edge) - 1.0
-            y_edge = (self.U - self.center) / self.scale
-            t_edge = y_edge / (1.0 + np.hypot(1.0, y_edge))
-            return 2.0 * (t + 1.0) / (t_edge + 1.0) - 1.0
         raise RuntimeError("unknown map kind")
 
 

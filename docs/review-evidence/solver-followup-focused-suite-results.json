@@ -1,0 +1,611 @@
+{
+  "collection": 119,
+  "counts": {
+    "passed": 119,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0,
+    "xfailed": 0
+  },
+  "suite_seconds": [
+    209.922
+  ],
+  "unfinished": 0,
+  "cases": [
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_one_component_joint_diagnostic_is_the_single_fit_diagnostic[points]",
+      "outcome": "passed",
+      "seconds": 0.121
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_joint_gradient_and_observed_hessian_are_the_derivatives[points-spec0-x0-support0]",
+      "outcome": "passed",
+      "seconds": 0.191
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_one_component_joint_diagnostic_is_the_single_fit_diagnostic[intervals]",
+      "outcome": "passed",
+      "seconds": 0.122
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_joint_gradient_and_observed_hessian_are_the_derivatives[intervals-spec1-x1-support1]",
+      "outcome": "passed",
+      "seconds": 0.201
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_one_component_automatic_fit_is_the_single_fit",
+      "outcome": "passed",
+      "seconds": 0.377
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_joint_gradient_and_observed_hessian_are_the_derivatives[points-spec2-x2-support2]",
+      "outcome": "passed",
+      "seconds": 0.07
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_joint_gradient_and_observed_hessian_are_the_derivatives[intervals-spec3-x3-support3]",
+      "outcome": "passed",
+      "seconds": 0.094
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_one_component_is_the_single_fit_objective[points]",
+      "outcome": "passed",
+      "seconds": 0.016
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_one_component_is_the_single_fit_objective[intervals]",
+      "outcome": "passed",
+      "seconds": 0.008
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_em_surrogate_has_the_observed_gradient[points-spec0-x0-support0]",
+      "outcome": "passed",
+      "seconds": 0.014
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_shared_log_is_kept_or_dropped_by_its_likelihood_ratio",
+      "outcome": "passed",
+      "seconds": 0.896
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_em_surrogate_has_the_observed_gradient[intervals-spec1-x1-support1]",
+      "outcome": "passed",
+      "seconds": 0.024
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_em_surrogate_has_the_observed_gradient[points-spec2-x2-support2]",
+      "outcome": "passed",
+      "seconds": 0.028
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_em_surrogate_has_the_observed_gradient[intervals-spec3-x3-support3]",
+      "outcome": "passed",
+      "seconds": 0.022
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_stacked_m_step_without_shared_columns_is_independent_fits",
+      "outcome": "passed",
+      "seconds": 0.521
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_stacked_m_step_is_invariant_to_component_order",
+      "outcome": "passed",
+      "seconds": 0.692
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_every_kept_mixture_extension_passed_its_likelihood_ratio",
+      "outcome": "passed",
+      "seconds": 1.381
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_two_normal_fit_is_the_exact_mixture_mle[points]",
+      "outcome": "passed",
+      "seconds": 1.409
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_failed_fixed_degree_mixture_invokes_lower_degree_retry",
+      "outcome": "passed",
+      "seconds": 0.25
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_lower_degree_retry_lifts_back_to_the_requested_degree",
+      "outcome": "passed",
+      "seconds": 0.699
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_two_normal_fit_is_the_exact_mixture_mle[binned]",
+      "outcome": "passed",
+      "seconds": 2.084
+    },
+    {
+      "nodeid": "tests/test_basis_mixture.py::test_converged_fixed_degree_mixture_skips_lower_degree_retry",
+      "outcome": "passed",
+      "seconds": 1.321
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_extreme_lower_tail_cdf_roundtrips_single_component",
+      "outcome": "passed",
+      "seconds": 0.222
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_exp_statistics_propagate_overflow_instead_of_reporting_degeneracy",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_exp_statistics_report_divergent_higher_moments_without_nan_cancellation",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_zero_weight_mixture_component_cannot_contaminate_exp_moments",
+      "outcome": "passed",
+      "seconds": 0.368
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_extreme_lower_tail_cdf_roundtrips_mixture",
+      "outcome": "passed",
+      "seconds": 0.536
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_auto_is_the_default_expansion",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_growth_strictly_enlarges_the_span_with_an_exact_lift",
+      "outcome": "passed",
+      "seconds": 0.06
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_minimal_family_data_keep_the_minimal_span[0]",
+      "outcome": "passed",
+      "seconds": 0.062
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_minimal_family_data_keep_the_minimal_span[1]",
+      "outcome": "passed",
+      "seconds": 0.101
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_point_fit_is_invariant_to_extreme_global_weight_scale",
+      "outcome": "passed",
+      "seconds": 0.269
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_minimal_family_data_keep_the_minimal_span[2]",
+      "outcome": "passed",
+      "seconds": 0.073
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_minimal_family_data_keep_the_minimal_span[3]",
+      "outcome": "passed",
+      "seconds": 0.096
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_joint_gate_is_calibrated_on_minimal_family_data",
+      "outcome": "passed",
+      "seconds": 3.251
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_bounded_fit_survives_support_only_256_ulps_wide",
+      "outcome": "passed",
+      "seconds": 0.07
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_endpoint_concentrated_bounded_fit_keeps_explicit_lower_boundary_basis",
+      "outcome": "passed",
+      "seconds": 0.816
+    },
+    {
+      "nodeid": "tests/test_adversarial_numerics.py::test_nearly_coincident_forced_mixture_remains_certified",
+      "outcome": "passed",
+      "seconds": 3.462
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_skewed_data_gain_converged_convex_extensions[1]",
+      "outcome": "passed",
+      "seconds": 0.265
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_skewed_data_gain_converged_convex_extensions[2]",
+      "outcome": "passed",
+      "seconds": 0.389
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_skewed_data_gain_converged_convex_extensions[3]",
+      "outcome": "passed",
+      "seconds": 21.841
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_inputs_resolve_log_policy_with_g1_endpoint_rules",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_automatic_degree_and_logs_converge_convex[normal-line]",
+      "outcome": "passed",
+      "seconds": 0.036
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_automatic_degree_and_logs_converge_convex[bimodal-line]",
+      "outcome": "passed",
+      "seconds": 46.468
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_warm_started_extensions_are_no_worse_than_their_start",
+      "outcome": "passed",
+      "seconds": 1.954
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_explicit_full_is_returned_when_it_converges",
+      "outcome": "passed",
+      "seconds": 31.677
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_automatic_degree_and_logs_converge_convex[gumbel-line]",
+      "outcome": "passed",
+      "seconds": 0.276
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_automatic_degree_and_logs_converge_convex[gamma-half-log]",
+      "outcome": "passed",
+      "seconds": 0.068
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_automatic_degree_and_logs_converge_convex[beta-bounded-logs]",
+      "outcome": "passed",
+      "seconds": 0.106
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_automatic_degree_and_logs_converge_convex[uniform-bounded-logs]",
+      "outcome": "passed",
+      "seconds": 0.305
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_boundary_terms_are_kept_or_dropped_by_the_lr_test",
+      "outcome": "passed",
+      "seconds": 0.352
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_fully_automatic_tail_fit_is_converged_and_convex",
+      "outcome": "passed",
+      "seconds": 0.169
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_generated_invalid_constraints_raise_runtime_error",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_exponential_tail_far_cut_recovers_converged_certificate",
+      "outcome": "passed",
+      "seconds": 56.16
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_explicit_full_fails_loudly_with_the_supported_span",
+      "outcome": "passed",
+      "seconds": 0.023
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_face_basis_keeps_exact_unit_columns",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_toward_anchor_reaches_feasibility_on_the_segment",
+      "outcome": "passed",
+      "seconds": 0.027
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_polish_measures_violations_in_the_solver_scales",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_polish_respects_exact_log_domain_below_the_roundoff_floor",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_growth_verdict_uses_a_robust_lead_beyond_a_tiny_one",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_explicit_minimal_and_polynomial_tails_are_untouched",
+      "outcome": "passed",
+      "seconds": 136.114
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_exponential_infinite_end_cut_stays_finite_and_violating",
+      "outcome": "passed",
+      "seconds": 0.089
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_face_preserves_cut_lost_beneath_inactive_exponential_column",
+      "outcome": "passed",
+      "seconds": 0.008
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_softpower_candidate_face_start_retains_certified_incumbent",
+      "outcome": "passed",
+      "seconds": 0.748
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_automatic_two_linear_tails_keep_compatible_curvature_gates",
+      "outcome": "passed",
+      "seconds": 0.028
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_two_linear_tails_match_one_explicit_steepness_without_overriding_two",
+      "outcome": "passed",
+      "seconds": 0.04
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_face_tail_cut_does_not_exclude_globally_convex_release",
+      "outcome": "passed",
+      "seconds": 0.025
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_conditional_tail_cuts_apply_to_subfaces_not_other_faces",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_two_linear_tails_use_exact_curvature_face[0]",
+      "outcome": "passed",
+      "seconds": 3.86
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_two_linear_tails_use_exact_curvature_face[1]",
+      "outcome": "passed",
+      "seconds": 1.061
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_two_linear_tails_use_exact_curvature_face[2]",
+      "outcome": "passed",
+      "seconds": 1.01
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_curvature_equalities_are_only_applied_when_proven",
+      "outcome": "passed",
+      "seconds": 0.128
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_linear_tails_remain_certified_across_expansions[minimal]",
+      "outcome": "passed",
+      "seconds": 0.496
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_general_basis_degree_overrides_retain_valid_odd_faces",
+      "outcome": "passed",
+      "seconds": 4.82
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_bootstrap_preserves_family_and_accepts_basis_override",
+      "outcome": "passed",
+      "seconds": 0.369
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_bootstrap_resamples_weights_with_their_rows",
+      "outcome": "passed",
+      "seconds": 0.263
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_monte_carlo_null_is_invariant_under_exp_view",
+      "outcome": "passed",
+      "seconds": 0.416
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_automatic_tail_rate_handles_extreme_units[1e-200]",
+      "outcome": "passed",
+      "seconds": 10.711
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_automatic_tail_rate_handles_extreme_units[1e+200]",
+      "outcome": "passed",
+      "seconds": 10.499
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_unsuccessful_tail_optimization_is_not_an_estimate",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_tail_search_checks_the_shared_deadline",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_malformed_basis_records_raise_value_error[columns-None]",
+      "outcome": "passed",
+      "seconds": 0.26
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_malformed_basis_records_raise_value_error[request-5]",
+      "outcome": "passed",
+      "seconds": 0.073
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_malformed_basis_records_raise_value_error[geometry-5]",
+      "outcome": "passed",
+      "seconds": 0.063
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_malformed_basis_records_raise_value_error[version-2.5]",
+      "outcome": "passed",
+      "seconds": 0.071
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_malformed_basis_records_raise_value_error[version-True]",
+      "outcome": "passed",
+      "seconds": 0.08
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_malformed_basis_records_raise_value_error[slots-value5]",
+      "outcome": "passed",
+      "seconds": 0.093
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_model_record_rejects_inconsistent_coordinates[support_kind-bounded]",
+      "outcome": "passed",
+      "seconds": 0.088
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_model_record_rejects_inconsistent_coordinates[canonical_support-value1]",
+      "outcome": "passed",
+      "seconds": 0.077
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_model_record_rejects_unresolved_active_geometry[upper_location]",
+      "outcome": "passed",
+      "seconds": 0.106
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_model_record_rejects_unresolved_active_geometry[upper_steepness]",
+      "outcome": "passed",
+      "seconds": 0.097
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_model_record_rejects_unresolved_active_geometry[upper_rate]",
+      "outcome": "passed",
+      "seconds": 0.074
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_model_record_rejects_unresolved_active_geometry[upper_delta]",
+      "outcome": "passed",
+      "seconds": 0.385
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail0-support0]",
+      "outcome": "passed",
+      "seconds": 0.024
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail0-support1]",
+      "outcome": "passed",
+      "seconds": 0.012
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail0-support2]",
+      "outcome": "passed",
+      "seconds": 0.02
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail1-support0]",
+      "outcome": "passed",
+      "seconds": 0.012
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail1-support1]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail1-support2]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail2-support0]",
+      "outcome": "passed",
+      "seconds": 0.006
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail2-support1]",
+      "outcome": "passed",
+      "seconds": 0.004
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail2-support2]",
+      "outcome": "passed",
+      "seconds": 0.004
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail3-support0]",
+      "outcome": "passed",
+      "seconds": 0.02
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail3-support1]",
+      "outcome": "passed",
+      "seconds": 0.012
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail3-support2]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail4-support0]",
+      "outcome": "passed",
+      "seconds": 0.036
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail4-support1]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_resolved_basis_records_round_trip_across_tail_families[tail4-support2]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_changed_implementation_rebuilds_optional_cache",
+      "outcome": "passed",
+      "seconds": 0.126
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_uncertified_result_is_visible_at_public_boundary",
+      "outcome": "passed",
+      "seconds": 0.26
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_tail_accelerator_validates_node_dimensions",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "nodeid": "tests/test_basis_selection.py::test_auto_fields_are_resolved_by_the_fitter_only",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_linear_tails_remain_certified_across_expansions[full]",
+      "outcome": "passed",
+      "seconds": 0.248
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_linear_tails_remain_certified_across_expansions[auto]",
+      "outcome": "passed",
+      "seconds": 0.14
+    },
+    {
+      "nodeid": "tests/test_stage6_release_blockers.py::test_degree3_linear_tails_certify_interval_and_mixture_fits",
+      "outcome": "passed",
+      "seconds": 1.228
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_component_degrees_override_the_explicit_basis[degrees0]",
+      "outcome": "passed",
+      "seconds": 0.033
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_component_degrees_override_the_explicit_basis[degrees1]",
+      "outcome": "passed",
+      "seconds": 0.141
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_component_degrees_override_the_explicit_basis[degrees2]",
+      "outcome": "passed",
+      "seconds": 0.105
+    },
+    {
+      "nodeid": "tests/test_review_regressions.py::test_warm_start_accepts_automatic_component_degree",
+      "outcome": "passed",
+      "seconds": 0.049
+    }
+  ]
+}

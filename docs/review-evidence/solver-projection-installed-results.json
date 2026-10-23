@@ -1,0 +1,646 @@
+{
+  "collection": 106,
+  "counts": {
+    "passed": 106
+  },
+  "suite_seconds": 68.403,
+  "unfinished": 0,
+  "cases": [
+    {
+      "classname": "",
+      "name": "test_v2_envelope_and_model_schema_are_explicit",
+      "outcome": "passed",
+      "seconds": 0.064
+    },
+    {
+      "classname": "",
+      "name": "test_v2_ragged_coefficients_use_values_and_offsets",
+      "outcome": "passed",
+      "seconds": 0.178
+    },
+    {
+      "classname": "",
+      "name": "test_unversioned_state_is_rejected",
+      "outcome": "passed",
+      "seconds": 0.026
+    },
+    {
+      "classname": "",
+      "name": "test_envelope_dtypes_are_pinned",
+      "outcome": "passed",
+      "seconds": 0.025
+    },
+    {
+      "classname": "",
+      "name": "test_future_and_other_versions_are_rejected",
+      "outcome": "passed",
+      "seconds": 0.029
+    },
+    {
+      "classname": "",
+      "name": "test_unknown_model_fields_are_rejected",
+      "outcome": "passed",
+      "seconds": 0.025
+    },
+    {
+      "classname": "",
+      "name": "test_unknown_provenance_fields_are_ignored",
+      "outcome": "passed",
+      "seconds": 0.04
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_optional_provenance_is_ignored",
+      "outcome": "passed",
+      "seconds": 0.038
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_provenance_shape_is_nonfatal_and_marks_history_unavailable",
+      "outcome": "passed",
+      "seconds": 0.032
+    },
+    {
+      "classname": "",
+      "name": "test_partial_component_provenance_does_not_leak_history_from_cache",
+      "outcome": "passed",
+      "seconds": 0.032
+    },
+    {
+      "classname": "",
+      "name": "test_semantically_invalid_component_provenance_is_nonfatal",
+      "outcome": "passed",
+      "seconds": 0.034
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_cache_shape_is_nonfatal_and_rebuilds",
+      "outcome": "passed",
+      "seconds": 0.033
+    },
+    {
+      "classname": "",
+      "name": "test_unknown_cache_fields_are_ignored",
+      "outcome": "passed",
+      "seconds": 0.027
+    },
+    {
+      "classname": "",
+      "name": "test_cache_version_or_digest_mismatch_rebuilds",
+      "outcome": "passed",
+      "seconds": 0.047
+    },
+    {
+      "classname": "",
+      "name": "test_cacheless_rebuild_preserves_distribution_and_warm_start_semantics",
+      "outcome": "passed",
+      "seconds": 0.393
+    },
+    {
+      "classname": "",
+      "name": "test_absent_provenance_yields_missing_historical_fit_records[False]",
+      "outcome": "passed",
+      "seconds": 0.034
+    },
+    {
+      "classname": "",
+      "name": "test_absent_provenance_yields_missing_historical_fit_records[True]",
+      "outcome": "passed",
+      "seconds": 0.03
+    },
+    {
+      "classname": "",
+      "name": "test_same_version_cache_is_reused_for_every_model_shape[single]",
+      "outcome": "passed",
+      "seconds": 0.025
+    },
+    {
+      "classname": "",
+      "name": "test_same_version_cache_is_reused_for_every_model_shape[mixture]",
+      "outcome": "passed",
+      "seconds": 0.167
+    },
+    {
+      "classname": "",
+      "name": "test_same_version_cache_is_reused_for_every_model_shape[transformed]",
+      "outcome": "passed",
+      "seconds": 0.04
+    },
+    {
+      "classname": "",
+      "name": "test_same_version_cache_is_reused_for_every_model_shape[bounded]",
+      "outcome": "passed",
+      "seconds": 0.027
+    },
+    {
+      "classname": "",
+      "name": "test_same_version_cache_is_reused_for_every_model_shape[truncated]",
+      "outcome": "passed",
+      "seconds": 0.172
+    },
+    {
+      "classname": "",
+      "name": "test_cacheless_rebuild_reproduces_every_model_shape[single]",
+      "outcome": "passed",
+      "seconds": 0.028
+    },
+    {
+      "classname": "",
+      "name": "test_cacheless_rebuild_reproduces_every_model_shape[mixture]",
+      "outcome": "passed",
+      "seconds": 0.153
+    },
+    {
+      "classname": "",
+      "name": "test_cacheless_rebuild_reproduces_every_model_shape[transformed]",
+      "outcome": "passed",
+      "seconds": 0.038
+    },
+    {
+      "classname": "",
+      "name": "test_cacheless_rebuild_reproduces_every_model_shape[bounded]",
+      "outcome": "passed",
+      "seconds": 0.029
+    },
+    {
+      "classname": "",
+      "name": "test_cacheless_rebuild_reproduces_every_model_shape[truncated]",
+      "outcome": "passed",
+      "seconds": 0.178
+    },
+    {
+      "classname": "",
+      "name": "test_edited_cache_fails_content_digest_and_rebuilds_quietly",
+      "outcome": "passed",
+      "seconds": 0.032
+    },
+    {
+      "classname": "",
+      "name": "test_digest_verified_invalid_cache_raises_instead_of_hiding_a_defect",
+      "outcome": "passed",
+      "seconds": 0.046
+    },
+    {
+      "classname": "",
+      "name": "test_digest_verified_cache_disagreeing_with_model_raises",
+      "outcome": "passed",
+      "seconds": 0.019
+    },
+    {
+      "classname": "",
+      "name": "test_inadmissible_active_face_history_is_dropped",
+      "outcome": "passed",
+      "seconds": 0.038
+    },
+    {
+      "classname": "",
+      "name": "test_serialization_module_detects_malformed_data_without_exception_handling",
+      "outcome": "passed",
+      "seconds": 0.007
+    },
+    {
+      "classname": "",
+      "name": "test_missing_history_is_resaved_as_absent_provenance",
+      "outcome": "passed",
+      "seconds": 0.036
+    },
+    {
+      "classname": "",
+      "name": "test_present_history_is_resaved_as_present_provenance",
+      "outcome": "passed",
+      "seconds": 0.033
+    },
+    {
+      "classname": "",
+      "name": "test_package_version_is_resolved_once_per_process",
+      "outcome": "passed",
+      "seconds": 0.072
+    },
+    {
+      "classname": "",
+      "name": "test_component_degrees_override_the_explicit_basis[degrees0]",
+      "outcome": "passed",
+      "seconds": 0.03
+    },
+    {
+      "classname": "",
+      "name": "test_component_degrees_override_the_explicit_basis[degrees1]",
+      "outcome": "passed",
+      "seconds": 0.133
+    },
+    {
+      "classname": "",
+      "name": "test_component_degrees_override_the_explicit_basis[degrees2]",
+      "outcome": "passed",
+      "seconds": 0.113
+    },
+    {
+      "classname": "",
+      "name": "test_warm_start_accepts_automatic_component_degree",
+      "outcome": "passed",
+      "seconds": 0.046
+    },
+    {
+      "classname": "",
+      "name": "test_general_basis_degree_overrides_retain_valid_odd_faces",
+      "outcome": "passed",
+      "seconds": 0.857
+    },
+    {
+      "classname": "",
+      "name": "test_bootstrap_preserves_family_and_accepts_basis_override",
+      "outcome": "passed",
+      "seconds": 0.076
+    },
+    {
+      "classname": "",
+      "name": "test_bootstrap_resamples_weights_with_their_rows",
+      "outcome": "passed",
+      "seconds": 0.059
+    },
+    {
+      "classname": "",
+      "name": "test_monte_carlo_null_is_invariant_under_exp_view",
+      "outcome": "passed",
+      "seconds": 0.092
+    },
+    {
+      "classname": "",
+      "name": "test_automatic_tail_rate_handles_extreme_units[1e-200]",
+      "outcome": "passed",
+      "seconds": 0.02
+    },
+    {
+      "classname": "",
+      "name": "test_automatic_tail_rate_handles_extreme_units[1e+200]",
+      "outcome": "passed",
+      "seconds": 0.018
+    },
+    {
+      "classname": "",
+      "name": "test_unsuccessful_tail_optimization_is_not_an_estimate",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "classname": "",
+      "name": "test_tail_search_checks_the_shared_deadline",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_basis_records_raise_value_error[columns-None]",
+      "outcome": "passed",
+      "seconds": 0.019
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_basis_records_raise_value_error[request-5]",
+      "outcome": "passed",
+      "seconds": 0.019
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_basis_records_raise_value_error[geometry-5]",
+      "outcome": "passed",
+      "seconds": 0.02
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_basis_records_raise_value_error[version-2.5]",
+      "outcome": "passed",
+      "seconds": 0.021
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_basis_records_raise_value_error[version-True]",
+      "outcome": "passed",
+      "seconds": 0.022
+    },
+    {
+      "classname": "",
+      "name": "test_malformed_basis_records_raise_value_error[slots-value5]",
+      "outcome": "passed",
+      "seconds": 0.023
+    },
+    {
+      "classname": "",
+      "name": "test_model_record_rejects_inconsistent_coordinates[support_kind-bounded]",
+      "outcome": "passed",
+      "seconds": 0.019
+    },
+    {
+      "classname": "",
+      "name": "test_model_record_rejects_inconsistent_coordinates[canonical_support-value1]",
+      "outcome": "passed",
+      "seconds": 0.019
+    },
+    {
+      "classname": "",
+      "name": "test_model_record_rejects_unresolved_active_geometry[upper_location]",
+      "outcome": "passed",
+      "seconds": 0.025
+    },
+    {
+      "classname": "",
+      "name": "test_model_record_rejects_unresolved_active_geometry[upper_steepness]",
+      "outcome": "passed",
+      "seconds": 0.023
+    },
+    {
+      "classname": "",
+      "name": "test_model_record_rejects_unresolved_active_geometry[upper_rate]",
+      "outcome": "passed",
+      "seconds": 0.026
+    },
+    {
+      "classname": "",
+      "name": "test_model_record_rejects_unresolved_active_geometry[upper_delta]",
+      "outcome": "passed",
+      "seconds": 0.082
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail0-support0]",
+      "outcome": "passed",
+      "seconds": 0.005
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail0-support1]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail0-support2]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail1-support0]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail1-support1]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail1-support2]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail2-support0]",
+      "outcome": "passed",
+      "seconds": 0.004
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail2-support1]",
+      "outcome": "passed",
+      "seconds": 0.004
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail2-support2]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail3-support0]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail3-support1]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail3-support2]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail4-support0]",
+      "outcome": "passed",
+      "seconds": 0.006
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail4-support1]",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_resolved_basis_records_round_trip_across_tail_families[tail4-support2]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_changed_implementation_rebuilds_optional_cache",
+      "outcome": "passed",
+      "seconds": 0.024
+    },
+    {
+      "classname": "",
+      "name": "test_uncertified_result_is_visible_at_public_boundary",
+      "outcome": "passed",
+      "seconds": 0.044
+    },
+    {
+      "classname": "",
+      "name": "test_tail_accelerator_validates_node_dimensions",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "classname": "",
+      "name": "test_extreme_lower_tail_cdf_roundtrips_single_component",
+      "outcome": "passed",
+      "seconds": 0.11
+    },
+    {
+      "classname": "",
+      "name": "test_extreme_lower_tail_cdf_roundtrips_mixture",
+      "outcome": "passed",
+      "seconds": 0.203
+    },
+    {
+      "classname": "",
+      "name": "test_point_fit_is_invariant_to_extreme_global_weight_scale",
+      "outcome": "passed",
+      "seconds": 0.092
+    },
+    {
+      "classname": "",
+      "name": "test_bounded_fit_survives_support_only_256_ulps_wide",
+      "outcome": "passed",
+      "seconds": 0.021
+    },
+    {
+      "classname": "",
+      "name": "test_endpoint_concentrated_bounded_fit_keeps_explicit_lower_boundary_basis",
+      "outcome": "passed",
+      "seconds": 0.28
+    },
+    {
+      "classname": "",
+      "name": "test_nearly_coincident_forced_mixture_remains_certified",
+      "outcome": "passed",
+      "seconds": 1.059
+    },
+    {
+      "classname": "",
+      "name": "test_exp_statistics_propagate_overflow_instead_of_reporting_degeneracy",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "classname": "",
+      "name": "test_exp_statistics_report_divergent_higher_moments_without_nan_cancellation",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "classname": "",
+      "name": "test_zero_weight_mixture_component_cannot_contaminate_exp_moments",
+      "outcome": "passed",
+      "seconds": 0.067
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[0]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[1]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[2]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[3]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[4]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[5]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[6]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_gap_bounds_independent_active_face_solution[7]",
+      "outcome": "passed",
+      "seconds": 0.002
+    },
+    {
+      "classname": "",
+      "name": "test_projection_does_not_depend_on_an_unrelated_lp_scheduler",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_unresolved_metric_cannot_supply_a_convergence_bound",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "classname": "",
+      "name": "test_projection_is_invariant_to_large_diagonal_coordinate_changes",
+      "outcome": "passed",
+      "seconds": 0.001
+    },
+    {
+      "classname": "",
+      "name": "test_tiny_coefficient_repair_cannot_hide_large_likelihood_cost",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "classname": "",
+      "name": "test_likelihood_improving_row_repair_returns_its_own_evaluation",
+      "outcome": "passed",
+      "seconds": 0.0
+    },
+    {
+      "classname": "",
+      "name": "test_repaired_endpoint_cannot_keep_a_pre_repair_certificate",
+      "outcome": "passed",
+      "seconds": 0.003
+    },
+    {
+      "classname": "",
+      "name": "test_reported_nll_matches_high_degree_lognormal",
+      "outcome": "passed",
+      "seconds": 59.691
+    },
+    {
+      "classname": "",
+      "name": "test_degree8_density_is_scale_equivariant[2-100000000.0]",
+      "outcome": "passed",
+      "seconds": 0.15
+    },
+    {
+      "classname": "",
+      "name": "test_degree8_density_is_scale_equivariant[3-1000000000000.0]",
+      "outcome": "passed",
+      "seconds": 0.174
+    },
+    {
+      "classname": "",
+      "name": "test_degree8_density_is_scale_equivariant[8-1e+16]",
+      "outcome": "passed",
+      "seconds": 0.211
+    },
+    {
+      "classname": "",
+      "name": "test_stacked_m_step_without_shared_columns_is_independent_fits",
+      "outcome": "passed",
+      "seconds": 0.124
+    },
+    {
+      "classname": "",
+      "name": "test_stacked_m_step_is_invariant_to_component_order",
+      "outcome": "passed",
+      "seconds": 0.145
+    }
+  ]
+}

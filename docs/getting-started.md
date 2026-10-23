@@ -4,19 +4,21 @@ This guide covers installation and the shortest path from observations to a fitt
 
 ## Installation
 
-For a published release, install Gibbus from PyPI:
+For a published release, install Gibbus from PyPI. This command does not select
+the unreleased development snapshot described in these docs:
 
 ```bash
 python -m pip install gibbus
 ```
 
-Gibbus 0.1.x is tested on CPython 3.10 through 3.14. When pip selects a compatible release wheel, no compiler is required.
+This source declares CPython 3.10 through 3.14 as its targets. See
+[Development status](development-status.md) for the current verification limits.
+When pip selects a compatible release wheel, no compiler is required.
 
-To install from a source checkout instead, clone the repository and build locally. Source builds compile the Cython extensions and therefore require a C compiler and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
+To install this source snapshot, use this source directory or
+extract its archive and build from the project root. Source builds compile the Cython extensions and therefore require C and C++ compilers and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
 
 ```bash
-git clone https://github.com/DanJSal/gibbus.git
-cd gibbus
 python -m pip install .
 ```
 
@@ -32,9 +34,15 @@ On GCC/Clang builds, set `GIBBUS_NATIVE_ARCH=1` at build time to add `-march=nat
 
 ## Dependencies
 
-- CPython 3.10 through 3.14 are tested for the 0.1.x release line
+- CPython 3.10 through 3.14 are the declared development targets
 - NumPy
 - SciPy
+
+## Earlier saved models
+
+This branch uses durable format 2. Saved states from the earlier format-1
+polynomial engine must be refitted from their observations; they are not
+converted on load. See [Serialization](serialization.md#version-policy).
 
 ## Fit a single-component distribution
 
@@ -97,7 +105,7 @@ Automatic selection uses a staged KDE/BIC search. It is a model-selection aid, n
 
 ## Next steps
 
-- Read [Fitting](fitting.md) for supports, interval-censored observations, sample weights, boundary terms, polynomial degree, mixtures, and warm starts.
+- Read [Fitting](fitting.md) for supports, interval-censored observations, sample weights, boundary terms, the bulk degree, basis requests, mixtures, and warm starts.
 - Read [Using fitted distributions](using-distributions.md) for the full distributional interface.
 - Browse [Examples](examples.md) for complete workflows.
 - Check [Diagnostics and model checking](diagnostics.md) when a fit or numerical result needs auditing.

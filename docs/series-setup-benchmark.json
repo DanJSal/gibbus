@@ -1,0 +1,28 @@
+[
+  {
+    "case": "line-b2",
+    "median_setup_ms": {
+      "before": 1.570588,
+      "after": 0.571732
+    },
+    "median_fit_ms": {
+      "before": 5.244475,
+      "after": 4.100141
+    },
+    "samples": 21,
+    "status": "converged"
+  },
+  {
+    "case": "half-b2-log",
+    "median_setup_ms": {
+      "before": 5.163824,
+      "after": 1.732701
+    },
+    "median_fit_ms": {
+      "before": 15.277338,
+      "after": 11.45725
+    },
+    "samples": 21,
+    "status": "converged"
+  }
+]

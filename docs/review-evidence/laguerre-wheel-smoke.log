@@ -1,0 +1,17 @@
+gibbus 0.2.0.dev0 from /workspace/scratch/4dd42c182dbe/wheel-env/lib/python3.12/site-packages/gibbus
+numpy 2.3.5
+scipy 1.17.0
+OK gibbus._fit._series_search: _series_search.cpython-312-x86_64-linux-gnu.so
+OK gibbus._model._series_kernels: _series_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._fit._tail_likelihood_kernels: _tail_likelihood_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._fit._basis_newton_kernels: _basis_newton_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._fit._conic_kernels: _conic_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._fit._curvature_kernels: _curvature_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._model._basis_kernels: _basis_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._model._normalizer_kernels: _normalizer_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._postfit._mix_kernels: _mix_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._spectral._builders: _builders.cpython-312-x86_64-linux-gnu.so
+OK gibbus._spectral._cdf_eval: _cdf_eval.cpython-312-x86_64-linux-gnu.so
+OK gibbus._spectral._certify: _certify.cpython-312-x86_64-linux-gnu.so
+OK gibbus._spectral._panel_kernels: _panel_kernels.cpython-312-x86_64-linux-gnu.so
+OK gibbus._spectral._ppf_eval: _ppf_eval.cpython-312-x86_64-linux-gnu.so

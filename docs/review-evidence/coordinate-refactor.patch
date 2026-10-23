@@ -1,0 +1,2541 @@
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,9 +4,15 @@
+ 
+ ## 0.2.0.dev0 — Unreleased development checkpoint
+ 
++- Use a common runtime coordinate interface for point, interval and coupled
++  objectives, with support-appropriate polynomial recurrences and exact span
++  preservation. Consolidate Newton traversal into one compiled controller with
++  scalar-projection and interior-point subproblem kernels. Apply rejected-endpoint
++  searches uniformly and share contact refinement with the native shape gate.
++
+ - Fit supported high-degree half-line point models with directly evaluated generalized Laguerre coordinates, retaining canonical persisted coefficients. Group polynomial curvature point bounds with tighter coefficient arithmetic and resolve ambiguous ungated polynomial/log contacts exactly. The 3,000-point degree-12 lognormal regression passes without an expected-failure marker; optimizer and shape tolerances are unchanged.
+ 
+-- Complete rejected-endpoint curvature-cut discovery for coupled fits and general columns, preserving face-scoped constraints, full shape acceptance and the established single-polynomial cut schedule.
++- Preserve face-scoped constraints and full shape acceptance during rejected-endpoint curvature-cut discovery; the common controller now replaces approximate gate cuts with fully resolved endpoint cuts for every eligible objective.
+ - Preserve exact nonnegative endpoint-log amplitudes during feasibility polish and refine well-conditioned interior point fits beyond the conic subproblem gap floor, retaining full shape and likelihood checks.
+ - Reject serialized coordinate kinds and canonical endpoints inconsistent with physical support and the affine map.
+ 
+--- a/docs/development-status.md
++++ b/docs/development-status.md
+@@ -14,38 +14,27 @@
+ resampling and exp-view integration, empirical-tail scaling/deadlines, record
+ validation and cache identity, development-branch CI, documentation/package
+ hygiene, exact endpoint-log feasibility, interior point stationarity and
+-rejected-endpoint cut discovery for coupled fits and general columns, checked
+-feasibility repairs, high-degree half-line projection recovery, direct Laguerre
+-fitting coordinates and tighter curvature contact arithmetic.
++uniform rejected-endpoint cut discovery, checked feasibility repairs,
++support-appropriate recurrence coordinates, a common Newton controller and
++tighter curvature contact arithmetic.
+ 
+ ## Verification
+ 
++The current common-controller and polynomial-coordinate refactor is described in
++[fitting coordinates](fitting-coordinates.md) and the
++[resolution report](review-evidence/coordinate-refactor-resolution.md).
+ Production verification uses Linux x86-64, CPython 3.12.14, NumPy 2.3.5,
+-SciPy 1.17.0, Cython 3.3.0 and GCC/G++ 13.3. All 14 production extensions
+-were built at `-O3`. The current numerical work includes native recurrence and
+-enclosure changes; see the [production resolution](review-evidence/laguerre-production-resolution.md).
++SciPy 1.17.0, Cython 3.3.0 and GCC/G++ 13.3. All 14 native extensions were
++built at `-O3`.
+ 
+-- The broad source sweep collected **6,086 cases**: **6,074 passed**, nine
+-  minimal-kernel fixture failures, two skips and one expected failure, in
+-  **781.944 seconds**. The fixture failures were corrected by defaulting absent
+-  optional coordinate metadata to canonical evaluation; the affected source
+-  suites then passed **284 tests**. Across the sweep and that targeted rerun,
+-  **6,083 unique cases pass**, with two skips and the remaining Laplace xfail.
+-  This is combined verification, not a fresh single all-green full-suite run.
+-- Both the original 1,200-point degree-12 accounting regression and the
+-  3,000-point public acceptance regression pass, with existing accuracy
+-  assertions unchanged. The latter's expected-failure marker is removed.
+-- Rebuilt installed wheel: **136 passed**, with all 14 native extensions imported.
+-- Unit-scale, endpoint concentration, stacked-fit, span-equivalence and earlier
+-  heavy-tail acceptance cases are included in the passing final suite.
+-- Black and configured Ruff checks pass. Current logs and independent
+-  likelihood/shape checks accompany the source. See [validation details](review-validation.md).
++- Complete source sweep: **6,104 passed, 1 regression, 2 skipped, 1 expected failure**, out of 6,108 cases in 746.335 seconds. The final guard fixes the bounded warm-start regression; its affected-case rerun passes **28 tests** in 89.569 seconds.
++- Reconciled unique source cases: **6,105 passed, 2 skipped, 1 expected failure**, with no unresolved failure. This combines the full sweep and final affected-case rerun; it is not a fresh all-green full invocation after the final guard.
++- Installed wheel outside the source checkout: **182 passed** in 98.579 seconds; all 14 native extensions imported. The broad wheel batch emitted four documented SoftPower conversion warnings and one invalid-arithmetic warning in optional contact inspection. A final finite-derivative guard removes the latter; the affected serialization check passes again with runtime warnings treated as errors in both source and installed wheel.
++- Both degree-12 likelihood/acceptance regressions pass with existing numerical assertions. The degree-4 two-linear-tail Laplace test retains its strict expected-failure marker.
++- Black and configured Ruff checks pass. Source hashes identify the delivered source verified by the sweep plus final targeted reruns; 81 Python/native package files match the installed wheel byte for byte.
+ 
+-The separate earlier debug-safety build rebuilt all 14 extensions at `-O0` and
+-passed 34 review/kernel tests plus 39 solver tests. It predates this cut-scheduling
+-follow-up. An optimized debug attempt failed with truncated assembler output;
+-its cause remains unresolved. The current full debug or interpreter/platform
+-matrix is not established. See [validation details](review-validation.md).
++Historical debug verification predates this refactor. Current full debug and
++other interpreter/platform matrices are not established.
+ 
+ ## Open work
+ 
+--- a/docs/fitting-coordinates.md
++++ b/docs/fitting-coordinates.md
+@@ -0,0 +1,107 @@
++# Fitting coordinates and the Newton controller
++
++The statistical basis describes the potential family, its gates, support,
++endpoint logarithms, coefficient restrictions and tail asymptotics. Runtime
++coordinates describe how the same family is evaluated and optimized. They do
++not introduce additional parameters or change the persistence format.
++
++## Coordinate construction
++
++`_fit.coordinates` constructs a polynomial recurrence plan from the support:
++
++| Support | Recurrence | Argument |
++| --- | --- | --- |
++| Finite interval | Chebyshev | Centered and scaled to the fitted bulk |
++| Lower half-line | Generalized Laguerre | Scaled distance from the lower endpoint |
++| Upper half-line | Generalized Laguerre | Reflected, scaled distance from the upper endpoint |
++| Full line | Normalized probabilists' Hermite | Existing centered fitting coordinate |
++
++For a bounded support, the reference center and scale follow the fitted bulk
++rather than forcing a concentrated sample into a tiny neighborhood of `-1`.
++The scale cannot exceed the support half-width. The half-line reference scale
++uses the weighted observation distance when point
++observations are available. Its Laguerre parameter can incorporate the initial
++endpoint-log amplitude. Interval objectives use the fixed geometric scale.
++These reference measures improve representation; they do not guarantee that the
++Fisher matrix under every fitted density is well conditioned.
++
++A complete polynomial degree prefix with a common gate admits an invertible
++triangular coefficient map. The planner changes coordinates within that prefix.
++For an ungated prefix, a constant potential gauge can be added because the
++normalizer cancels it. For gated prefixes, constant terms are retained exactly;
++a gated constant is not a normalization gauge. Incomplete, algebraically
++coupled or shared polynomial columns retain their canonical evaluator when an
++independent change would alter their span or equality constraints. Nonpolynomial
++columns retain their existing evaluators.
++
++The map is constructed with rational arithmetic and retains high and low
++binary64 parts for coefficient conversion. Constraint rows, asymptotic
++functionals and faces transform with the same map. Native values and their first
++four derivatives use the normalized three-term recurrence, with the gate product
++rule applied afterward. Point sufficient statistics are recomputed directly from
++retained observations. Normalizer means and centered covariances are accumulated
++directly in the numerical basis; an already rounded monomial covariance is not
++rotated afterward.
++
++Point, interval and coupled mixture objectives expose the same observation and
++rebinding protocol. Private component coordinates can change independently;
++shared coefficient coordinates remain shared. Joint point likelihoods rebuild
++per-observation features, and point M-steps rebuild responsibility-weighted
++statistics. Interval probabilities continue to use the original observed rows.
++Point normalization uses the dimensionless fitting table for recurrence plans.
++Interval integration preserves the established coordinate dispatch so narrow
++observed widths are not independently rounded by a new affine transformation.
++
++## One Newton lifecycle
++
++`_solve_basis` prepares a coordinate binding and uses one compiled Newton
++lifecycle. A failed numerical representation, unresolved optimization or rejected
++canonical conversion can retry the original coordinates through that same
++controller. No model family is changed. All attempts share face handling,
++curvature exchange, line search, rejection handling, deadlines and convergence
++classification; completed attempts contribute to the result's work counters.
++There is no recursive dispatch through a separate Laguerre fitting routine.
++
++The loop computes an interior-point quadratic endpoint. For scalar inequalities
++with a factorizable metric, a projection kernel can supply a better endpoint.
++Its nonnegative-least-squares dual must meet the common quadratic gap target in
++the original metric and constraints. The projection replaces the conic endpoint
++only when it improves that checked bound and supplies a usable descent step or
++resolves stationarity. An infinite or insufficiently resolved bound retains the
++conic endpoint. Interior-point counters record native work; SciPy does not expose
++the NNLS iteration count.
++
++Rejected endpoints are resolved across all component blocks through the same
++separator. Full endpoint cuts replace the fast gate's approximate cuts instead
++of accumulating both sets of nearly duplicate contact rows. The former polynomial-versus-general cut scheduling rule is absent.
++Ambiguous resolved contacts can use the separator's exact arithmetic capability
++inside the native gate as well as in the outer exchange. Unresolved cells and
++inconclusive tails remain inconclusive.
++
++When new contact constraints are still being discovered, the exchange aims for
++the configured Newton tolerance. The existing certified tolerance and approximate
++accuracy floor govern the attainable numerical limit and exchange exhaustion.
++Their values and the shape feasibility floor are unchanged. Active-row
++multipliers use Hessian-scaled coordinates so a tiny coefficient that has a
++material likelihood effect is not mistaken for a vanishing tail amplitude. Likelihood-checked
++row repairs invalidate stale optimization bounds. Convex coefficient objectives
++can use the shared guarded stationarity polish at interior optima and resolved
++curvature contacts. At a moving interior contact, eliminating its stationary
++location adds the multiplier times the third-derivative outer product divided
++by the fourth derivative to the likelihood Hessian. Degenerate or unresolved
++contacts retain the incumbent. Small feasibility restoration, full shape checks,
++likelihood accounting and the existing bound gate apply to every correction.
++
++## Canonical output
++
++After fitting, coefficients and rows are mapped back to the statistical basis.
++The canonical face is reconstructed from its suppressed leaders and fixed log
++amplitudes. Both normalizer and separator use that face so a coefficient
++rounding residual does not invent a surviving asymptotic atom. Canonical
++likelihood accounting is checked against the numerical likelihood using the
++normalizers' error estimates, and canonical shape is checked again. A failed
++shape check cannot retain a converged status.
++
++Durable format 2 and public basis requests are unchanged. Runtime recurrence
++plans are not serialized. This implementation does not add absolute-power bulk
++terms, nonsmooth knots or automatic tail-family comparison.
+--- a/docs/limitations.md
++++ b/docs/limitations.md
+@@ -15,6 +15,10 @@
+ 
+ Checking `error_estimate` after fitting a mixture is the simplest general guard. `uncertified_mass` remains useful for distinguishing a certification failure from a normalization or certified-panel interpolation error. Note that a `cdf`/`ppf` round-trip is *not* a useful check on its own: the PPF is constructed from the CDF, so the two stay self-consistent even when both are wrong.
+ 
++The runtime coordinate refactor preserves the smooth statistical basis. It does
++not add `|x|`, nonsmooth knots, or fractional-power bulk terms; fitting such
++populations remains a model approximation as well as a numerical challenge.
++
+ ## Known open items
+ 
+ These are open defects of the current build, tracked for the optimization pass. Each fails loudly rather than returning a wrong fit.
+@@ -22,7 +26,7 @@
+ - **Extreme-coordinate regimes.** G3-052/G3-053 introduced fitting-coordinate normalization, spectral evaluation, and post-fit moment integration, and the original extreme-offset acceptance cases passed. These corrections do not certify accuracy in every floating-point edge case; public-coordinate precision is still limited by representable values, and remaining edge cases should fail explicitly.
+ - **Leader faces in the fitter.** When a requested tail leader collapses to zero (the data's tail is lighter than requested, e.g. `Exponential(2.0)` on rate-1 data, or `Polynomial(3)` at both ends on Gumbel data), the fitter evaluates the face through floating-point projections; gated columns cancelling far in the tail can stall the face solve, and the explicit request raises `RuntimeError`. Fitted states are evaluated on an exact face model, so a fit that converges is evaluated without this cancellation.
+ - **Linear tails at higher bulk degree.** `Polynomial(1)` tails at both ends converge at bulk degree 2, and matched-gate degree-3 fits now enforce the exact zero cubic coefficient required by their opposite asymptotic curvature signs (G3-064). Degree 4 can still exhaust the curvature cut exchange, and exploratory degree-5 fits can do so as well. G3-062 matches automatic steepnesses without changing explicitly specified rates; explicitly asymmetric gate geometry does not share the same guarantee. G3-063 scopes face-derived tail curvature cuts to the faces on which they are valid, repairing an independently reproduced cut inconsistency. The exact historical degree-3 separator/cut trace is still unavailable for replay.
+-- **High explicit degrees.** High-degree fits can stop without a resolved optimization bound. Supported ungated half-line point fits use directly evaluated Laguerre coordinates and scalar-projection Newton steps; both the 1,200-point likelihood-accounting fixture and the 3,000-point degree-12 lognormal acceptance fixture converge. This does not establish reliability for every high-degree sample or for gated, interval or coupled-mixture fits. Explicit nonconvergence raises `RuntimeError`; automatic degree selection can stop at a smaller converged family. Check component status and bound in `fit_diagnostics`.
++- **High explicit degrees.** High-degree fits can stop without a resolved optimization bound. Eligible complete polynomial prefixes use support-appropriate directly evaluated recurrences through the common Newton controller; scalar projection can refine an interior-point endpoint when its checked bound improves. In particular, both the 1,200-point likelihood-accounting fixture and the 3,000-point degree-12 lognormal acceptance fixture converge. This does not establish reliability for every high-degree sample or for gated, interval or coupled-mixture fits. Explicit nonconvergence raises `RuntimeError`; automatic degree selection can stop at a smaller converged family. Check component status and bound in `fit_diagnostics`.
+ - **Ladder failure records.** The single-component degree ladder records why it stopped only internally; mixture searches expose it in `em_diagnostics`.
+ - **Performance and automatic selection.** Single-component fits typically take well under a second, but a mixture fit costs a median of tens of times a single-component fit: near a degenerate curvature contact (`q''` flat to higher order) the cut exchange converges linearly, about half the remaining gap per round (see [Benchmark findings](benchmark-findings.md#g3-060-mixture-cost-analysis)). On the G3-060 benchmark the largest fit took about 40 s on a 2-core machine. Automatic component counts always refine the screen winner's neighbors, so a fit that selects one component still pays for a two-component refinement; screen BIC is not a safe bound for pruning it (a four-component screen 63 BIC behind one component refined to the winner).
+ - **`Exponential` tail failures.** At higher bulk degrees an `Exponential` tail fit can fail to converge, and a non-finite generated constraint row currently surfaces as `RuntimeError: generated constraint rows must be finite and nonzero`; the internal row overflow still needs numerical recovery.
+--- a/docs/numerical-methods.md
++++ b/docs/numerical-methods.md
+@@ -25,18 +25,13 @@
+ 
+ ## Fitting
+ 
+-Single-component point fits on a lower-bounded half-line with bulk degree at
+-least eight, no explicit tail families, and ungated polynomial/endpoint-log
+-columns use equivalent generalized Laguerre coordinates internally. The
+-reference scale is the weighted sample distance from the endpoint divided by
+-one plus the warm start's log amplitude. Basis values, derivatives through
+-order four, empirical statistics, potentials, means and Fisher covariances are
+-evaluated directly by recurrence. Polynomial coefficient maps supply interval
+-and asymptotic constraints; they do not evaluate the fitting objective.
+-The normal production face, growth and curvature controller remains active.
+-Coefficients are converted to the canonical representation at the end, with a
+-likelihood consistency check against the normalizer's numerical error estimates.
+-Public models and persistence retain their canonical basis.
++Eligible complete polynomial prefixes use support-appropriate recurrence
++coordinates: Chebyshev on finite supports, generalized Laguerre on half-lines,
++and Hermite on the full line. Values, four derivatives, empirical statistics,
++potentials, means and Fisher covariances are evaluated directly in those
++coordinates. Gates, shared coefficients and the requested statistical span are
++preserved. Canonical coefficient conversion reconstructs the face and rechecks
++likelihood accounting and shape; persistence retains the canonical basis.
+ 
+ Resolved polynomial curvature contact points use a grouped Horner enclosure.
+ The coefficient map is accumulated with extended precision, including its
+@@ -45,21 +40,30 @@
+ at that point. This fallback does not certify unresolved cells or tails and
+ does not change the feasibility or optimizer stopping tolerances.
+ 
+-The point likelihood depends on the sample only through the exact sufficient statistics `mean(Phi(x_i))`, computed once per basis. The fitter is a damped Newton method over exact faces (a zero endpoint-log amplitude or a collapsed leader is a face), with each step from a convex quadratic subproblem solved by a compiled interior-point method whose constraints are the cut rows, and an Armijo line search on the true negative log-likelihood. Each subproblem runs in the Jacobi scaling of its Newton Hessian, where the interior-point dual certificate stays resolvable; row feasibility is measured and restored in row-flattening (Curtis–Reid) scales. Convergence requires a Newton decrease below `1e-12` nats per observation and a nonnegative shape verdict; all NLL tolerances are absolute, so a change of data units (which shifts the NLL by the log of the scale) does not move the stopping point. Status values are `converged`, `converged_approximately`, `non_descent`, `line_search_failed`, `iteration_limit` and `uncertified`.
++The point likelihood depends on the sample through sufficient statistics
++`mean(Phi(x_i))`, computed directly in the numerical basis. The fitter uses one
++damped Newton controller over exact faces, coefficient-linear curvature cuts
++and an Armijo line search on the true likelihood. Runtime polynomial coordinates
++use support-appropriate Chebyshev, Laguerre or Hermite recurrences within the
++requested span. Point, interval and coupled objectives share this coordinate
++interface; [fitting coordinates](fitting-coordinates.md) describes the maps,
++gated subspaces and canonical output checks. Convergence targets and the shape
++feasibility floor retain their configured values. NLL tolerances are absolute,
++so changing data units does not change their scale. Status values are
++`converged`, `converged_approximately`, `non_descent`, `line_search_failed`,
++`iteration_limit` and `uncertified`.
+ 
+ Automatic degrees climb a ladder of nested bases by an omitted-statistic score test (chi-square calibrated, with nuisance projection); each rung starts from the lifted smaller fit, and a lifted start on the larger basis's boundary is moved into the interior along a certified convex direction at a cost of at most `1e-3` relative likelihood. Endpoint logarithms are selected by a one-sided likelihood-ratio test. A ladder rung that converges from no start ends the ladder at the smaller degree.
+ 
+-For ill-conditioned half-line point fits with ungated polynomial and endpoint-log columns,
+-the scalar-inequality Newton model can instead be solved as a projection. A
+-Cholesky coordinate change reduces the dual to nonnegative least squares; the
+-active constraint span is handled without a large barrier system. The reported
+-quadratic gap is checked in the original model with a residual bound and a
+-conservative lower eigenvalue estimate. An unresolved estimate gives an infinite
+-bound, which cannot establish convergence. Candidate steps pass the full
+-curvature search and likelihood line search. Approximate convergence uses the
+-same `1e-7` predicted-decrease accuracy floor as the native solver and is exposed
+-in component diagnostics. Interior-point iteration diagnostics count the native
+-interior solves; SciPy does not expose NNLS's internal iteration count.
++A scalar-inequality Newton model admits a projection kernel when its metric
++can be factored. A Cholesky coordinate change reduces its dual to nonnegative
++least squares. The shared loop compares this endpoint with its interior-point
++endpoint using the original-model quadratic bound. Projection must meet the
++common gap target and improve that checked bound before replacing the conic
++endpoint. Kernel eligibility depends on quadratic problem properties, not the
++polynomial family or observation type. All candidates retain the same curvature
++and likelihood acceptance rules. Native iteration diagnostics count interior
++solves; SciPy does not expose NNLS's iteration count.
+ 
+ Row-feasibility repairs are also checked against the actual likelihood. A small
+ coefficient displacement does not imply a small density change. A repaired
+@@ -73,7 +77,7 @@
+ ## Performance architecture
+ 
+ - **Compiled kernels**: basis evaluation, the normalizer traversal, the face Newton loop with its objective, the interior-point subproblem, the curvature search, mixture reductions, spectral construction/query and exact tails are Cython; Python orchestrates.
+-- **Projection recovery**: ill-conditioned ungated half-line point solves use SciPy NNLS from the Python controller; ordinary point, interval and mixture solves retain the native path. The recovery creates no fitting worker pool.
++- **Scalar quadratic refinement**: the common native controller can call SciPy NNLS to refine a scalar-inequality subproblem when it supplies a better resolved original-model bound. Eligibility depends on the quadratic metric and constraints. Fitting creates no worker pool.
+ - **Fitting cost**: point optimization cost is essentially independent of sample count after the sufficient statistics; model-side cost grows with the number of basis columns and cut rows. Interval fitting is observation-dependent (one row integral per merged row). Mixture EM refits all *K* components per iteration. The current build is unoptimized: fits take several times longer than the earlier polynomial-only engine (see [Limitations](limitations.md)).
+ - **Moment caching**: the packed fitted state caches raw moments up to order 32, log-distance moments and cumulants; higher moments are integrated on demand from the potential.
+ 
+--- a/docs/review-evidence/coordinate-refactor-resolution.md
++++ b/docs/review-evidence/coordinate-refactor-resolution.md
+@@ -0,0 +1,65 @@
++# Generic fitting-coordinate refactor — October 23, 2026
++
++## Implementation
++
++Point, interval and coupled-mixture objectives use one coordinate protocol and
++one compiled Newton lifecycle. Complete polynomial prefixes use Chebyshev
++coordinates on finite supports, generalized Laguerre on half-lines, and Hermite
++on the full line. Incomplete/coupled/shared columns retain their exact canonical
++span; gates and shared equalities are preserved. Direct recurrences evaluate
++values and four derivatives; empirical statistics and covariance are rebuilt
++in those coordinates.
++
++The native interior-point subproblem may be refined by a scalar projection only
++when its original-metric bound is better and resolved. Family-specific solver
++and endpoint-cut scheduling are removed. Fully separated rejected-endpoint cuts
++replace approximate gate cuts. Exact contact resolution and Hessian-scaled
++active-row accounting are shared. An unsuccessful numerical representation can
++retry canonical coordinates through the same controller, with a common deadline
++and accumulated completed-attempt counters.
++
++Conversion reconstructs the canonical face and rechecks likelihood and shape.
++Stationarity polish uses the current moving-contact geometry: eliminating its
++location adds the multiplier times the third-derivative outer product divided
++by the fourth derivative to the likelihood Hessian. It retains full shape,
++likelihood and bound checks, with no model-family dispatch. Degenerate contacts
++retain the incumbent.
++
++Format-2 persistence and public statistical families are unchanged. Interval
++rows retain their observed widths. No numerical assertion, shape threshold or
++solver tolerance value was relaxed, and no failing test was converted to xfail.
++
++See [architecture](../fitting-coordinates.md) and the accompanying patch.
++
++## Verification
++
++- Complete source sweep: **6,104 passed, 1 regression, 2 skipped, 1 expected failure**, out of 6,108 cases in 746.335 seconds. The final guard fixes the bounded warm-start regression; its affected-case rerun passes **28 tests** in 89.569 seconds.
++- Reconciled unique source cases: **6,105 passed, 2 skipped, 1 expected failure**, with no unresolved failure. This combines the full sweep and final affected-case rerun; it is not a fresh all-green full invocation after the final guard.
++- Installed wheel outside the source checkout: **182 passed** in 98.579 seconds; all 14 native extensions imported. The broad wheel batch emitted four documented SoftPower conversion warnings and one invalid-arithmetic warning in optional contact inspection. A final finite-derivative guard removes the latter; the affected serialization check passes again with runtime warnings treated as errors in both source and installed wheel.
++- Both degree-12 likelihood/acceptance regressions pass with existing numerical assertions. The degree-4 two-linear-tail Laplace test retains its strict expected-failure marker.
++- Black and configured Ruff checks pass. Source hashes identify the delivered source verified by the sweep plus final targeted reruns; 81 Python/native package files match the installed wheel byte for byte.
++
++Raw source and installed XML/logs, targeted recovery results, style checks,
++source hashes and wheel/source agreement accompany this report. The first full refactor sweep had 6,104 passes, one unit-scaling regression,
++two skips and the existing expected failure. The moving-contact correction
++resolved that regression; 27 focused cases passed. The next full sweep
++exposed a bounded warm-start change from polishing an approximate lower-degree
++fit. Restricting polish to improvements within the configured Newton tolerance
++preserved that warm start; all 28 affected checks then passed. A final
++finite-derivative guard skips singular endpoint rows before contact inspection;
++the affected serialization case passes with runtime warnings treated as errors
++in both source and installed wheel. Intermediate XML is retained separately. Earlier interrupted diagnostic
++runs are not included in the final source result.
++Timings are acceptance-run observations, not controlled performance benchmarks.
++
++## Limits
++
++The smooth basis has not gained `|x|`, nonsmooth knots or fractional-power bulk
++terms. The remaining degree-4 linear-tail Laplace failure is not diagnosed solely
++as a conditioning defect; the smooth model approximation and contact geometry
++remain relevant. Higher-degree, extreme-coordinate and mixture convergence are
++not universally guaranteed. Only Linux x86-64/CPython 3.12 was verified here;
++current debug and other platform/interpreter matrices remain open.
++
++No repository branch, pull request or release was created. The development
++version remains `0.2.0.dev0`.
+--- a/docs/review-follow-up.md
++++ b/docs/review-follow-up.md
+@@ -74,7 +74,7 @@
+   real-data test of finite-moment stopping. This corrects a false fixture premise;
+   it does not relax a numerical assertion.
+ 
+-### Rejected-endpoint cut follow-up
++### Earlier rejected-endpoint cut follow-up
+ 
+ The fast Newton gate stops at the first shape-rejected component and can use
+ valleys inside the incumbent's domain. For coupled fits and bases with general
+@@ -99,11 +99,13 @@
+ checks and the single-component screen used by
+ `test_an_unsupported_explicit_component_count_says_what_to_do`. A same-environment
+ comparison reproduced all three failures with extra searches and passed all four
+-cases with the previous schedule. Extra searches are therefore confined to
++cases with the previous schedule. At that checkpoint extra searches were therefore confined to
+ coupled fits and bases containing gated or non-monomial columns. Single ungated
+-monomial fits retain their established schedule. The four affected cases plus
+-the five stacked/span/order cases pass together (nine tests). This is a bounded
+-cut-scheduling policy; it does not solve general active-contact conditioning.
++monomial fits retained their established schedule. The four affected cases plus
++the five stacked/span/order cases pass together (nine tests). That bounded policy has now been replaced by the common controller: full endpoint
++cuts replace approximate gate cuts, avoiding their duplicate accumulation. See
++[fitting coordinates](fitting-coordinates.md). General active-contact conditioning
++is not thereby solved.
+ The completed intermediate and final run scopes are recorded in
+ [implementation validation](review-validation.md).
+ 
+@@ -112,7 +114,9 @@
+ The [projection resolution checkpoint](review-evidence/solver-projection-resolution.md)
+ records the retained feasibility safeguards and scoped scalar-QP recovery. The
+ 1,200-point degree-12 likelihood-accounting regression passes; the distinct
+-3,000-point acceptance target also passes with the production Laguerre path.
++3,000-point acceptance target also passes with production recurrence coordinates.
++The current common-controller implementation and verification are recorded in
++[the coordinate refactor report](review-evidence/coordinate-refactor-resolution.md).
+ See the [production resolution](review-evidence/laguerre-production-resolution.md)
+ for the direct recurrence kernels, contact arithmetic and current verification.
+ 
+--- a/docs/review-validation.md
++++ b/docs/review-validation.md
+@@ -1,6 +1,19 @@
+ # Implementation validation
+ 
+-## October 23, 2026: production Laguerre coordinates
++## October 23, 2026: common fitting controller
++
++- Complete source sweep: **6,104 passed, 1 regression, 2 skipped, 1 expected failure**, out of 6,108 cases in 746.335 seconds. The final guard fixes the bounded warm-start regression; its affected-case rerun passes **28 tests** in 89.569 seconds.
++- Reconciled unique source cases: **6,105 passed, 2 skipped, 1 expected failure**, with no unresolved failure. This combines the full sweep and final affected-case rerun; it is not a fresh all-green full invocation after the final guard.
++- Installed wheel outside the source checkout: **182 passed** in 98.579 seconds; all 14 native extensions imported. The broad wheel batch emitted four documented SoftPower conversion warnings and one invalid-arithmetic warning in optional contact inspection. A final finite-derivative guard removes the latter; the affected serialization check passes again with runtime warnings treated as errors in both source and installed wheel.
++- Both degree-12 likelihood/acceptance regressions pass with existing numerical assertions. The degree-4 two-linear-tail Laplace test retains its strict expected-failure marker.
++- Black and configured Ruff checks pass. Source hashes identify the delivered source verified by the sweep plus final targeted reruns; 81 Python/native package files match the installed wheel byte for byte.
++
++See the [resolution report](review-evidence/coordinate-refactor-resolution.md),
++[raw source XML](review-evidence/coordinate-refactor-source.xml) and
++[installed XML](review-evidence/coordinate-refactor-wheel-tests.xml).
++Historical checkpoint counts below describe their respective older sources.
++
++## Earlier October 23, 2026: production Laguerre coordinates
+ 
+ The direct recurrence objective and tighter polynomial contact arithmetic are
+ implemented in production. Both degree-12 lognormal regressions pass; the
+--- a/gibbus/_fit/__init__.py
++++ b/gibbus/_fit/__init__.py
+@@ -6,6 +6,8 @@
+   No other module performs user-level validation.
+ * :mod:`.basis_objective` — weighted point and interval likelihood geometry
+   (NLL, gradient, Fisher and observed Hessian) of the G3 basis.
++* :mod:`.coordinates` — runtime recurrence coordinates, direct observation
++  rebinding and canonical output validation.
+ * :mod:`.basis_constraints` — coefficient-linear constraint rows (log bounds,
+   curvature cuts, tail rows) and their cone description.
+ * :mod:`.curvature_search` — where ``q''`` may fall below zero (cut points).
+--- a/gibbus/_fit/_basis_newton_kernels.pyx
++++ b/gibbus/_fit/_basis_newton_kernels.pyx
+@@ -82,6 +82,7 @@
+ )
+ from ._curvature_kernels cimport (
+     SEARCH_NONNEGATIVE,
++    SEARCH_INCONCLUSIVE,
+     SearchOptions,
+     SearchResult,
+     search_free,
+@@ -163,6 +164,8 @@
+     int intervals
+     # Run state.
+     int gate
++    void* curvature_contexts
++    void* curvature_options
+     int stop_on_failure
+     double* dom_a
+     double* dom_b
+@@ -310,6 +313,22 @@
+     c.has_pending = 1
+ 
+ 
++cdef int _resolve_contact(Ctx* c, int b) noexcept nogil:
++    """Ask the shared separator to refine a numerically ambiguous contact."""
++    if c.curvature_contexts == NULL:
++        return 0
++    with gil:
++        try:
++            from .curvature_search import _separate_curvature
++            contexts = <object> c.curvature_contexts
++            options = <object> c.curvature_options
++            result = _separate_curvature(contexts[b],
++                np.array(<double[:c.dims[b]]> c.part, copy=True), options)
++            return result.status == "nonnegative"
++        except (ArithmeticError, ValueError, OverflowError):
++            return 0
++
++
+ cdef int _gate(Ctx* c, int b) noexcept nogil:
+     """Block ``b``: ``0`` globally convex, ``1`` rejection, ``-1`` allocation failure.
+ 
+@@ -361,9 +380,13 @@
+     c.full_searches+=1
+     if separate_c(t, c.part, c.ctail_lo[b], c.ctail_hi[b], &c.sopt, &sr) != 0:
+         return -1
+-    if sr.status == SEARCH_NONNEGATIVE and sr.n_bound == 0:
+-        search_free(&sr)
+-        return 0
++    if sr.n_bound == 0:
++        if sr.status == SEARCH_NONNEGATIVE:
++            search_free(&sr)
++            return 0
++        if sr.status == SEARCH_INCONCLUSIVE and sr.unresolved == 0 and _resolve_contact(c, b):
++            search_free(&sr)
++            return 0
+     if sr.n_bound:
+         # gamma < 0 sends q'' to -inf at an endpoint: the bound rows.
+         for i in range(sr.n_bound):
+@@ -730,6 +753,39 @@
+     return 0
+ 
+ 
++cdef int _refine_scalar_qp(
++    void* vctx, int n, int r, const double* b, const double* h,
++    const double* g, const double* theta, double* endpoint, double* dual,
++    double* model, double* gap,
++) noexcept nogil:
++    cdef int i
++    cdef double candidate_bound, incumbent_bound
++    with gil:
++        try:
++            from .linear_qp import _projection_candidate
++            result = _projection_candidate(
++                np.array(<double[:n*n]> h, copy=True).reshape(n,n),
++                np.array(<double[:n]> g, copy=True),
++                np.array(<double[:n]> theta, copy=True),
++                np.array(<double[:r*n]> b, copy=True).reshape(r,n),
++            )
++            if result is None:
++                return 0
++            candidate_bound = max(0.0, -result.model_value) + max(0.0, result.gap)
++            incumbent_bound = max(0.0, -model[0]) + max(0.0, gap[0])
++            if isfinite(incumbent_bound) and candidate_bound >= incumbent_bound:
++                return 0
++            for i in range(n):
++                endpoint[i] = result.params[i]
++            for i in range(r):
++                dual[i] = result.dual[i]
++            model[0] = result.model_value
++            gap[0] = result.gap
++            return 1
++        except (np.linalg.LinAlgError, RuntimeError, ValueError):
++            return 0
++
++
+ cdef double _step(
+     void* vctx, const double* x, const double* trial, double alpha
+ ) noexcept nogil:
+@@ -834,11 +890,13 @@
+     cdef void* _ptrs
+ 
+     def __cinit__(self, kernels, basis, index, normalizer, search, int kind, data,
+-                  int trace=0, series_models=None):
++                  int trace=0, series_models=None, curvature_contexts=None):
+         cdef int nb, b, n_logit = 0
+         cdef Py_ssize_t R = 0
+         cdef BasisKernel kb
+         self._ptrs = NULL
++        self.c.curvature_contexts = NULL
++        self.c.curvature_options = NULL
+         self.c.series=NULL
+         self.c.series_hits=0;self.c.full_searches=0
+         kernels = list(kernels)
+@@ -947,6 +1005,13 @@
+                           stats=stats, scales=scales, nblocks=nblocks,
+                           sblocks=sblocks, bufs=bufs, rows=(lower, upper),
+                           weights=weights, mass=mass, phi=phi)
++        if curvature_contexts is not None:
++            if len(curvature_contexts) != nb:
++                raise ValueError("one curvature context per block")
++            self._keep["curvature_contexts"] = tuple(curvature_contexts)
++            self._keep["curvature_options"] = sopts
++            self.c.curvature_contexts = <void*> self._keep["curvature_contexts"]
++            self.c.curvature_options = <void*> sopts
+         self.c.series=<SeriesSearchTable**>calloc(nb,sizeof(SeriesSearchTable*))
+         if self.c.series==NULL: raise MemoryError("series search pointer table")
+         caches=[None]*nb
+@@ -1269,6 +1334,7 @@
+         fo.evaluate = _evaluate
+         fo.accept = _accept
+         fo.step = _step
++        fo.refine = _refine_scalar_qp
+         with nogil:
+             code = _face_newton_loop(
+                 k, r, nb, &sv[0], &aov[0], &qov[0], qtot, na,
+--- a/gibbus/_fit/_conic_kernels.pxd
++++ b/gibbus/_fit/_conic_kernels.pxd
+@@ -23,11 +23,20 @@
+     FACE_STOP = -100
+ 
+ 
++# Optional scalar-inequality QP refinement. It replaces an endpoint only
++# after checking its bound in the original quadratic model.
++ctypedef int (*face_refine_fn)(
++    void* ctx, int n, int r, const double* b, const double* h,
++    const double* g, const double* theta, double* endpoint, double* dual,
++    double* model, double* gap
++) noexcept nogil
++
+ cdef struct FaceObjective:
+     void* ctx
+     face_evaluate_fn evaluate
+     face_accept_fn accept
+     face_step_fn step
++    face_refine_fn refine
+ 
+ 
+ cdef int _in_safeguarded_metric(
+--- a/gibbus/_fit/_conic_kernels.pyx
++++ b/gibbus/_fit/_conic_kernels.pyx
+@@ -2156,6 +2156,7 @@
+             scale = 1.0
+         first_solve = 1
+         while True:
++            qp_iterations = 0
+             status = _preconditioned(
+                 n, r, nb, sizes, aoff, qoff, qtot, na,
+                 hessian, gradient, theta, b, a, ref, degrees,
+@@ -2164,6 +2165,23 @@
+                 endpoint, endpoint_blocks, endpoint_dual,
+                 &candidate_model, &gap, &qp_iterations, &scaled_model,
+             )
++            # A resolved scalar projection may improve the conic endpoint.
++            # Both kernels use the same Newton traversal and original-model
++            # certificate; no basis-family dispatch is involved.
++            if objective.refine != NULL and nb == r and qtot == r:
++                if status != 0:
++                    candidate_model = 0.0
++                    gap = INFINITY
++                if objective.refine(objective.ctx, n, r, b, hessian, gradient,
++                                    theta, endpoint, endpoint_dual,
++                                    &candidate_model, &gap):
++                    status = 0
++                    for bb in range(nb):
++                        endpoint_blocks[bb] = 0.0
++                        for i in range(n):
++                            endpoint_blocks[bb] += b[bb*n+i] * endpoint[i]
++                        if endpoint_blocks[bb] <= 0.0:
++                            endpoint_blocks[bb] = 1.0
+             if status != 0:
+                 free(arena)
+                 return status
+--- a/gibbus/_fit/basis_mixture.py
++++ b/gibbus/_fit/basis_mixture.py
+@@ -344,6 +344,36 @@
+         self.intervals = "rows" in data
+         self._evaluator = None
+ 
++    @property
++    def coefficient_convex(self):
++        """Whether the fixed coefficient objective is convex."""
++        return self.kind == KIND_MSTEP and not self.intervals
++
++    def coordinate_observations(self, block):
++        """Per-component observations used to rebuild point statistics directly."""
++        if self.intervals:
++            return None, None
++        if "points" not in self.data:
++            return None
++        weights = self.data.get("point_weights")
++        return self.data["points"], None if weights is None else weights[block]
++
++    def in_coordinates(self, blocks):
++        """Rebind all component kernels while preserving shared coordinates."""
++        data = dict(self.data)
++        if not self.intervals:
++            phis = [
++                _evaluate_basis(m, data["points"], max_order=0).phi
++                for m in blocks.models
++            ]
++            if "stats" in data:
++                data["stats"] = [w @ phi for w, phi in zip(data["point_weights"], phis)]
++            else:
++                data["phi"] = phis
++        return _MixtureObjective(
++            blocks, _contexts(blocks.models), self.kind, data, self.options
++        )
++
+     def on_face(self, basis, /):
+         """The same objective for points of a face ``theta = N phi``.
+ 
+@@ -519,6 +549,7 @@
+         payload["interval_rows"] = data.rows
+     else:
+         payload["phi"] = _phis(models, data)
++        payload["points"] = data.x
+     return _MixtureObjective(blocks, _contexts(models), KIND_JOINT, payload, options)
+ 
+ 
+@@ -550,6 +581,8 @@
+         payload["interval_rows"] = data.rows
+     else:
+         phis = _phis(models, data)
++        payload["points"] = data.x
++        payload["point_weights"] = np.ascontiguousarray((wr / mass).T)
+         payload["stats"] = [(wr[:, c] / mass[c]) @ phis[c] for c in range(len(models))]
+     return _MixtureObjective(blocks, _contexts(models), KIND_MSTEP, payload, options)
+ 
+--- a/gibbus/_fit/basis_newton.py
++++ b/gibbus/_fit/basis_newton.py
+@@ -1,19 +1,11 @@
+ """Newton fit of a G3 basis over its constraint rows, with faces and cuts.
+ 
+-G1 owner replaced: ``_fit/conic_newton.py`` ``_solve_natural_conic`` (the
+-face active set and its result record) and the Python objective callback
+-of ``_newton_on_representation``.  Retained from G1 unchanged: the fused
+-Newton loop (``_conic_kernels._face_newton_loop``, here over the compiled face
+-objective of ``_basis_newton_kernels``), the interior-point subproblems,
+-``_NewtonOptions``, the status ladder,
+-a cold start strictly inside the constraints, the release test for zero
+-amplitudes from active-row multipliers, and the rule that a face is accepted only
+-if it is no worse.  Replaced: G1's Fisher-metric projection of infeasible
+-points by an exact ratio-test step toward the last globally convex iterate
+-(``_toward_anchor``; only for violated rows),
+-the exact polynomial cone by permanent curvature cut rows found by
+-``curvature_search`` (exchange loop), and degree faces by faces of the general
+-basis.
++All objectives share a coordinate preparation boundary and one compiled Newton
++lifecycle. Scalar projection and interior-point quadratic kernels supply steps
++through the same interface. Faces, line search, curvature exchange, rejected
++trial handling and convergence rules are independent of polynomial family.
++Runtime coordinate plans evaluate sufficient statistics directly and restore
++canonical coefficients, faces and likelihood accounting at the output boundary.
+ 
+ **Faces.**  A face fixes linear functionals of ``theta`` at zero: an enabled
+ log amplitude, or a collapsed leading growth amplitude.  It is entered only
+@@ -38,6 +30,7 @@
+ import itertools
+ import math
+ from dataclasses import dataclass, field
++from dataclasses import replace as dataclass_replace
+ from types import SimpleNamespace
+ 
+ import numpy as np
+@@ -61,7 +54,7 @@
+     _structural_rows,
+     _unit_blocks,
+ )
+-from .basis_objective import _BasisPointObjective, _ObjectiveEvaluation
++from .basis_objective import _ObjectiveEvaluation
+ from .budget import _check_fit_time
+ from .conic_newton import (
+     _CONVERGED,
+@@ -76,7 +69,6 @@
+     _CurvatureOptions,
+     _separate_curvature,
+ )
+-from .linear_qp import _linear_subproblem
+ 
+ _ZERO_ROW = 1e-12
+ _ACTIVE_SLACK = 1e-7
+@@ -434,19 +426,6 @@
+         self.curvature_options = _CurvatureOptions() if options is None else options
+         self._calls = 0
+         self._compiled = None
+-        # Extra endpoint cuts help coupled blocks and general columns. A
+-        # single ungated monomial fit retains its established cut schedule:
+-        # redundant refined rows can change the conic gap floor enough to
+-        # lose affine-unit invariance at an active curvature contact.
+-        self._complete_trial_cuts = curvature is not None and (
+-            curvature.blocks.count > 1
+-            or any(
+-                model.functions[index].kind != "monomial" or weights[1] or weights[2]
+-                for model in curvature.blocks.models
+-                for column in model.columns
+-                for index, weights in column.terms
+-            )
+-        )
+ 
+     @property
+     def evaluations(self):
+@@ -524,180 +503,11 @@
+                 data,
+                 trace=0 if _TRACE is None else _TRACE_CAPACITY,
+                 series_models=blocks.models,
++                curvature_contexts=joint.contexts,
+             )
+         return self._compiled
+ 
+     def run(self, representation, phi, blocks, evaluation, options, known, domain):
+-        """Solve in projection coordinates when monomial moments lose precision."""
+-        if self.model is not None and self.model.polynomial_coordinates is not None:
+-            return self._projection_run(
+-                representation, phi, blocks, evaluation, options, known, domain
+-            )
+-        if (
+-            isinstance(self.objective, _BasisPointObjective)
+-            and self.model.request.lower_infinite != self.model.request.upper_infinite
+-            and all(
+-                self.model.functions[index].kind in ("monomial", "log")
+-                and not weights[1]
+-                and not weights[2]
+-                for column in self.model.columns
+-                for index, weights in column.terms
+-            )
+-        ):
+-            diagonal = np.diag(evaluation.hessian)
+-            if np.all(diagonal > 0.0):
+-                d = 1.0 / np.sqrt(diagonal)
+-                metric = d[:, None] * evaluation.hessian * d[None, :]
+-                if np.linalg.cond(metric) > 1.0 / np.sqrt(np.finfo(float).eps):
+-                    return self._projection_run(
+-                        representation, phi, blocks, evaluation, options, known, domain
+-                    )
+-        return self._native_run(
+-            representation, phi, blocks, evaluation, options, known, domain
+-        )
+-
+-    def _projection_run(
+-        self, representation, phi, blocks, evaluation, options, known, domain
+-    ):
+-        """Newton on scalar rows, with independently checked projection bounds.
+-
+-        Trial points pass the complete curvature search before normalization.
+-        A rejected endpoint queues its rows while line search retains one
+-        accepted step, as in the native loop. SciPy does not expose NNLS's
+-        internal iteration count; ``subproblem_iterations`` continues to count
+-        native interior-point iterations only.
+-        """
+-        params = np.asarray(phi).copy()
+-        dual = np.zeros(representation.n_rows)
+-        queued = []
+-        bound = np.inf
+-        status = "iteration_limit"
+-        evaluations = 0
+-        for iteration in range(options.max_iterations):
+-            _check_fit_time("projection Newton")
+-            try:
+-                sub = _linear_subproblem(
+-                    evaluation.hessian,
+-                    evaluation.gradient,
+-                    params,
+-                    representation.b_matrix,
+-                )
+-            except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
+-                _reraise_if_debug(exc, "projection subproblem", routine=True)
+-                run, pending = self._native_run(
+-                    representation, params, blocks, evaluation, options, known, domain
+-                )
+-                return (
+-                    _NewtonRun(
+-                        run.status,
+-                        run.params,
+-                        run.blocks,
+-                        run.dual,
+-                        run.evaluation,
+-                        iteration + run.iterations,
+-                        evaluations + run.evaluations,
+-                        run.subproblem_iterations,
+-                        run.decrease_bound,
+-                    ),
+-                    pending,
+-                )
+-            predicted = max(0.0, -sub.model_value)
+-            bound = predicted + max(0.0, sub.gap)
+-            dual = sub.dual
+-            if bound <= options.certified_tolerance:
+-                status = "converged"
+-                break
+-            if bound <= options.accuracy_floor:
+-                status = "converged_approximately"
+-                break
+-            delta = sub.params - params
+-            slope = float(evaluation.gradient @ delta)
+-            if not math.isfinite(slope) or slope >= 0.0:
+-                status = "non_descent"
+-                break
+-            alpha = 1.0
+-            accepted = False
+-            for _ in range(options.max_line_search):
+-                _check_fit_time("projection line search")
+-                trial = params + alpha * delta
+-                full = self.full(trial)
+-                separation = self.curvature.separate(full, self.curvature_options)
+-                if separation.status != "nonnegative":
+-                    if not queued:
+-                        queued = [
+-                            (
+-                                _TrialCuts(
+-                                    k, part.cut_points, part.cut_rows, part.domain
+-                                ),
+-                                full,
+-                            )
+-                            for k, part in enumerate(separation.parts)
+-                        ]
+-                    alpha *= options.backtrack
+-                    continue
+-                evaluations += 1
+-                try:
+-                    candidate = self(trial)
+-                except _ImproperPotential:
+-                    alpha *= options.backtrack
+-                    continue
+-                except (_QuadratureFailure, ValueError, OverflowError) as exc:
+-                    _reraise_if_debug(exc, "projection trial evaluation")
+-                    alpha *= options.backtrack
+-                    continue
+-                rounding = 8.0 * np.finfo(float).eps * max(1.0, abs(evaluation.nll))
+-                if (
+-                    candidate.nll <= evaluation.nll + options.armijo * alpha * slope
+-                    or (
+-                        predicted <= 1e-9 and candidate.nll <= evaluation.nll + rounding
+-                    )
+-                ):
+-                    accepted = True
+-                    break
+-                alpha *= options.backtrack
+-            if not accepted:
+-                status = "line_search_failed"
+-                if bound <= options.accuracy_floor:
+-                    status = (
+-                        "converged"
+-                        if bound <= options.certified_tolerance
+-                        else "converged_approximately"
+-                    )
+-                break
+-            params, evaluation = trial, candidate
+-            slack = representation.b_matrix @ params
+-            blocks = (
+-                tuple(np.array([[v]]) for v in slack)
+-                if np.all(slack > 0.0)
+-                else tuple(np.ones((1, 1)) for _ in slack)
+-            )
+-            if queued:
+-                # The bound belongs to the point before this step. The next
+-                # exchange must certify its accepted endpoint anew.
+-                bound, status = np.inf, "cut_required"
+-                iteration += 1
+-                break
+-        else:
+-            iteration = options.max_iterations
+-            bound = np.inf
+-        return (
+-            _NewtonRun(
+-                status,
+-                params,
+-                blocks,
+-                dual,
+-                evaluation,
+-                iteration,
+-                evaluations,
+-                0,
+-                float(bound),
+-            ),
+-            queued,
+-        )
+-
+-    def _native_run(
+-        self, representation, phi, blocks, evaluation, options, known, domain
+-    ):
+         """One gated Newton run in the fused compiled loop.
+ 
+         Parameters
+@@ -775,23 +585,19 @@
+         pending = compiled.pending()
+         if pending is not None:
+             block, rows, n_points, theta, trial_domain = pending
+-            queued.append(
+-                (_TrialCuts(block, np.zeros(n_points), rows, trial_domain), theta)
+-            )
+-            # The fast gate stops at the first violating component and may
+-            # only inspect valleys in the incumbent's search domain. Resolve
+-            # the rejected endpoint for every block before the next exchange:
+-            # otherwise a stacked solve can spend its budget rediscovering
+-            # nearby cuts while another block limits every feasible step.
+-            if self._complete_trial_cuts:
+-                separation = self.curvature.separate(theta, self.curvature_options)
+-                queued.extend(
+-                    (
+-                        _TrialCuts(k, part.cut_points, part.cut_rows, part.domain),
+-                        theta,
+-                    )
+-                    for k, part in enumerate(separation.parts)
+-                )
++            # Replace the fast gate's approximate cuts with the full
++            # rejected-endpoint search. Retaining both sets adds nearly
++            # duplicate contact rows and perturbs subproblem gap floors.
++            separation = self.curvature.separate(theta, self.curvature_options)
++            queued = [
++                (_TrialCuts(k, part.cut_points, part.cut_rows, part.domain), theta)
++                for k, part in enumerate(separation.parts)
++                if part.status != "nonnegative" and len(part.cut_rows)
++            ]
++            if not queued and not separation.feasible:
++                queued = [
++                    (_TrialCuts(block, np.zeros(n_points), rows, trial_domain), theta)
++                ]
+         final = evaluation
+         if not np.array_equal(x, phi):
+             # The loop's accepted iterate, as the compiled objective evaluated
+@@ -1133,7 +939,7 @@
+     )
+ 
+ 
+-def _multipliers(rows, gradient, theta, /):
++def _multipliers(rows, gradient, theta, /, hessian=None):
+     """KKT multipliers of the near-active inequality rows by NNLS.
+ 
+     Parameters
+@@ -1150,12 +956,25 @@
+     numpy.ndarray
+         One multiplier per row (zero for inactive rows).
+     """
+-    slack = rows.slack(theta)
+-    tol = _ACTIVE_SLACK * max(1.0, float(np.linalg.norm(theta)))
++    scale = np.ones_like(theta)
++    if hessian is not None:
++        diagonal = np.diag(hessian)
++        resolved = np.isfinite(diagonal) & (diagonal > 0.0)
++        scale[resolved] = 1.0 / np.sqrt(diagonal[resolved])
++    design = rows.rows * scale
++    norms = np.linalg.norm(design, axis=1)
++    norms = np.where(norms > 0.0, norms, 1.0)
++    slack = rows.slack(theta) / norms
++    tol = _ACTIVE_SLACK * max(1.0, float(np.linalg.norm(theta / scale)))
+     active = np.flatnonzero(slack <= tol)
+     lam = np.zeros(rows.size)
+     if active.size:
+-        lam[active], _ = nnls(rows.rows[active].T, gradient, maxiter=50 * rows.size)
++        dual, _ = nnls(
++            (design[active] / norms[active, None]).T,
++            gradient * scale,
++            maxiter=50 * rows.size,
++        )
++        lam[active] = dual / norms[active]
+     return lam
+ 
+ 
+@@ -1228,7 +1047,7 @@
+         return phi, evaluation, False
+     try:
+         trial = objective(candidate)
+-    except (_QuadratureFailure, ValueError, OverflowError) as exc:
++    except (_ImproperPotential, _QuadratureFailure, ValueError, OverflowError) as exc:
+         _reraise_if_debug(exc, "row feasibility polish", routine=True)
+         return phi, evaluation, False
+     roundoff = 8.0 * np.finfo(float).eps * max(1.0, abs(evaluation.nll))
+@@ -1432,8 +1251,13 @@
+         must_recertify = repair_pending
+         repair_pending = False
+         if exchange > 0 and added == 0 and not must_recertify:
+-            # No new violated curvature row was found.  The unchanged
+-            # linear relaxation needs no extra contact-model polish round.
++            # No new inequality can improve the relaxation. Retain the
++            # certified classification at its unchanged numerical floor.
++            if (
++                separation.status == "nonnegative"
++                and bound <= problem.options.certified_tolerance
++            ):
++                status = "converged"
+             break
+         # A run stopped for a cut at a feasible point whose model bound over
+         # the relaxation is already certified: the kernel's rule for a run
+@@ -1442,16 +1266,16 @@
+         # thirty exchanges at a bound below 1e-10), so the bound, not the
+         # exchange, ends the fit.
+         feasible = exchange > 0 and separation.status == "nonnegative"
+-        if (
+-            feasible
+-            and status not in _CONVERGED
+-            and bound <= problem.options.certified_tolerance
+-        ):
++        if feasible and status not in _CONVERGED and bound <= problem.options.tolerance:
+             status = "converged"
+             break
+         if exchange == problem.max_exchanges:
+             if feasible and bound <= problem.options.accuracy_floor:
+-                status = "converged_approximately"
++                status = (
++                    "converged"
++                    if bound <= problem.options.certified_tolerance
++                    else "converged_approximately"
++                )
+             else:
+                 status = "iteration_limit"
+             break
+@@ -1543,7 +1367,7 @@
+     if full is None:
+         full = objective(face_obj.full(phi))
+     theta = face_obj.full(phi)
+-    if status in _CONVERGED and isinstance(objective, _BasisPointObjective):
++    if status in _CONVERGED and getattr(objective, "coefficient_convex", False):
+         theta, full, bound, separation = _polish_point_stationarity(
+             problem,
+             face,
+@@ -1559,6 +1383,74 @@
+     return status, theta, full, bound, separation
+ 
+ 
++def _stationarity_step(problem, basis, evaluation, theta, rows, separation):
++    """Newton correction on resolved moving curvature contacts.
++
++    Eliminating a stationary contact location adds the multiplier times the
++    third-derivative outer product divided by the fourth derivative to the
++    likelihood Hessian. Degenerate
++    contacts are left to the ordinary cut exchange. Endpoint contacts and
++    coefficient bounds have fixed rows and add no location curvature.
++    """
++    gradient = basis.T @ evaluation.gradient
++    hessian = basis.T @ evaluation.hessian @ basis
++    kept = [i for i, kind in enumerate(rows.kinds) if kind != "cut"]
++    contact_rows = list(rows.rows[kept])
++    derivatives = [None] * len(kept)
++    for k, part in enumerate(separation.parts):
++        model = problem.blocks.models[k]
++        for minimum in part.minima:
++            if minimum.kind not in ("interior", "endpoint"):
++                continue
++            values = _evaluate_basis(model, [minimum.x], max_order=4)
++            if not np.all(np.isfinite(values.d2phi[0])):
++                continue
++            row = problem.blocks.embed(k, values.d2phi[0]) @ basis
++            norm = np.linalg.norm(row)
++            if not math.isfinite(norm) or norm <= 0.0:
++                continue
++            contact_rows.append(row / norm)
++            derivative = None
++            if minimum.kind == "interior":
++                third = problem.blocks.embed(k, values.d3phi[0]) @ basis / norm
++                fourth = float(values.d4phi[0] @ problem.blocks.part(k, theta)) / norm
++                derivative = third, fourth
++            derivatives.append(derivative)
++    contacts = _ConstraintRows(
++        np.asarray(contact_rows).reshape(-1, basis.shape[1]),
++        ("cut",) * len(contact_rows),
++    )
++    multipliers = _multipliers(contacts, gradient, basis.T @ theta, hessian=hessian)
++    active = np.flatnonzero(multipliers > 0.0)
++    for j in active:
++        if derivatives[j] is not None:
++            third, fourth = derivatives[j]
++            if not math.isfinite(fourth) or fourth <= 0.0:
++                raise np.linalg.LinAlgError("unresolved moving curvature contact")
++            hessian = hessian + multipliers[j] / fourth * np.outer(third, third)
++    diagonal = np.diag(hessian)
++    if not np.all(np.isfinite(diagonal)) or np.any(diagonal <= 0.0):
++        raise np.linalg.LinAlgError("unresolved stationarity metric")
++    scales = 1.0 / np.sqrt(diagonal)
++    metric = scales[:, None] * hessian * scales[None, :]
++    if np.linalg.cond(metric) > 1.0 / np.sqrt(np.finfo(float).eps):
++        raise np.linalg.LinAlgError("unresolved stationarity metric")
++    if active.size:
++        a = contacts.rows[active] * scales
++        system = np.block([[metric, -a.T], [a, np.zeros((len(active), len(active)))]])
++        rhs = np.r_[-gradient * scales, -contacts.rows[active] @ (basis.T @ theta)]
++        solution, _, rank, _ = np.linalg.lstsq(system, rhs, rcond=None)
++        if rank < system.shape[0]:
++            raise np.linalg.LinAlgError("unresolved active contact span")
++        step = scales * solution[: len(gradient)]
++    else:
++        factor = np.linalg.cholesky(metric)
++        step = scales * np.linalg.solve(
++            factor.T, np.linalg.solve(factor, -gradient * scales)
++        )
++    return step, scales
++
++
+ def _polish_point_stationarity(
+     problem,
+     face,
+@@ -1571,14 +1463,10 @@
+     bound,
+     separation,
+ ):
+-    """Refine a resolved interior point optimum beyond the conic gap floor.
+-
+-    The conic subproblem's gap can dominate a tiny Newton decrement, leaving
+-    different rounding of the same weighted statistics at visibly different
+-    points. Up to three well-conditioned Newton corrections reduce the
+-    scaled gradient. Every correction must satisfy all retained rows exactly,
+-    pass the full shape search, and preserve the likelihood to rounding.
+-    Failed or unresolved corrections leave the certified incumbent intact.
++    """Refine convex coefficient stationarity at interior or resolved contacts.
++
++    Corrections retain row feasibility, full shape acceptance and likelihood
++    accounting. Unresolved metrics/contacts leave the incumbent intact.
+     """
+     rows = _active_rows(problem, face, basis)
+     target = (
+@@ -1588,26 +1476,67 @@
+     )
+     for _ in range(3):
+         _check_fit_time("Newton polish")
++        try:
++            step, scales = _stationarity_step(
++                problem, basis, evaluation, theta, rows, separation
++            )
++        except (np.linalg.LinAlgError, RuntimeError, ValueError):
++            break
+         gradient = basis.T @ evaluation.gradient
+         hessian = basis.T @ evaluation.hessian @ basis
+-        diagonal = np.diag(hessian)
+-        if not np.all(np.isfinite(diagonal)) or np.any(diagonal <= 0.0):
+-            break
+-        scales = 1.0 / np.sqrt(diagonal)
+-        metric = scales[:, None] * hessian * scales[None, :]
+-        try:
+-            if np.linalg.cond(metric) > 1.0 / np.sqrt(np.finfo(float).eps):
+-                break
+-            factor = np.linalg.cholesky(metric)
+-            step = scales * np.linalg.solve(
+-                factor.T, np.linalg.solve(factor, -gradient * scales)
+-            )
+-        except np.linalg.LinAlgError:
++        model_decrease = -float(gradient @ step + 0.5 * step @ hessian @ step)
++        # Polishing resolves final numerical stationarity. Larger improvements
++        # belong to the main Newton/exchange lifecycle and its warm-start policy.
++        if (
++            not math.isfinite(model_decrease)
++            or model_decrease > problem.options.tolerance
++        ):
+             break
+         phi = basis.T @ theta + step
+-        if not np.all(np.isfinite(phi)) or np.any(rows.slack(phi) < 0.0):
++        if not np.all(np.isfinite(phi)):
+             break
++        phi = _polish(rows, phi, scales)
+         trial = basis @ phi
++        candidate_separation = curvature.separate(trial, problem.curvature_options)
++        # A moving contact can miss curvature feasibility at second order.
++        # Restore along a strict row-interior direction, retaining the existing
++        # row-polish displacement budget and checking the whole shape again.
++        for _repair in range(3):
++            if candidate_separation.status == "nonnegative":
++                break
++            if candidate_separation.status != "violated":
++                break
++            for k, part in enumerate(candidate_separation.parts):
++                if len(part.cut_rows):
++                    rows = rows.merged(
++                        problem.blocks.embed(k, part.cut_rows) @ basis, "cut"
++                    )
++            try:
++                from .linear_qp import _strict_direction
++
++                a = rows.rows * scales
++                a /= np.linalg.norm(a, axis=1)[:, None]
++                direction = _strict_direction(a)
++                margins = a @ direction
++                if np.min(margins) <= 0.0:
++                    break
++                current = phi / scales
++                floor = 32.0 * np.finfo(float).eps * max(1.0, np.linalg.norm(current))
++                shift = max(0.0, float(np.max((floor - a @ current) / margins)))
++                correction = shift * direction
++                if np.linalg.norm(correction) > 1e-8 * max(
++                    1.0, np.linalg.norm(current)
++                ):
++                    break
++                phi = phi + scales * correction
++            except (np.linalg.LinAlgError, RuntimeError, ValueError):
++                break
++            trial = basis @ phi
++            candidate_separation = curvature.separate(trial, problem.curvature_options)
++        if candidate_separation.status != "nonnegative" or np.any(
++            rows.slack(phi) < 0.0
++        ):
++            break
+         problem.evaluations += 1
+         try:
+             candidate = objective(trial)
+@@ -1621,15 +1550,16 @@
+         roundoff = 8.0 * np.finfo(float).eps * max(1.0, abs(evaluation.nll))
+         if candidate.nll > evaluation.nll + roundoff:
+             break
+-        if np.max(np.abs((basis.T @ candidate.gradient) * scales)) >= np.max(
+-            np.abs(gradient * scales)
+-        ):
++        try:
++            next_step, next_scales = _stationarity_step(
++                problem, basis, candidate, trial, rows, candidate_separation
++            )
++        except (np.linalg.LinAlgError, RuntimeError, ValueError):
++            break
++        if np.linalg.norm(next_step / next_scales) >= np.linalg.norm(step / scales):
+             break
+         candidate_bound = bound + max(0.0, candidate.nll - evaluation.nll) + roundoff
+         if candidate_bound > target:
+-            break
+-        candidate_separation = curvature.separate(trial, problem.curvature_options)
+-        if candidate_separation.status != "nonnegative":
+             break
+         theta, evaluation = trial, candidate
+         bound, separation = candidate_bound, candidate_separation
+@@ -1846,7 +1776,7 @@
+     rrows = _active_rows(problem, released, rbasis)
+     rphi = rbasis.T @ theta
+     rgrad = rbasis.T @ evaluation.gradient
+-    lam = _multipliers(rrows, rgrad, rphi)
++    lam = _multipliers(rrows, rgrad, rphi, rbasis.T @ evaluation.hessian @ rbasis)
+     residual = rgrad - rrows.rows.T @ lam
+     if float(np.linalg.norm(residual)) <= 1e-9 * gscale:
+         return None
+@@ -2028,7 +1958,7 @@
+     return float(candidate[2].nll) <= float(incumbent[2].nll) + tolerance
+ 
+ 
+-def _solve_basis(
++def _solve_coordinate_basis(
+     objective,
+     /,
+     *,
+@@ -2103,25 +2033,6 @@
+     options = _NewtonOptions() if options is None else options
+     if not isinstance(options, _NewtonOptions):
+         raise TypeError("options must be _NewtonOptions or None")
+-    if blocks is None and isinstance(objective, _BasisPointObjective):
+-        from .laguerre import _laguerre_model, _solve_in_laguerre
+-
+-        orthogonal = _laguerre_model(objective.model, objective.stats, start)
+-        if orthogonal is not None:
+-            return _solve_in_laguerre(
+-                objective,
+-                orthogonal,
+-                _solve_basis,
+-                dict(
+-                    options=options,
+-                    curvature_options=curvature_options,
+-                    max_exchanges=max_exchanges,
+-                    start=start,
+-                    start_face=start_face,
+-                    interior_lift=interior_lift,
+-                    leader_restart=leader_restart,
+-                ),
+-            )
+     blocks = _Blocks.single(objective.model) if blocks is None else blocks
+     d = blocks.n
+     structural = blocks.structural_rows()
+@@ -2176,7 +2087,12 @@
+         basis = face.basis(d)
+         face_rows = _active_rows(problem, face, basis)
+         phi = basis.T @ theta
+-        lam = _multipliers(face_rows, basis.T @ evaluation.gradient, phi)
++        lam = _multipliers(
++            face_rows,
++            basis.T @ evaluation.gradient,
++            phi,
++            basis.T @ evaluation.hessian @ basis,
++        )
+         gscale = max(1.0, float(np.max(np.abs(evaluation.gradient))))
+         active = lam > 1e-9 * gscale
+         # Leader faces: an active growth row is a collapsing leader.
+@@ -2254,7 +2170,9 @@
+             rphi = rbasis.T @ theta
+             rgrad = rbasis.T @ evaluation.gradient
+             # Reduced gradient along the amplitude, net of active inequality rows.
+-            lam_r = _multipliers(rrows, rgrad, rphi)
++            lam_r = _multipliers(
++                rrows, rgrad, rphi, rbasis.T @ evaluation.hessian @ rbasis
++            )
+             direction = rbasis.T @ np.eye(d)[col]
+             gain = float(direction @ (rgrad - rrows.rows.T @ lam_r))
+             if gain >= -1e-9 * gscale:
+@@ -2317,3 +2235,60 @@
+         final_separation=separation,
+         global_gap=gap,
+     )
++
++
++def _solve_basis(
++    objective,
++    /,
++    *,
++    options=None,
++    curvature_options=None,
++    max_exchanges=30,
++    start=None,
++    start_face=None,
++    blocks=None,
++    interior_lift=False,
++    leader_restart=False,
++):
++    """Fit through one controller with validated runtime coordinate candidates."""
++    from .coordinates import _prepare_coordinates
++
++    _check_fit_time("component solve")
++    options = _NewtonOptions() if options is None else options
++    if not isinstance(options, _NewtonOptions):
++        raise TypeError("options must be _NewtonOptions or None")
++    prepared = _prepare_coordinates(objective, blocks, start)
++    best = None
++    totals = dict(
++        newton_iterations=0,
++        objective_evaluations=0,
++        subproblem_iterations=0,
++        exchanges=0,
++    )
++    for binding in prepared.candidates(start):
++        _check_fit_time("component solve")
++        try:
++            result = _solve_coordinate_basis(
++                binding.objective,
++                options=options,
++                curvature_options=curvature_options,
++                max_exchanges=max_exchanges,
++                start=binding.start,
++                start_face=start_face,
++                blocks=binding.blocks,
++                interior_lift=interior_lift,
++                leader_restart=leader_restart,
++            )
++            for name in totals:
++                totals[name] += getattr(result, name)
++            result = binding.restore(result, curvature_options)
++        except (RuntimeError, ArithmeticError, ValueError):
++            if binding.original is binding.objective or DEBUG:
++                raise
++            continue
++        if result.status in _CONVERGED:
++            return dataclass_replace(result, **totals)
++        score = (result.status == _UNCERTIFIED, -result.objective_value)
++        if best is None or score > (best.status == _UNCERTIFIED, -best.objective_value):
++            best = result
++    return dataclass_replace(best, **totals)
+--- a/gibbus/_fit/basis_objective.py
++++ b/gibbus/_fit/basis_objective.py
+@@ -52,6 +52,7 @@
+     _failure,
+     _ImproperPotential,
+     _interval_state,
++    _NormalizerContext,
+     _NormalizerOptions,
+ )
+ from .._observations.empirical import _normalized_weights
+@@ -233,6 +234,24 @@
+         self.options = options
+         self._zero_missing = np.zeros((stats.mean.size, stats.mean.size))
+ 
++    coefficient_convex = True
++
++    def coordinate_observations(self, block):
++        """Retained observations for direct statistics in runtime coordinates."""
++        del block
++        if self.stats.points is None:
++            return None
++        return self.stats.points, self.stats.weights
++
++    def in_coordinates(self, blocks):
++        """Recompute sufficient statistics from observations in the new basis."""
++        model = blocks.model
++        return _BasisPointObjective(
++            _NormalizerContext(model),
++            _point_statistics(model, self.stats.points, self.stats.weights),
++            self.options,
++        )
++
+     def on_face(self, basis, /):
+         """The same objective for points of a face ``theta = N phi``.
+ 
+@@ -476,6 +495,17 @@
+         self.model = context.model
+         self.rows = rows
+         self.options = options
++
++    def coordinate_observations(self, block):
++        """Intervals are reduced directly by the normalizer in either basis."""
++        del block
++        return None, None
++
++    def in_coordinates(self, blocks):
++        """Bind the original interval rows to the numerical basis."""
++        return _BasisIntervalObjective(
++            _NormalizerContext(blocks.model), self.rows, self.options
++        )
+ 
+     def on_face(self, basis, /):
+         """The same objective for points of a face ``theta = N phi``.
+--- a/gibbus/_fit/coordinates.py
++++ b/gibbus/_fit/coordinates.py
+@@ -0,0 +1,457 @@
++"""Runtime coefficient coordinates with directly evaluated polynomial recurrences.
++
++A plan changes coordinates inside the existing column span. Gates, endpoint logs,
++shared coefficients and tail requests remain structural properties of that span.
++Only a constant potential gauge may be added. Durable models stay canonical.
++"""
++
++import math
++from dataclasses import dataclass, replace
++from fractions import Fraction as F
++
++import numpy as np
++
++from .._model.basis import _restrict_to
++
++
++class _CoordinateMismatch(ArithmeticError):
++    """A runtime coordinate conversion failed likelihood accounting."""
++
++
++@dataclass(frozen=True)
++class _PolynomialCoordinates:
++    family: str
++    degree: int
++    origin: float
++    scale: float
++    alpha: float
++    norms: np.ndarray
++    reference: np.ndarray
++    recurrence: np.ndarray
++    polynomial_map: np.ndarray
++    transform: np.ndarray
++    transform_low: np.ndarray
++    column_degree: np.ndarray
++    column_fn: np.ndarray
++
++    def _wide_transform(self):
++        return self.transform.astype(np.longdouble) + self.transform_low.astype(
++            np.longdouble
++        )
++
++    def to_canonical(self, coefficients):
++        return np.asarray(
++            self._wide_transform() @ np.asarray(coefficients, dtype=np.longdouble),
++            dtype=float,
++        )
++
++    def from_canonical(self, coefficients):
++        """Back substitution in the degree-ordered, block-triangular map."""
++        result = np.asarray(coefficients, dtype=np.longdouble).copy()
++        matrix = self._wide_transform()
++        # Column positions need not be degree ordered in a general basis.
++        order = np.argsort(self.column_degree, kind="stable")
++        for j in order[::-1]:
++            result[j] /= matrix[j, j]
++            result -= matrix[:, j] * result[j] * (np.arange(len(result)) != j)
++        return np.asarray(result, dtype=float)
++
++
++def _recurrence(family, degree, alpha=0.0):
++    """Normalized three-term recurrence and its exact binary64 polynomial map."""
++    norms = np.ones(degree + 1)
++    if family == "laguerre":
++        for n in range(1, degree + 1):
++            norms[n] = norms[n - 1] * math.sqrt((n + alpha) / n)
++    elif family == "hermite":
++        for n in range(1, degree + 1):
++            norms[n] = norms[n - 1] * math.sqrt(n)
++    raw = [[F(1)]]
++    coefficients = []
++    for n in range(degree):
++        if family == "laguerre":
++            a, b, c = (
++                -F(1, n + 1),
++                (2 * n + F(alpha) + 1) / (n + 1),
++                (n + F(alpha)) / (n + 1),
++            )
++        elif family == "chebyshev":
++            a, b, c = F(1 if n == 0 else 2), F(0), F(0 if n == 0 else 1)
++        else:
++            a, b, c = F(1), F(0), F(n)
++        p = [F(0)] * (n + 2)
++        for k, value in enumerate(raw[n]):
++            p[k] += b * value
++            p[k + 1] += a * value
++        if n:
++            for k, value in enumerate(raw[n - 1]):
++                p[k] -= c * value
++        raw.append(p)
++        coefficients.append(
++            (
++                float(a * F(float(norms[n])) / F(float(norms[n + 1]))),
++                float(b * F(float(norms[n])) / F(float(norms[n + 1]))),
++                (
++                    float(c * F(float(norms[n - 1])) / F(float(norms[n + 1])))
++                    if n
++                    else 0.0
++                ),
++            )
++        )
++    polynomials = [[v / F(float(norms[n])) for v in p] for n, p in enumerate(raw)]
++    return norms, np.ascontiguousarray(coefficients), polynomials
++
++
++def _polynomial_coordinates(model, points=None, weights=None, start=None, movable=None):
++    """Construct support-appropriate coordinates without enlarging a gated span.
++
++    Complete degree prefixes with identical gates can be reparameterized.
++    Incomplete or coupled columns retain their direct canonical evaluator;
++    converting those columns alone would enlarge the requested span or cause
++    cancellation in a recurrence expansion of an isolated monomial.
++    """
++    if model.polynomial_coordinates is not None:
++        return model
++    degree = max((f.degree for f in model.functions if f.kind == "monomial"), default=0)
++    if degree < 1:
++        return model
++    request, geometry = model.request, model.geometry
++    lower, upper = request.lower, request.upper
++    alpha = 0.0
++    if math.isfinite(lower) and math.isfinite(upper):
++        family, origin, scale = (
++            "chebyshev",
++            geometry.center,
++            min(geometry.scale, upper / 2 - lower / 2),
++        )
++    elif math.isfinite(lower) or math.isfinite(upper):
++        family = "laguerre"
++        origin = lower if math.isfinite(lower) else upper
++        side = "lower" if math.isfinite(lower) else "upper"
++        if start is not None:
++            for j, column in enumerate(model.columns):
++                if (
++                    column.nonnegative
++                    and model.functions[column.terms[0][0]].side == side
++                ):
++                    alpha = max(0.0, float(start[j]))
++        distance = geometry.scale
++        if points is not None:
++            distance = float(
++                np.average(np.abs(np.asarray(points) - origin), weights=weights)
++            ) / (alpha + 1)
++        scale = distance if math.isfinite(lower) else -distance
++    else:
++        family, origin, scale = "hermite", geometry.center, geometry.scale
++    if not math.isfinite(scale) or scale == 0 or not math.isfinite(origin):
++        return model
++    norms, recurrence, polynomials = _recurrence(family, degree, alpha)
++    offset = (F(geometry.center) - F(origin)) / F(scale)
++    slope = F(geometry.scale) / F(scale)
++    expanded = []
++    for p in polynomials:
++        expanded.append(
++            [
++                sum(
++                    p[j] * math.comb(j, k) * offset ** (j - k) * slope**k
++                    for j in range(k, len(p))
++                )
++                for k in range(len(p))
++            ]
++        )
++    d = model.n_coefficients
++    exact = [[F(int(i == j)) for j in range(d)] for i in range(d)]
++    constants = [F(0)] * d
++    column_degree = np.zeros(d, dtype=np.intc)
++    column_fn = np.zeros(d, dtype=np.intc)
++    groups = {}
++    movable = set(range(d)) if movable is None else set(movable)
++    for j, column in enumerate(model.columns):
++        column_fn[j] = column.terms[0][0]
++        if j not in movable or len(column.terms) != 1:
++            continue
++        fn, gate = column.terms[0]
++        function = model.functions[fn]
++        if function.kind == "monomial" and function.degree > 0:
++            groups.setdefault(gate, {})[function.degree] = j
++    reference = np.array([float(sum(p)) for p in polynomials])
++    for gate, columns in groups.items():
++        n = 0
++        while n + 1 in columns:
++            n += 1
++        for power in range(1, n + 1):
++            col = columns[power]
++            column_degree[col] = power
++            for k in range(1, power + 1):
++                exact[columns[k]][col] = expanded[power][k]
++            # Only an ungated constant is a harmless potential gauge.
++            if gate == (F(1), F(0), F(0)):
++                constants[col] = expanded[power][0] - F(float(reference[power]))
++    if not np.any(column_degree):
++        return model
++    transformed = _restrict_to(model, list(map(list, zip(*exact))), model.face)
++    full = [list(row) for row in transformed.coefficient_map_exact]
++    zero = next(
++        f.index for f in model.functions if f.kind == "monomial" and f.degree == 0
++    )
++    for j, value in enumerate(constants):
++        full[3 * zero][j] += value
++    # Convert each polynomial/gate slot to the recurrence exactly before rounding.
++    mapped = [[[F(0)] * d for _ in range(3)] for _ in range(degree + 1)]
++    indices = {f.degree: f.index for f in model.functions if f.kind == "monomial"}
++    for gate in range(3):
++        for col in range(d):
++            remainder = [full[3 * indices[n] + gate][col] for n in range(degree + 1)]
++            for n in range(degree, -1, -1):
++                value = remainder[n] / expanded[n][n]
++                mapped[n][gate][col] = value
++                for k, v in enumerate(expanded[n]):
++                    remainder[k] -= value * v
++    transform = np.array(exact, dtype=float)
++    low = np.array(
++        [
++            [float(v - F(float(transform[i, j]))) for j, v in enumerate(row)]
++            for i, row in enumerate(exact)
++        ]
++    )
++    plan = _PolynomialCoordinates(
++        family,
++        degree,
++        origin,
++        scale,
++        alpha,
++        norms,
++        reference,
++        recurrence,
++        np.ascontiguousarray(np.array(mapped, dtype=float).reshape(-1, d)),
++        transform,
++        low,
++        column_degree,
++        column_fn,
++    )
++    return replace(
++        transformed,
++        coefficient_map_exact=tuple(map(tuple, full)),
++        coefficient_map=np.array(full, dtype=float),
++        polynomial_coordinates=plan,
++        columns=tuple(
++            replace(
++                c,
++                terms=tuple(
++                    (f.index, tuple(full[3 * f.index + k][j] for k in range(3)))
++                    for f in model.functions
++                    if any(full[3 * f.index + k][j] for k in range(3))
++                ),
++            )
++            for j, c in enumerate(transformed.columns)
++        ),
++    )
++
++
++@dataclass
++class _CoordinateBinding:
++    original: object
++    objective: object
++    original_blocks: object
++    blocks: object
++    start: object
++    transform: np.ndarray
++    inverse: np.ndarray
++
++    def candidates(self, canonical_start):
++        """Try the recurrence representation, then the same family canonically.
++
++        The second representation is only needed after a numerical failure,
++        unresolved optimization, or failed output validation. Both use the
++        identical controller and acceptance rules.
++        """
++        yield self
++        if self.original is not self.objective:
++            identity = np.eye(self.original_blocks.n)
++            yield _CoordinateBinding(
++                self.original,
++                self.original,
++                self.original_blocks,
++                self.original_blocks,
++                canonical_start,
++                identity,
++                identity,
++            )
++
++    def restore(self, result, curvature_options):
++        """Validate the canonical likelihood and shape before returning a fit."""
++        from .basis_constraints import _ConstraintRows
++        from .basis_newton import _face_from, _JointCurvature
++        from .curvature_search import _CurvatureOptions
++
++        if self.original is self.objective:
++            return result
++        beta = result.params
++        # Block maps use extended accumulation, including their low parts.
++        theta = np.asarray(
++            self.transform.astype(np.longdouble) @ beta.astype(np.longdouble),
++            dtype=float,
++        )
++        for k, model in enumerate(self.blocks.models):
++            plan = model.polynomial_coordinates
++            if plan is not None:
++                indices = self.blocks.index[k]
++                theta[indices] = plan.to_canonical(beta[indices])
++        zero_logs = set(result.face.zero_logs)
++        for k, model in enumerate(self.original_blocks.models):
++            for j, column in enumerate(model.columns):
++                index = self.original_blocks.index[k][j]
++                if column.nonnegative and theta[index] == 0.0:
++                    zero_logs.add(int(index))
++        face = _face_from(
++            self.original_blocks, result.face.suppressed, tuple(sorted(zero_logs))
++        )
++        if face is None:
++            raise RuntimeError(
++                "numerical coordinates returned an improper canonical face"
++            )
++        canonical_objective = self.original
++        canonical_curvature = _JointCurvature(self.original_blocks)
++        if face.equalities.size:
++            canonical_basis = face.basis(self.original_blocks.n)
++            canonical_objective = canonical_objective.on_face(canonical_basis)
++            canonical_curvature = canonical_curvature.on_face(canonical_basis)
++        evaluation = canonical_objective(theta)
++        errors = 0.0
++        for state in (evaluation.state, result.evaluation.state):
++            if state is not None:
++                errors += state.rel_error + state.cond_error
++        if evaluation.state is None:
++            # Joint objectives expose per-component normalization contexts.
++            # Recover their numerical error estimates, not an ad hoc NLL slack.
++            from .._model.basis_normalizer import _basis_state
++
++            for objective, blocks, coefficients in (
++                (canonical_objective, self.original_blocks, theta),
++                (
++                    (
++                        self.objective.on_face(result.face.basis(self.blocks.n))
++                        if result.face.equalities.size
++                        else self.objective
++                    ),
++                    self.blocks,
++                    beta,
++                ),
++            ):
++                for k, context in enumerate(objective.contexts):
++                    state = _basis_state(
++                        context, blocks.part(k, coefficients), objective.options
++                    )
++                    errors += state.rel_error + state.cond_error
++        tolerance = 32 * (errors + np.finfo(float).eps * max(1.0, abs(evaluation.nll)))
++        if (
++            not math.isfinite(evaluation.nll)
++            or abs(evaluation.nll - result.objective_value) > tolerance
++        ):
++            raise _CoordinateMismatch(
++                "numerical and canonical likelihoods disagree at the fitted point"
++            )
++        rows = result.rows.rows @ self.inverse
++        norms = np.linalg.norm(rows, axis=1)
++        rows /= np.where(norms > 0, norms, 1)[:, None]
++        separation = canonical_curvature.separate(
++            theta, curvature_options or _CurvatureOptions()
++        )
++        status = result.status
++        if (
++            status in ("converged", "converged_approximately")
++            and not separation.feasible
++        ):
++            status = "uncertified"
++        families = sorted(
++            {
++                m.polynomial_coordinates.family
++                for m in self.blocks.models
++                if m.polynomial_coordinates is not None
++            }
++        )
++        return replace(
++            result,
++            status=status,
++            params=theta,
++            evaluation=evaluation,
++            objective_value=float(evaluation.nll),
++            rows=_ConstraintRows(rows, result.rows.kinds),
++            face=face,
++            final_separation=separation,
++            coordinate_system="+".join(families),
++        )
++
++
++def _prepare_coordinates(objective, blocks, start):
++    """Bind single and coupled objectives to the same coordinate protocol."""
++    from .basis_newton import _Blocks
++
++    original_blocks = _Blocks.single(objective.model) if blocks is None else blocks
++    identity = np.eye(original_blocks.n)
++    unchanged = _CoordinateBinding(
++        objective,
++        objective,
++        original_blocks,
++        original_blocks,
++        start,
++        identity,
++        identity,
++    )
++    if not hasattr(objective, "coordinate_observations"):
++        return unchanged
++    if any(m.polynomial_coordinates is not None for m in original_blocks.models):
++        return unchanged
++    counts = np.bincount(
++        np.concatenate(original_blocks.index), minlength=original_blocks.n
++    )
++    models, transform = [], identity.copy()
++    for k, model in enumerate(original_blocks.models):
++        observations = objective.coordinate_observations(k)
++        if observations is None:
++            return unchanged
++        points, weights = observations
++        indices = original_blocks.index[k]
++        movable = np.flatnonzero(counts[indices] == 1)
++        numerical = _polynomial_coordinates(
++            model,
++            points,
++            weights,
++            None if start is None else np.asarray(start)[indices],
++            movable,
++        )
++        models.append(numerical)
++        if numerical.polynomial_coordinates is not None:
++            transform[np.ix_(indices, indices)] = (
++                numerical.polynomial_coordinates.transform
++            )
++    if all(a is b for a, b in zip(models, original_blocks.models)):
++        return unchanged
++    numerical_blocks = replace(original_blocks, models=tuple(models))
++    numerical_objective = objective.in_coordinates(numerical_blocks)
++    inverse = identity.copy()
++    for k, model in enumerate(models):
++        plan = model.polynomial_coordinates
++        if plan is not None:
++            indices = numerical_blocks.index[k]
++            inverse[np.ix_(indices, indices)] = np.column_stack(
++                [plan.from_canonical(column) for column in np.eye(len(indices))]
++            )
++    numerical_start = None if start is None else np.asarray(start, dtype=float).copy()
++    if numerical_start is not None:
++        for k, model in enumerate(models):
++            plan = model.polynomial_coordinates
++            if plan is not None:
++                indices = numerical_blocks.index[k]
++                numerical_start[indices] = plan.from_canonical(
++                    np.asarray(start)[indices]
++                )
++    return _CoordinateBinding(
++        objective,
++        numerical_objective,
++        original_blocks,
++        numerical_blocks,
++        numerical_start,
++        transform,
++        inverse,
++    )
+--- a/gibbus/_fit/laguerre.py
++++ b/gibbus/_fit/laguerre.py
+@@ -1,224 +1,12 @@
+-"""Equivalent Laguerre coordinates for ungated half-line point fits.
++"""Compatibility entry point for the generalized polynomial coordinate planner."""
+ 
+-Values, derivatives and sufficient statistics use the three-term recurrence.
+-The exact polynomial map supplies interval and asymptotic constraints only.
+-Public models and serialized coefficients retain their canonical basis.
+-"""
+-
+-import math
+-from dataclasses import dataclass, replace
+-from fractions import Fraction as F
+-
+-import numpy as np
+-
+-from .._model.basis import _BasisColumn, _restrict_to
+-
+-
+-@dataclass(frozen=True)
+-class _LaguerrePlan:
+-    degree: int
+-    alpha: float
+-    scale: float
+-    column_degree: np.ndarray
+-    column_fn: np.ndarray
+-    norms: np.ndarray
+-    reference: np.ndarray
+-    transform: np.ndarray
+-    transform_low: np.ndarray
+-
+-    def _wide_transform(self):
+-        return self.transform.astype(np.longdouble) + self.transform_low.astype(
+-            np.longdouble
+-        )
+-
+-    def to_canonical(self, coefficients):
+-        return np.asarray(
+-            self._wide_transform() @ np.asarray(coefficients, dtype=np.longdouble),
+-            dtype=float,
+-        )
+-
+-    def from_canonical(self, coefficients):
+-        indices = np.flatnonzero(self.column_degree > 0)
+-        matrix = self._wide_transform()[np.ix_(indices, indices)]
+-        rhs = np.asarray(coefficients, dtype=np.longdouble)[indices]
+-        result = np.asarray(coefficients, dtype=np.longdouble).copy()
+-        for j in range(len(indices) - 1, -1, -1):
+-            result[indices[j]] = (
+-                rhs[j] - matrix[j, j + 1 :] @ result[indices[j + 1 :]]
+-            ) / matrix[j, j]
+-        return np.asarray(result, dtype=float)
++from .coordinates import _polynomial_coordinates
+ 
+ 
+ def _laguerre_model(model, stats, start):
+-    """Return an equivalent directly evaluated basis, or ``None`` if unsupported."""
+-    request = model.request
+-    if (
+-        model.polynomial_coordinates is not None
+-        or stats.points is None
+-        or request.bulk_degree < 8
+-        or not math.isfinite(request.lower)
+-        or not request.upper_infinite
+-        or request.lower_tail is not None
+-        or request.upper_tail is not None
+-    ):
++    """Return half-line recurrence coordinates when observations are available."""
++    if stats.points is None or model.polynomial_coordinates is not None:
+         return None
+-    polynomial, logs = {}, []
+-    column_fn = np.zeros(model.n_coefficients, dtype=np.intc)
+-    column_degree = np.zeros(model.n_coefficients, dtype=np.intc)
+-    for col, column in enumerate(model.columns):
+-        if len(column.terms) != 1:
+-            return None
+-        index, gate = column.terms[0]
+-        if gate != (F(1), F(0), F(0)):
+-            return None
+-        fn = model.functions[index]
+-        column_fn[col] = index
+-        if fn.kind == "monomial" and fn.degree > 0:
+-            polynomial[fn.degree] = col
+-            column_degree[col] = fn.degree
+-        elif fn.kind == "log" and fn.side == "lower":
+-            logs.append(col)
+-        else:
+-            return None
+-    degree = max(polynomial, default=0)
+-    if set(polynomial) != set(range(1, degree + 1)):
+-        return None
+-    alpha = max(0.0, float(start[logs[0]])) if start is not None and logs else 0.0
+-    mean = float(np.average(stats.points - request.lower, weights=stats.weights))
+-    scale = mean / (alpha + 1.0)
+-    if not math.isfinite(scale) or scale <= 0.0:
+-        return None
+-    norms = np.ones(degree + 1)
+-    for n in range(1, degree + 1):
+-        norms[n] = norms[n - 1] * math.sqrt((n + alpha) / n)
+-    a = F(alpha)
+-    polynomials = [[F(1)], [1 + a, F(-1)]]
+-    for n in range(1, degree):
+-        values = [F(0)] * (n + 2)
+-        for k, value in enumerate(polynomials[n]):
+-            values[k] += (2 * n + a + 1) * value / (n + 1)
+-            values[k + 1] -= value / (n + 1)
+-        for k, value in enumerate(polynomials[n - 1]):
+-            values[k] -= (n + a) * value / (n + 1)
+-        polynomials.append(values)
+-    polynomials = [
+-        [v / F(float(norms[n])) for v in p] for n, p in enumerate(polynomials)
+-    ]
+-    reference = np.array([float(sum(p)) for p in polynomials])
+-    offset = (F(model.geometry.center) - F(request.lower)) / F(scale)
+-    slope = F(model.geometry.scale) / F(scale)
+-    exact = [[F(0)] * model.n_coefficients for _ in model.columns]
+-    constants = [F(0)] * model.n_coefficients
+-    for n, col in polynomial.items():
+-        constants[col] = sum(v * offset**k for k, v in enumerate(polynomials[n])) - F(
+-            float(reference[n])
+-        )
+-        for k, row in polynomial.items():
+-            if k <= n:
+-                exact[row][col] = sum(
+-                    polynomials[n][j] * math.comb(j, k) * offset ** (j - k) * slope**k
+-                    for j in range(k, n + 1)
+-                )
+-    for col in logs:
+-        exact[col][col] = F(1)
+-    transformed = _restrict_to(model, list(map(list, zip(*exact))), model.face)
+-    full = [list(row) for row in transformed.coefficient_map_exact]
+-    # The degree-zero function records the recurrence's constant gauge.
+-    full[0] = constants
+-    columns = []
+-    for col, column in enumerate(transformed.columns):
+-        terms = column.terms
+-        if constants[col]:
+-            terms = ((0, (constants[col], F(0), F(0))),) + terms
+-        label = (
+-            f"Laguerre[{column_degree[col]}]"
+-            if column_degree[col]
+-            else model.columns[col].label
+-        )
+-        columns.append(_BasisColumn(terms, label, column.nonnegative))
+-    transform = np.array(exact, dtype=float)
+-    transform_low = np.array(
+-        [
+-            [float(v - F(float(transform[i, j]))) for j, v in enumerate(row)]
+-            for i, row in enumerate(exact)
+-        ]
+-    )
+-    plan = _LaguerrePlan(
+-        degree,
+-        alpha,
+-        scale,
+-        column_degree,
+-        column_fn,
+-        norms,
+-        reference,
+-        transform,
+-        transform_low,
+-    )
+-    return replace(
+-        transformed,
+-        columns=tuple(columns),
+-        coefficient_map_exact=tuple(map(tuple, full)),
+-        coefficient_map=np.array(full, dtype=float),
+-        polynomial_coordinates=plan,
+-    )
+-
+-
+-def _solve_in_laguerre(objective, model, solve, kwargs):
+-    """Run the complete production controller, then restore canonical records."""
+-    from .._model.basis_normalizer import _NormalizerContext
+-    from .basis_constraints import _ConstraintRows
+-    from .basis_newton import _Blocks, _JointCurvature
+-    from .basis_objective import _BasisPointObjective, _point_statistics
+-    from .curvature_search import _CurvatureOptions
+-
+-    plan = model.polynomial_coordinates
+-    inner = _BasisPointObjective(
+-        _NormalizerContext(model),
+-        _point_statistics(model, objective.stats.points, objective.stats.weights),
+-        objective.options,
+-    )
+-    arguments = dict(kwargs)
+-    if arguments.get("start") is not None:
+-        arguments["start"] = plan.from_canonical(arguments["start"])
+-    result = solve(inner, **arguments)
+-    theta = plan.to_canonical(result.params)
+-    evaluation = objective(theta)
+-    tolerance = 32.0 * (
+-        evaluation.state.rel_error
+-        + result.evaluation.state.rel_error
+-        + evaluation.state.cond_error
+-        + result.evaluation.state.cond_error
+-        + np.finfo(float).eps * max(1.0, abs(evaluation.nll))
+-    )
+-    if abs(evaluation.nll - result.objective_value) > tolerance:
+-        raise RuntimeError(
+-            "Laguerre and canonical likelihoods disagree at the fitted point"
+-        )
+-    inverse = np.column_stack(
+-        [plan.from_canonical(column) for column in np.eye(model.n_coefficients)]
+-    )
+-    rows = result.rows.rows @ inverse
+-    norms = np.linalg.norm(rows, axis=1)
+-    rows = rows / np.where(norms > 0.0, norms, 1.0)[:, None]
+-    face = replace(
+-        result.face,
+-        equalities=result.face.equalities @ inverse,
+-        growth=result.face.growth @ inverse,
+-    )
+-    separation = _JointCurvature(_Blocks.single(objective.model)).separate(
+-        theta, arguments.get("curvature_options") or _CurvatureOptions()
+-    )
+-    status = result.status
+-    if status in ("converged", "converged_approximately") and not separation.feasible:
+-        status = "uncertified"
+-    return replace(
+-        result,
+-        status=status,
+-        params=theta,
+-        evaluation=evaluation,
+-        objective_value=float(evaluation.nll),
+-        rows=_ConstraintRows(rows, result.rows.kinds),
+-        face=face,
+-        final_separation=separation,
+-        coordinate_system="laguerre",
+-    )
++    numerical = _polynomial_coordinates(model, stats.points, stats.weights, start)
++    plan = numerical.polynomial_coordinates
++    return numerical if plan is not None and plan.family == "laguerre" else None
+--- a/gibbus/_fit/linear_qp.py
++++ b/gibbus/_fit/linear_qp.py
+@@ -141,3 +141,23 @@
+     if not np.all(np.isfinite(endpoint)) or not np.isfinite(model):
+         raise np.linalg.LinAlgError("unresolved quadratic endpoint")
+     return _LinearQPResult(endpoint, -z / magnitude, model, gap)
++
++
++def _projection_candidate(hessian, gradient, params, rows, /):
++    """Return a resolved scalar QP endpoint, or defer to the conic kernel.
++
++    Kernel eligibility uses the common quadratic gap target in the original
++    model. A finite but poorly resolved projection must not displace a usable
++    interior-point solve. This decision has no knowledge of basis families.
++    """
++    from .._defaults import CONIC_QP_GAP_TOL
++
++    result = _linear_subproblem(hessian, gradient, params, rows)
++    limit = CONIC_QP_GAP_TOL * max(1.0, abs(result.model_value))
++    if not np.isfinite(result.gap) or result.gap > limit:
++        return None
++    bound = max(0.0, -result.model_value) + max(0.0, result.gap)
++    slope = float(gradient @ (result.params - params))
++    if not np.isfinite(slope) or (bound > limit and slope >= 0.0):
++        return None
++    return result
+--- a/gibbus/_model/_basis_kernels.pxd
++++ b/gibbus/_model/_basis_kernels.pxd
+@@ -56,6 +56,9 @@
+     const double* orth_reference
+     double orth_scale
+     double orth_alpha
++    double orth_origin
++    const double* orth_recurrence
++    const double* orth_map
+     const double* lim_low
+     const double* lim_up
+     const double* lim_low_abs
+--- a/gibbus/_model/_basis_kernels.pyx
++++ b/gibbus/_model/_basis_kernels.pyx
+@@ -437,6 +437,8 @@
+                    else np.ascontiguousarray(plan.column_fn))
+         orth_norm = np.ones(1) if plan is None else np.ascontiguousarray(plan.norms)
+         orth_reference = np.zeros(1) if plan is None else np.ascontiguousarray(plan.reference)
++        orth_recurrence = np.zeros((1, 3)) if plan is None else plan.recurrence
++        orth_map = np.zeros((1, d)) if plan is None else plan.polynomial_map
+         ma, mb, mc = cmap[0::3], cmap[1::3], cmap[2::3]
+         lim_low = np.ascontiguousarray(ma + -1.0 * mb + 1.0 * mc)
+         lim_up = np.ascontiguousarray(ma + 1.0 * mb + -1.0 * mc)
+@@ -458,6 +460,7 @@
+             term_gup=np.array(gup, dtype=np.float64),
+             cmap=cmap, cmap_low=cmap_low, orth_degree=orth_degree,
+             orth_fn=orth_fn, orth_norm=orth_norm, orth_reference=orth_reference,
++            orth_recurrence=orth_recurrence, orth_map=orth_map,
+             lim_low=lim_low, lim_up=lim_up,
+             lim_low_abs=lim_low_abs, lim_up_abs=lim_up_abs, nonneg=nonneg,
+             fn_used=fn_used,
+@@ -488,6 +491,9 @@
+         )
+         self.t.orth_scale = 1.0 if plan is None else plan.scale
+         self.t.orth_alpha = 0.0 if plan is None else plan.alpha
++        self.t.orth_origin = 0.0 if plan is None else plan.origin
++        self.t.orth_recurrence = <const double*> cnp.PyArray_DATA(arrays["orth_recurrence"])
++        self.t.orth_map = <const double*> cnp.PyArray_DATA(arrays["orth_map"])
+         self.t.orth_column_degree = <const int*> cnp.PyArray_DATA(arrays["orth_degree"])
+         self.t.orth_column_fn = <const int*> cnp.PyArray_DATA(arrays["orth_fn"])
+         self.t.orth_norm = <const double*> cnp.PyArray_DATA(arrays["orth_norm"])
+@@ -673,32 +679,6 @@
+     cdef bint gated, need_l = False, need_u = False
+     cdef int nmax = 0
+     cdef double argument
+-    if t.orth_degree:
+-        argument = (x - t.lower) / t.orth_scale
+-        for k in range(order + 1):
+-            fwork[k] = 1.0 if k == 0 else 0.0
+-            fwork[5 + k] = (1.0 + t.orth_alpha - argument if k == 0
+-                            else (-1.0 if k == 1 else 0.0))
+-        for n in range(1, t.orth_degree):
+-            for k in range(order + 1):
+-                fwork[5*(n+1) + k] = (
+-                    (2*n + t.orth_alpha + 1.0 - argument) * fwork[5*n + k]
+-                    - (n + t.orth_alpha) * fwork[5*(n-1) + k]
+-                    - (k * fwork[5*n + k-1] if k else 0.0)
+-                ) / (n + 1)
+-        for col in range(d):
+-            n = t.orth_column_degree[col]
+-            if n:
+-                for k in range(order + 1):
+-                    out[k*d + col] = fwork[5*n + k] / t.orth_norm[n] / pow(t.orth_scale, k)
+-                    if k == 0:
+-                        out[col] -= t.orth_reference[n]
+-            else:
+-                j = t.orth_column_fn[col]
+-                _function_point(t, j, x, z, zp, order, &fwork[5*j])
+-                for k in range(order + 1):
+-                    out[k*d + col] = fwork[5*j + k]
+-        return
+     for term in range(t.col_start[d]):
+         if t.term_g1[term] != 0.0:
+             need_l = True
+@@ -712,6 +692,40 @@
+         _tanh_point(t.au * (t.xu - x), -t.au, order, tu)
+     else:
+         _flat_point(tu)
++    for k in range((order + 1) * d):
++        out[k] = 0.0
++    if t.orth_degree:
++        argument = (x - t.orth_origin) / t.orth_scale
++        for k in range(order + 1):
++            fwork[k] = 1.0 if k == 0 else 0.0
++        for n in range(t.orth_degree):
++            for k in range(order + 1):
++                fwork[5*(n+1) + k] = (
++                    (t.orth_recurrence[3*n] * argument + t.orth_recurrence[3*n+1]) * fwork[5*n+k]
++                    + (k * t.orth_recurrence[3*n] * fwork[5*n+k-1] if k else 0.0)
++                    - (t.orth_recurrence[3*n+2] * fwork[5*(n-1)+k] if n else 0.0)
++                )
++        for col in range(d):
++            if t.orth_column_degree[col] == 0:
++                continue
++            for n in range(t.orth_degree + 1):
++                a1 = t.orth_map[(3*n+1)*d+col]
++                a2 = t.orth_map[(3*n+2)*d+col]
++                if a1 == 0.0 and a2 == 0.0:
++                    acc = t.orth_map[3*n*d+col]
++                    if acc != 0.0:
++                        for k in range(order + 1):
++                            out[k*d+col] += fwork[5*n+k] * acc / pow(t.orth_scale,k)
++                    continue
++                if lower_side:
++                    g[0] = (t.orth_map[3*n*d+col] - a1 + a2) + a1 * tl[1] - a2 * tu[2]
++                else:
++                    g[0] = (t.orth_map[3*n*d+col] + a1 - a2) - a1 * tl[2] + a2 * tu[1]
++                for k in range(order):
++                    g[k+1] = a1 * tl[3+k] + a2 * tu[3+k]
++                for k in range(order + 1):
++                    for i in range(k + 1):
++                        out[k*d+col] += _comb(k,i) * fwork[5*n+i] / pow(t.orth_scale,i) * g[k-i]
+     for j in range(t.nf):
+         if t.fn_used[j] and t.kind[j] == FN_MONOMIAL and t.degree[j] > nmax:
+             nmax = t.degree[j]
+@@ -723,11 +737,11 @@
+     for j in range(t.nf):
+         if t.fn_used[j]:
+             _function_point(t, j, x, z, zp, order, &fwork[5 * j])
+-    for k in range((order + 1) * d):
+-        out[k] = 0.0
+     for col in range(d):
+         for term in range(t.col_start[col], t.col_start[col + 1]):
+             j = t.term_fn[term]
++            if t.orth_degree and t.orth_column_degree[col] > 0 and t.kind[j] == FN_MONOMIAL:
++                continue
+             a1 = t.term_g1[term]
+             a2 = t.term_g2[term]
+             gated = a1 != 0.0 or a2 != 0.0
+@@ -955,6 +969,8 @@
+             have[k] = False
+         for term in range(t.col_start[col], t.col_start[col + 1]):
+             j = t.term_fn[term]
++            if t.orth_degree and t.orth_column_degree[col] > 0 and t.kind[j] == FN_MONOMIAL:
++                continue
+             a1 = t.term_g1[term]
+             a2 = t.term_g2[term]
+             gated = a1 != 0.0 or a2 != 0.0
+--- a/gibbus/_model/_normalizer_kernels.pyx
++++ b/gibbus/_model/_normalizer_kernels.pyx
+@@ -284,6 +284,7 @@
+     local.c = 0.0
+     local.h = 1.0
+     local.orth_scale = physical.orth_scale / h
++    local.orth_origin = (physical.orth_origin - c) / h
+     local.lower = (physical.lower - c) / h if isfinite(physical.lower) else physical.lower
+     local.upper = (physical.upper - c) / h if isfinite(physical.upper) else physical.upper
+     local.xl = (physical.xl - c) / h if physical.has_l else 0.0
+@@ -1914,7 +1915,7 @@
+     # At >= 2**24 origin/scale ratios, user-coordinate quadrature nodes
+     # lose too many bits to meet the accuracy budget. Ordinary fits retain
+     # the original path to avoid perturbing already-resolved tail rows.
+-    cdef bint canonical = fabs(t.c / t.h) > 16777216.0
++    cdef bint canonical = t.orth_degree > 0 or fabs(t.c / t.h) > 16777216.0
+     cdef TailResult growth[2]
+     cdef PotentialPrep prep
+     cdef int out
+--- a/tests/test_fitting_coordinates.py
++++ b/tests/test_fitting_coordinates.py
+@@ -0,0 +1,199 @@
++"""Span, derivative and likelihood invariants of runtime fitting coordinates."""
++
++import numpy as np
++import pytest
++
++from gibbus import BasisSpec, Polynomial
++from gibbus._fit.basis_objective import (
++    _BasisIntervalObjective,
++    _BasisPointObjective,
++    _interval_rows,
++    _point_statistics,
++)
++from gibbus._fit.coordinates import _polynomial_coordinates, _prepare_coordinates
++from gibbus._model.basis import _build_basis
++from gibbus._model.basis_eval import _evaluate_basis
++from gibbus._model.basis_normalizer import _NormalizerContext
++
++
++@pytest.mark.parametrize(
++    "support,family",
++    [
++        ((-2, 3), "chebyshev"),
++        ((0, np.inf), "laguerre"),
++        ((-np.inf, 3), "laguerre"),
++        ((-np.inf, np.inf), "hermite"),
++    ],
++)
++def test_coordinate_maps_and_all_derivatives_preserve_the_polynomial(support, family):
++    lower, upper = support
++    data = np.linspace(max(lower, -1), min(upper, 2), 100)
++    canonical = _build_basis(BasisSpec(support=support, bulk_degree=6), data)
++    numerical = _polynomial_coordinates(canonical, data)
++    plan = numerical.polynomial_coordinates
++    assert plan.family == family
++    beta = np.random.default_rng(42).normal(size=canonical.n_coefficients)
++    theta = plan.to_canonical(beta)
++    np.testing.assert_allclose(plan.from_canonical(theta), beta, rtol=2e-11, atol=2e-11)
++    xs = np.linspace(max(lower, -1), min(upper, 2), 17)
++    original = _evaluate_basis(canonical, xs, max_order=4)
++    changed = _evaluate_basis(numerical, xs, max_order=4)
++    for order in range(5):
++        difference = (
++            changed.derivative(order) @ beta - original.derivative(order) @ theta
++        )
++        if order == 0:
++            difference -= difference[0]
++        np.testing.assert_allclose(difference, 0, atol=2e-9, rtol=0)
++
++
++@pytest.mark.parametrize("tail", [Polynomial(1), Polynomial(2), None])
++def test_gated_recurrence_preserves_the_complete_requested_span(tail):
++    data = np.linspace(-2, 2, 101)
++    canonical = _build_basis(
++        BasisSpec(bulk_degree=4, lower_tail=tail, upper_tail=tail, expansion="full"),
++        data,
++    )
++    numerical = _polynomial_coordinates(canonical, data)
++    plan = numerical.polynomial_coordinates
++    assert np.linalg.matrix_rank(plan.transform) == canonical.n_coefficients
++    beta = np.random.default_rng(19).normal(size=canonical.n_coefficients)
++    theta = plan.to_canonical(beta)
++    points = np.array([-12, -4, -1, 0, 1, 4, 12.0])
++    original = _evaluate_basis(canonical, points, max_order=4)
++    changed = _evaluate_basis(numerical, points, max_order=4)
++    for order in range(5):
++        expected = original.derivative(order) @ theta
++        actual = changed.derivative(order) @ beta
++        if order == 0:
++            actual = actual - actual[3]
++            expected = expected - expected[3]
++        np.testing.assert_allclose(actual, expected, atol=5e-10, rtol=2e-10)
++
++
++@pytest.mark.parametrize(
++    "support", [(-2, 3), (0, np.inf), (-np.inf, 3), (-np.inf, np.inf)]
++)
++@pytest.mark.parametrize("interval", [False, True])
++def test_point_and_interval_likelihoods_have_the_same_coordinate_contract(
++    support, interval
++):
++    lo, hi = support
++    data = np.linspace(max(lo, -1) + 0.1, min(hi, 2) - 0.1, 30)
++    model = _build_basis(BasisSpec(support=support, bulk_degree=4), data)
++    context = _NormalizerContext(model)
++    if interval:
++        rows = _interval_rows(support, np.column_stack([data - 0.05, data + 0.05]))
++        objective = _BasisIntervalObjective(context, rows)
++    else:
++        objective = _BasisPointObjective(context, _point_statistics(model, data))
++    theta = np.zeros(model.n_coefficients)
++    theta[[c.label for c in model.columns].index("x^2")] = 0.5
++    binding = _prepare_coordinates(objective, None, theta)
++    first, second = objective(theta), binding.objective(binding.start)
++    assert second.nll == pytest.approx(first.nll, abs=2e-11)
++    np.testing.assert_allclose(
++        second.gradient, binding.transform.T @ first.gradient, atol=2e-9, rtol=2e-9
++    )
++    np.testing.assert_allclose(
++        second.fisher,
++        binding.transform.T @ first.fisher @ binding.transform,
++        atol=2e-8,
++        rtol=2e-8,
++    )
++
++
++def test_coupled_point_statistics_are_recomputed_and_shared_logs_stay_shared():
++    from gibbus._fit.basis_mixture import _MixtureRows, _mstep_objective
++
++    data = np.linspace(0.2, 4.0, 60)
++    weights = np.ones(len(data)) / len(data)
++    models = [
++        _build_basis(
++            BasisSpec(support=(0, np.inf), bulk_degree=4, log_lower=True), data
++        )
++        for _ in range(2)
++    ]
++    objective = _mstep_objective(
++        models, _MixtureRows(weights, x=data), np.full((len(data), 2), 0.5)
++    )
++    blocks = objective.blocks
++    theta = np.zeros(blocks.n)
++    for k, model in enumerate(models):
++        labels = [c.label for c in model.columns]
++        theta[blocks.index[k][labels.index("x^2")]] = 0.5
++        theta[blocks.index[k][labels.index("logL")]] = 0.2
++    binding = _prepare_coordinates(objective, blocks, theta)
++    counts = np.bincount(np.concatenate(blocks.index), minlength=blocks.n)
++    for index in np.flatnonzero(counts > 1):
++        np.testing.assert_array_equal(binding.transform[index], np.eye(blocks.n)[index])
++        np.testing.assert_array_equal(
++            binding.transform[:, index], np.eye(blocks.n)[:, index]
++        )
++    first, second = objective(theta), binding.objective(binding.start)
++    assert second.nll == pytest.approx(first.nll, abs=2e-11)
++    np.testing.assert_allclose(
++        second.gradient, binding.transform.T @ first.gradient, atol=2e-9, rtol=2e-9
++    )
++
++
++@pytest.mark.parametrize("projection", [False, True])
++def test_common_controller_preserves_the_gaussian_mle_with_either_qp_kernel(
++    monkeypatch, projection
++):
++    from gibbus._fit import linear_qp
++    from gibbus._fit.basis_newton import _solve_basis
++
++    if not projection:
++        monkeypatch.setattr(linear_qp, "_projection_candidate", lambda *args: None)
++    data = np.random.default_rng(136).normal(2.0, 1.7, 200)
++    model = _build_basis(BasisSpec(bulk_degree=2), data)
++    objective = _BasisPointObjective(
++        _NormalizerContext(model), _point_statistics(model, data)
++    )
++    result = _solve_basis(objective)
++    assert result.status == "converged"
++    assert result.final_separation.status == "nonnegative"
++    expected = 0.5 * (np.log(2 * np.pi * np.var(data)) + 1)
++    assert result.objective_value == pytest.approx(expected, abs=2e-10)
++
++
++def test_failed_coordinate_accounting_retries_the_same_gaussian_family(monkeypatch):
++    from gibbus._fit.basis_newton import _solve_basis
++    from gibbus._fit.coordinates import _CoordinateBinding, _CoordinateMismatch
++
++    restore = _CoordinateBinding.restore
++
++    def reject_recurrence(binding, result, options):
++        if binding.original is not binding.objective:
++            raise _CoordinateMismatch("injected representation accounting failure")
++        return restore(binding, result, options)
++
++    monkeypatch.setattr(_CoordinateBinding, "restore", reject_recurrence)
++    data = np.random.default_rng(136).normal(2.0, 1.7, 200)
++    model = _build_basis(BasisSpec(bulk_degree=2), data)
++    objective = _BasisPointObjective(
++        _NormalizerContext(model), _point_statistics(model, data)
++    )
++    result = _solve_basis(objective)
++    assert result.status == "converged"
++    assert result.final_separation.status == "nonnegative"
++    expected = 0.5 * (np.log(2 * np.pi * np.var(data)) + 1)
++    assert result.objective_value == pytest.approx(expected, abs=2e-10)
++
++
++@pytest.mark.parametrize("coefficient,active", [(1e-34, False), (0.0, True)])
++def test_face_activity_uses_likelihood_scale_for_tiny_coefficients(coefficient, active):
++    from gibbus._fit.basis_constraints import _ConstraintRows
++    from gibbus._fit.basis_newton import _multipliers
++
++    rows = _ConstraintRows(np.eye(2), ("growth", "growth"))
++    theta, gradient = np.array([1.0, coefficient]), np.array([0.0, 1e34])
++    hessian = np.diag([1.0, 1e68])
++    multipliers = _multipliers(rows, gradient, theta, hessian)
++    assert bool(multipliers[1] > 0.0) == active
++    scale = np.array([1.0, 1e-34])
++    changed = _multipliers(
++        rows, gradient * scale, theta / scale, hessian * scale[:, None] * scale[None, :]
++    )
++    assert bool(changed[1] > 0.0) == active
+--- a/tests/test_linear_qp.py
++++ b/tests/test_linear_qp.py
+@@ -89,3 +89,12 @@
+     np.testing.assert_allclose(result.params * scale, expected.params, atol=1e-12)
+     assert result.model_value == pytest.approx(expected.model_value, abs=1e-12)
+     assert np.isfinite(result.gap)
++
++
++def test_unresolved_projection_defers_to_the_common_conic_kernel():
++    from gibbus._fit.linear_qp import _projection_candidate
++
++    h = np.array([[1.0, 1.0 - 1e-15], [1.0 - 1e-15, 1.0]])
++    assert (
++        _projection_candidate(h, np.array([1.0, -1.0]), np.ones(2), np.eye(2)) is None
++    )

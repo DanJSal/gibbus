@@ -1,0 +1,21 @@
+.......................................................F................ [ 55%]
+........................................................x                [100%]
+=================================== FAILURES ===================================
+________ test_stacked_m_step_without_shared_columns_is_independent_fits ________
+
+    def test_stacked_m_step_without_shared_columns_is_independent_fits():
+        model = _model(BasisSpec(bulk_degree=4), TWO)
+        data = _data("points", TWO)
+        resp = np.column_stack([TWO < 0.5, TWO >= 0.5]).astype(float) * 0.9 + 0.05
+        mstep = _mstep_objective((model,) * 2, data, resp)
+        stacked = _solve_basis(mstep, blocks=_mixture_blocks((model,) * 2))
+>       assert stacked.status == "converged"
+E       AssertionError: assert 'iteration_limit' == 'converged'
+E         
+E         - converged
+E         + iteration_limit
+
+tests/test_basis_mixture.py:171: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_basis_mixture.py::test_stacked_m_step_without_shared_columns_is_independent_fits
+1 failed, 127 passed, 1 xfailed in 22.74s

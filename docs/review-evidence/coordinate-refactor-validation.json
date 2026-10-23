@@ -1,0 +1,44 @@
+{
+  "combined_source": {
+    "collected": 6108,
+    "passed": 6105,
+    "failed": 0,
+    "skipped": 2,
+    "xfailed": 1,
+    "seconds": 835.904
+  },
+  "full_source_sweep_before_final_guard": {
+    "collected": 6108,
+    "passed": 6104,
+    "failed": 1,
+    "skipped": 2,
+    "xfailed": 1,
+    "seconds": 746.335
+  },
+  "final_guard_replay": {
+    "collected": 28,
+    "passed": 28,
+    "failed": 0,
+    "skipped": 0,
+    "xfailed": 0,
+    "seconds": 89.569
+  },
+  "verification_kind": "complete sweep plus affected-case rerun; not a fresh all-green full invocation",
+  "installed_wheel": {
+    "collected": 182,
+    "passed": 182,
+    "failed": 0,
+    "skipped": 0,
+    "xfailed": 0,
+    "seconds": 98.579
+  },
+  "source_freeze_verified_files": 163,
+  "native_extensions_imported": 14,
+  "platform": "Linux x86-64, CPython 3.12.14",
+  "remaining_expected_failure": "OI-E2-6 degree-4 two-linear-tail Laplace",
+  "scope_excludes": [
+    "nonsmooth absolute-power bulk terms",
+    "automatic tail-family comparison",
+    "broader platform/debug validation"
+  ]
+}

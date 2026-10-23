@@ -9,11 +9,34 @@ ctypedef int (*face_evaluate_fn)(
 
 ctypedef void (*face_accept_fn)(void* ctx) noexcept nogil
 
+# After ``evaluate`` rejects a trial for shape, ``step`` may return a smaller
+# step fraction (``0 < hint < alpha``) that keeps the rejecting rows feasible;
+# any other value falls back to the loop's backtracking factor.  ``NULL``
+# always backtracks.
+ctypedef double (*face_step_fn)(
+    void* ctx, const double* x, const double* trial, double alpha
+) noexcept nogil
+
+# An objective may return FACE_STOP from ``evaluate``: the loop then ends with
+# status 6 at its current accepted iterate (G3 cut exchange, G3-038).
+cdef enum:
+    FACE_STOP = -100
+
+
+# Optional scalar-inequality QP refinement. It replaces an endpoint only
+# after checking its bound in the original quadratic model.
+ctypedef int (*face_refine_fn)(
+    void* ctx, int n, int r, const double* b, const double* h,
+    const double* g, const double* theta, double* endpoint, double* dual,
+    double* model, double* gap
+) noexcept nogil
 
 cdef struct FaceObjective:
     void* ctx
     face_evaluate_fn evaluate
     face_accept_fn accept
+    face_step_fn step
+    face_refine_fn refine
 
 
 cdef int _in_safeguarded_metric(
@@ -25,94 +48,6 @@ cdef int _in_safeguarded_metric(
     double* smallest_out,
 ) noexcept nogil
 
-cdef int _in_evaluate_raw(
-    int n,
-    int curvature_degree,
-    const double* theta,
-    Py_ssize_t Rf,
-    const double* finite_intervals,
-    const double* finite_weights,
-    const double* point_lower_distance,
-    const double* point_upper_distance,
-    Py_ssize_t Ra,
-    const double* adaptive_intervals,
-    const double* adaptive_weights,
-    double whole_weight,
-    double log_coordinate_scale,
-    const double* support,
-    const double* data_bounds,
-    const int* kinds,
-    const int* lengths,
-    const double* coefficients,
-    Py_ssize_t width,
-    const double* controls,
-    double epsabs,
-    double epsrel,
-    int limit,
-    Py_ssize_t G,
-    const double* gl_nodes,
-    const double* gl_log_weights,
-    double width_eps_mult,
-    int lower_index,
-    int upper_index,
-    double* q_poly,
-    double* amplitudes,
-    double* state_work,
-    double* geometry,
-    double* points,
-    double* moments,
-    double* model_means,
-    double* model_fisher,
-    double* natural_scale,
-    double* log_probability,
-    double* obs_h,
-    double* obs_cov,
-    double* sum_h,
-    double* sum_second,
-    double* hbuf,
-    double* nll,
-    double* gradient,
-    double* adaptive_log_probability,
-    double* finite_row_means,
-    double* finite_row_cov,
-    double* adaptive_row_means,
-    double* adaptive_row_cov,
-) noexcept nogil
-
-cdef int _pn_evaluate(
-    int n,
-    int curvature_degree,
-    int lower_index,
-    int upper_index,
-    const double* theta,
-    const double* empirical,
-    double coordinate_constant,
-    const double* support,
-    const double* data_bounds,
-    bint featL,
-    bint featU,
-    const int* kinds,
-    const int* lengths,
-    const double* coefficients,
-    Py_ssize_t width,
-    const double* controls,
-    double epsabs,
-    double epsrel,
-    int limit,
-    double* q_poly,
-    double* amplitudes,
-    double* state_work,
-    double* geometry,
-    double* points,
-    double* moments,
-    int n_power,
-    int n_log,
-    int F,
-    double* nll,
-    double* gradient,
-    double* means,
-    double* fisher,
-) noexcept nogil
 
 cdef int _face_newton_loop(
     int n,
@@ -127,6 +62,7 @@ cdef int _face_newton_loop(
     const double* a,
     const double* ref,
     const Py_ssize_t* degrees,
+    const double* col_scale,
     FaceObjective* objective,
     double* theta,
     double* blocks,

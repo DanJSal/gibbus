@@ -1,0 +1,36 @@
+{
+  "collection": 4,
+  "counts": {
+    "passed": 4,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0,
+    "xfailed": 0
+  },
+  "suite_seconds": [
+    33.585
+  ],
+  "unfinished": 0,
+  "cases": [
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_degree8_density_is_scale_equivariant[2-100000000.0]",
+      "outcome": "passed",
+      "seconds": 0.18
+    },
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_degree8_density_is_scale_equivariant[3-1000000000000.0]",
+      "outcome": "passed",
+      "seconds": 0.185
+    },
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_degree8_density_is_scale_equivariant[8-1e+16]",
+      "outcome": "passed",
+      "seconds": 0.171
+    },
+    {
+      "nodeid": "tests/test_numerical_regressions.py::test_an_unsupported_explicit_component_count_says_what_to_do",
+      "outcome": "passed",
+      "seconds": 33.022
+    }
+  ]
+}

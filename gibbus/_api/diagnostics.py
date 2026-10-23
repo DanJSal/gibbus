@@ -100,23 +100,13 @@ class _DiagnosticsMixin:
                     "decrease_bound": (
                         float(state["optimizer_decrease_bound"]) if historical else None
                     ),
-                    "effective_curvature_degree": (
-                        int(state["effective_curvature_degree"]) if historical else None
-                    ),
-                    "lower_amplitude_active": (
-                        bool(int(state["lower_amplitude_active"]))
-                        if historical
-                        else None
-                    ),
-                    "upper_amplitude_active": (
-                        bool(int(state["upper_amplitude_active"]))
-                        if historical
-                        else None
-                    ),
-                    "separator_certified": (
-                        bool(int(state["separator_certified"])) if historical else None
-                    ),
                 }
+            )
+            # G3 (G3-046): the fit's numerical shape verdict and the
+            # component's private face dimension; never a proof.
+            component_records[-1].update(
+                shape=str(state["basis_shape"]) if historical else None,
+                face_dimension=int(state["basis_n_face"]) if historical else None,
             )
         historical_fit_available = all(
             record.get("status") is not None for record in component_records
@@ -234,11 +224,12 @@ class _DiagnosticsMixin:
             ``ppf_fallback`` (bool) -- the stored spectral inverse uses CDF
             bisection rather than fitted inverse panels. Extreme public tail
             queries may subsequently use direct potential-based inversion.
-            ``log_concavity_margin`` (float) -- certified lower bound on
-            base-space convexity of the potential, minimized over
-            components.  Non-negative means every component's polynomial
-            is certified convex; the mixture density itself need not be
-            log-concave even when each component is.
+            ``log_concavity_margin`` (float) -- smallest base-space potential
+            curvature found on each component's quantile/endpoint grid,
+            minimized over components. This is a grid diagnostic, not a
+            certified lower bound. An unavailable shape verdict gives
+            negative infinity. Component convexity does not imply that the
+            mixture density is log-concave.
             ``scope`` (str) -- ``"component"`` or ``"mixture"``.
         """
         self._ensure_fitted()

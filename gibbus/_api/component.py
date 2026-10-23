@@ -11,65 +11,34 @@ Users never touch this class directly; they interact with
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
-from numpy.polynomial import Chebyshev, Polynomial
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import NDArray
 
 from .._defaults import (
-    BACKTRACK_MAX_ITERS,
-    BACKTRACK_REDUCE,
-    BOUNDARY_ALPHA,
-    BOUNDARY_EPS_MULT,
-    BRACKET_INIT_STEP,
-    BRACKET_MAX_EXPAND,
-    BRACKET_STEP_GROWTH,
-    GRAD_TOL,
-    HESS_TOL,
-    LOG_THRESH,
-    MAX_CACHED_MOMENTS,
-    NEWT_MAX,
-    NEWT_TOL,
     NUMERIC_FAILURES,
-    SUPPRESSED_WARNINGS,
-    _maybe_suppress,
     _reraise_if_debug,
 )
-from .._fit.boundary import AUTO, _effective_n, _select_boundary_terms
-from .._fit.conic_newton import _certify, _solve_natural_conic
-from .._fit.degree import _DegreeSelectionConfig
-from .._fit.inputs import _admissible_degrees, _normalize_univariate_fit_inputs
-from .._fit.natural_objective import (
-    _fit_natural_conic_intervals_auto,
-    _fit_natural_conic_points_auto,
-    _natural_interval_start,
-    _prepare_natural_interval_objective,
-    _prepare_natural_point_objective,
-)
-from .._model._state_kernels import _q_window_and_mode
 from .._postfit import analytics as _pf
+from .._postfit.basis_state import (
+    _canonical_raw_moment,
+    _is_basis_state,
+    _potential_of,
+)
 from .._postfit.evaluators import (
-    _pdf_func,
-    _potential_base_func,
     _potential_exp_from_x_potential,
 )
 from .._postfit.expectation import expect_vectorized as _expect_vectorized
 from .._postfit.fitted_state import (
-    _canonical_boundary_amplitudes,
     _check_state_invariants,
-    _pack_natural_fit,
     _structured_scalar,
 )
 from .._postfit.logspace import log_mass_between
-from .._spectral._certify import chebyshev_lower_bound
-from .._spectral._tail_integrals import TailIntegrator
 from .._spectral.cdf import (
     SpectralCDF,
-    boundary_aware_breaks_from_amplitudes,
     density_spec,
 )
-from .._spectral.chebyshev import chebyshev_bernstein_matrix
 from .._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 from .._spectral.ppf import SpectralPPF
 from .._spectral.runtime import (
@@ -91,509 +60,6 @@ class _Presentation:
     version: int = 0
 
 
-def _natural_seed_params(seed, layout, coordinate, /):
-    """Reconstruct affine natural parameters from a fitted component state.
-
-    The stored normalized potential is sufficient for this conversion.
-
-    Parameters
-    ----------
-    seed : numpy.void or Mapping
-        Portable fitted state.
-    layout : _NaturalLayout
-        Target natural-coordinate parameter layout.
-    coordinate : _FitCoordinate
-        Target fitting coordinate for the new objective.
-
-    Returns
-    -------
-    numpy.ndarray or None
-        Reconstructed parameters, or ``None`` when the state cannot be embedded.
-    """
-    q_poly = np.asarray(seed["q_poly"], dtype=np.float64).reshape(-1)
-    if q_poly.size < 2:
-        return None
-    source_direction = float(seed["fit_direction"])
-    source_scale = float(seed["fit_scale"])
-    slope = source_direction * coordinate.direction * coordinate.scale / source_scale
-    offset = (
-        source_direction
-        * (coordinate.center - float(seed["fit_center"]))
-        / source_scale
-    )
-    q_poly = Polynomial(q_poly)(Polynomial([offset, slope])).coef
-    if q_poly.size < 2:
-        q_poly = np.pad(q_poly, (0, 2 - q_poly.size))
-    q_d2 = np.asarray(Polynomial(q_poly).deriv(2).coef, dtype=np.float64)
-    curvature = np.zeros(layout.curvature_degree + 1, dtype=np.float64)
-    curvature[: min(curvature.size, q_d2.size)] = q_d2[: curvature.size]
-    physical = np.asarray(seed["boundary_amplitudes"], dtype=np.float64).reshape(-1)
-    if physical.size != 2:
-        return None
-    canonical = _canonical_boundary_amplitudes(physical, coordinate.direction)
-    for index, amplitude in zip(
-        (layout.lower_a_index, layout.upper_a_index), canonical, strict=True
-    ):
-        if index is not None and np.isnan(amplitude):
-            # The target enables a boundary basis absent from the seed.  This is
-            # a normal warm-start incompatibility, so decline the seed explicitly.
-            return None
-    return layout.pack(float(q_poly[1]), curvature, canonical)
-
-
-def _lift_natural_params(source_layout, source_params, target_layout, /):
-    """Embed a lower-degree natural fit into a higher-degree layout.
-
-    Parameters
-    ----------
-    source_layout : _NaturalLayout
-        Layout that owns ``source_params``.
-    source_params : numpy.ndarray
-        Natural parameters in the source layout.
-    target_layout : _NaturalLayout
-        Higher-degree target layout.
-
-    Returns
-    -------
-    numpy.ndarray
-        Parameters embedded in the target layout.
-    """
-    gamma, curvature, amplitudes = source_layout.unpack(source_params)
-    target_curvature = np.zeros(target_layout.curvature_degree + 1, dtype=np.float64)
-    target_curvature[: curvature.size] = curvature
-    return target_layout.pack(gamma, target_curvature, amplitudes)
-
-
-def _run_natural_fit(norm, degree_config, /):
-    """Dispatch normalized public inputs to the natural conic fitter.
-
-    Boundary terms whose policy is ``"auto"`` are decided by
-    :func:`gibbus._fit.boundary._select_boundary_terms`: the fit with the term
-    is tested against the nested fit without it at the same degree, and when
-    a term is dropped under automatic degree the degree is chosen again.
-
-    Parameters
-    ----------
-    norm : Mapping
-        Canonicalized single-component fit inputs.
-    degree_config : _DegreeSelectionConfig
-        Explicit policy reused by automatic candidates and boundary refits.
-
-    Returns
-    -------
-    objective : object
-        Natural objective of the final fit.
-    result : _ConicNewtonResult
-        Completed conic-Newton result.
-    effective_n : float
-        Effective sample size of the observation weights.
-    p_values : tuple of float
-        Boundary-term test p-values per physical side (``nan`` where no test
-        ran).
-    """
-    degree = norm["poly_degree"]
-    is_auto = isinstance(degree, str) and degree.lower() == "auto"
-    support = norm["support"]
-    lower = norm["log_boundary_lower"]
-    upper = norm["log_boundary_upper"]
-    weights = norm["weights"]
-    rows = np.asarray(norm["samples_rk"], dtype=np.float64)
-    effective_n = _effective_n(rows.shape[0], weights)
-
-    def fit_auto(lo, up):
-        if rows.shape[1] == 1:
-            return _fit_natural_conic_points_auto(
-                support, rows[:, 0], lo, up, weights, degree_config=degree_config
-            )
-        return _fit_natural_conic_intervals_auto(
-            support, rows, lo, up, weights, degree_config=degree_config
-        )
-
-    def fit_fixed(target, lo, up):
-        return _fit_natural_fixed_degree(norm, int(target), lo, up)
-
-    if lower != AUTO and upper != AUTO:
-        objective, result = (
-            fit_auto(bool(lower), bool(upper))
-            if is_auto
-            else fit_fixed(degree, bool(lower), bool(upper))
-        )
-        return objective, result, effective_n, (np.nan, np.nan)
-
-    def amplitude(model, side):
-        objective, result = model
-        index = (
-            objective.spec.physical_lower_a_index
-            if side == "lower"
-            else objective.spec.physical_upper_a_index
-        )
-        return 0.0 if index is None else float(result.params[index])
-
-    (objective, result), _, p_values = _select_boundary_terms(
-        (
-            (lambda lo, up: fit_auto(lo, up))
-            if is_auto
-            else (lambda lo, up: fit_fixed(degree, lo, up))
-        ),
-        lambda model: float(model[1].objective_value),
-        amplitude,
-        lower,
-        upper,
-        effective_n,
-        fit_reduced=lambda model, lo, up: fit_fixed(
-            model[0].spec.requested_poly_degree, lo, up
-        ),
-        refit=fit_auto if is_auto else None,
-        alpha=BOUNDARY_ALPHA,
-    )
-    return objective, result, effective_n, p_values
-
-
-def _fit_natural_fixed_degree(norm, degree, lower, upper, /):
-    """Fit one fixed degree through its admissible lower-degree ladder.
-
-    Parameters
-    ----------
-    norm : Mapping
-        Canonicalized single-component fit inputs.
-    degree : int
-        Target polynomial degree.
-    lower, upper : bool
-        Boundary-term flags.
-
-    Returns
-    -------
-    tuple
-        Natural objective and completed conic-Newton result.
-    """
-    support = norm["support"]
-    weights = norm["weights"]
-    rows = np.asarray(norm["samples_rk"], dtype=np.float64)
-    degree = int(degree)
-    seed = norm.get("seed_state")
-    previous = None
-    degrees = [degree] if seed is not None else _admissible_degrees(support, degree)
-    final = None
-    for rung in degrees:
-        if rows.shape[1] == 1:
-            objective = _prepare_natural_point_objective(
-                support, rows[:, 0], rung, lower, upper, weights
-            )
-        else:
-            objective = _prepare_natural_interval_objective(
-                support, rows, rung, lower, upper, weights
-            )
-        initial = initial_blocks = None
-        if previous is not None:
-            prev_objective, prev_result = previous
-            initial = _lift_natural_params(
-                prev_objective.layout, prev_result.params, objective.layout
-            )
-        elif seed is not None:
-            initial = _natural_seed_params(
-                seed, objective.layout, objective.spec.coordinate
-            )
-        if rows.shape[1] == 2 and initial is None:
-            initial, initial_blocks = _natural_interval_start(objective)
-        try:
-            result = _solve_natural_conic(
-                objective, initial=initial, initial_blocks=initial_blocks
-            )
-        except RuntimeError as exc:
-            if (
-                previous is None
-                or "cone description failed its rank checks" not in str(exc)
-            ):
-                raise
-            # The requested model contains every lower-degree face.  At
-            # extreme endpoint/data-scale ratios the exact shifted monomial
-            # description of a higher face can lose numerical rank even though
-            # the already-fitted lower face is perfectly valid.  Preserve that
-            # certified member of the requested model rather than introducing
-            # an optimizer-specific rescue path.
-            prev_objective, prev_result = previous
-            lifted = _lift_natural_params(
-                prev_objective.layout, prev_result.params, objective.layout
-            )
-            evaluation = objective(lifted)
-            result = replace(
-                prev_result,
-                params=lifted,
-                objective_value=float(evaluation.nll),
-                evaluation=evaluation,
-                blocks=(),
-                dual=np.empty(0, dtype=np.float64),
-                final_separation=_certify(objective.layout, lifted),
-            )
-            if rung < degree:
-                # Keep attempting later admissible faces; a skipped odd face
-                # need not imply the requested target face is unusable.
-                previous = (objective, result)
-                final = previous
-                continue
-        previous = (objective, result)
-        final = previous
-    return final
-
-
-def _rebuild_component_state(model, provenance=None, /):
-    """Rebuild one current runtime component state from durable v1 model data.
-
-    The durable serialization stores the normalized potential and fitting
-    coordinate, not the spectral panels, moments, or optimizer payload used by
-    the current evaluator.  This function reconstructs those derived fields
-    when a serialized cache is absent or cannot be reused.
-
-    Parameters
-    ----------
-    model : Mapping
-        Durable per-component fields from serialization format v1.
-    provenance : Mapping or None, optional
-        Historical solver fields retained by the writer.  Missing provenance
-        produces a valid derived component whose fit diagnostics are marked
-        unavailable rather than guessed.
-
-    Returns
-    -------
-    numpy.ndarray
-        Current internal fitted-state scalar accepted by :class:`_Component`.
-    """
-    q_poly = np.asarray(model["q_poly"], dtype=np.float64).reshape(-1).copy()
-    canonical_support = np.asarray(
-        model["canonical_support"], dtype=np.float64
-    ).reshape(2)
-    boundary_amplitudes = np.asarray(
-        model["boundary_amplitudes"], dtype=np.float64
-    ).reshape(2)
-    boundary_allowed = np.asarray(model["boundary_allowed"], dtype=bool).reshape(2)
-    support = np.asarray(model["support"], dtype=np.float64).reshape(2)
-    center = float(model["fit_center"])
-    scale = float(model["fit_scale"])
-    direction = float(model["fit_direction"])
-    requested_degree = int(model["requested_poly_degree"])
-    effective_degree = int(q_poly.size - 1)
-    canonical_amps = _canonical_boundary_amplitudes(boundary_amplitudes, direction)
-
-    # The potential anchors remain the original canonical support after a
-    # truncation.  The active support may be a strict interior subset.
-    with np.errstate(over="ignore", invalid="ignore"):
-        active_z = np.sort(direction * (support - center) / scale)
-
-    finite_active = active_z[np.isfinite(active_z)]
-    if finite_active.size == 2:
-        guide = finite_active
-    elif finite_active.size == 1:
-        guide = np.repeat(finite_active[0], 2)
-    else:
-        # Zero is merely a window-search landmark; it does not alter the
-        # model.  Clamp it into a finite part of the canonical support when a
-        # bounded endpoint excludes zero.
-        anchor = 0.0
-        lo, hi = map(float, canonical_support)
-        if np.isfinite(lo) and anchor <= lo:
-            anchor = lo + max(1.0, abs(lo))
-        if np.isfinite(hi) and anchor >= hi:
-            anchor = hi - max(1.0, abs(hi))
-        if not np.isfinite(anchor):
-            anchor = 0.0
-        guide = np.array([anchor, anchor], dtype=np.float64)
-
-    window0, potential_mode, _qmin, q2_mode, _core = _q_window_and_mode(
-        canonical_support,
-        q_poly,
-        canonical_amps,
-        guide,
-        LOG_THRESH,
-        GRAD_TOL,
-        HESS_TOL,
-        NEWT_TOL,
-        NEWT_MAX,
-        BOUNDARY_EPS_MULT,
-        BRACKET_INIT_STEP,
-        BRACKET_MAX_EXPAND,
-        BRACKET_STEP_GROWTH,
-        BACKTRACK_MAX_ITERS,
-        BACKTRACK_REDUCE,
-        True,
-    )
-    mode_z = float(np.clip(float(potential_mode), active_z[0], active_z[1]))
-    q2_mode = float(q2_mode)
-    if np.isfinite(q2_mode) and q2_mode > 0.0:
-        z_std = float(1.0 / np.sqrt(q2_mode))
-    else:
-        width = float(np.diff(np.asarray(window0, dtype=np.float64))[0])
-        z_std = max(1.0, width / 6.0) if np.isfinite(width) and width > 0.0 else 1.0
-
-    zl, zu = map(float, canonical_support)
-    density = density_spec(
-        [
-            (
-                q_poly,
-                zl,
-                zu,
-                float(canonical_amps[0]),
-                float(canonical_amps[1]),
-                0.0,
-                0.0,
-                1.0,
-                1.0,
-                1.0,
-                -np.inf,
-                np.inf,
-            )
-        ],
-        view=False,
-    )
-    initial_breaks = (
-        boundary_aware_breaks_from_amplitudes(canonical_support, canonical_amps)
-        if np.array_equal(active_z, canonical_support)
-        else None
-    )
-    cdf_rep = SpectralCDF(
-        active_z,
-        density=density,
-        mode=mode_z,
-        std=z_std,
-        initial_breaks=initial_breaks,
-        map_scale=None,
-        config=_SpectralCDFOptions(),
-    )
-    spectral = dict(pack_cdf_state(cdf_rep))
-    try:
-        ppf_rep = SpectralPPF(cdf_rep, config=_SpectralPPFOptions())
-    except NUMERIC_FAILURES as exc:
-        _reraise_if_debug(
-            exc, "serialized-state spectral PPF reconstruction", routine=True
-        )
-        ppf_rep = None
-        spectral.update(fallback_ppf_state())
-        spectral["ppf_fallback"] = np.int32(1)
-    else:
-        spectral.update(pack_ppf_state(ppf_rep))
-        spectral["ppf_fallback"] = np.int32(0)
-
-    # Only a valid finite pair is required for the temporary component.  The
-    # quantile-defined material window is installed after the evaluator exists.
-    placeholder = np.asarray(window0, dtype=np.float64).reshape(2)
-    if not np.all(np.isfinite(placeholder)) or not placeholder[0] < placeholder[1]:
-        placeholder = np.array([mode_z - 1.0, mode_z + 1.0], dtype=np.float64)
-    if not np.all(np.isfinite(placeholder)) or not placeholder[0] < placeholder[1]:
-        placeholder = np.array([-1.0, 1.0], dtype=np.float64)
-
-    prov = {} if provenance is None else dict(provenance)
-    n_enabled = int(np.count_nonzero(boundary_allowed))
-    optimizer_size = max(1, effective_degree + n_enabled)
-    canonical_active = canonical_amps > 0.0
-
-    data = {
-        "q_poly": q_poly,
-        "boundary_amplitudes": boundary_amplitudes,
-        "boundary_allowed": boundary_allowed,
-        "support": support,
-        "canonical_support": canonical_support,
-        "window": placeholder,
-        "canonical_mode": mode_z,
-        "mode": float(center + direction * scale * mode_z),
-        "median": np.nan,
-        "mean": np.nan,
-        "var": np.nan,
-        "std": np.nan,
-        "skew": np.nan,
-        "kurt": np.nan,
-        "raw_moments": np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64),
-        "canonical_raw_moments": np.full(
-            int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64
-        ),
-        "fit_center": center,
-        "fit_scale": scale,
-        "fit_direction": direction,
-        "optimizer_params": np.zeros(optimizer_size, dtype=np.float64),
-        "requested_poly_degree": requested_degree,
-        "effective_poly_degree": effective_degree,
-        "nll": float(prov.get("nll", np.nan)),
-        "boundary_standard_errors": np.asarray(
-            prov.get("boundary_standard_errors", (np.nan, np.nan)), dtype=np.float64
-        ).reshape(2),
-        "boundary_p_values": np.asarray(
-            prov.get("boundary_p_values", (np.nan, np.nan)), dtype=np.float64
-        ).reshape(2),
-        "optimizer_success": np.int8(prov.get("optimizer_success", 0)),
-        "optimizer_status": np.str_(prov.get("optimizer_status", "missing")),
-        "optimizer_message": np.str_(prov.get("optimizer_message", "missing")),
-        "optimizer_n_iterations": np.int64(prov.get("optimizer_n_iterations", -1)),
-        "optimizer_n_evaluations": np.int64(prov.get("optimizer_n_evaluations", -1)),
-        "optimizer_subproblem_iterations": np.int64(
-            prov.get("optimizer_subproblem_iterations", -1)
-        ),
-        "optimizer_decrease_bound": float(
-            prov.get("optimizer_decrease_bound", np.nan)
-        ),
-        "effective_curvature_degree": np.int64(
-            prov.get("effective_curvature_degree", max(0, effective_degree - 2))
-        ),
-        "lower_amplitude_active": np.int8(
-            prov.get("lower_amplitude_active", canonical_active[0])
-        ),
-        "upper_amplitude_active": np.int8(
-            prov.get("upper_amplitude_active", canonical_active[1])
-        ),
-        "separator_certified": np.int8(prov.get("separator_certified", 0)),
-    }
-    data.update(spectral)
-    temp = _Component(_structured_scalar(data))
-    base = temp.base
-
-    raw = np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64)
-    craw = np.full(int(MAX_CACHED_MOMENTS), np.nan, dtype=np.float64)
-    raw[0] = 1.0
-    craw[0] = 1.0
-    mu_eff = -direction * center / scale
-    sigma_eff = direction / scale
-    upto = min(4, raw.size - 1, craw.size - 1)
-    for k in range(1, upto + 1):
-        raw[k] = _expect_vectorized(
-            base.neg_log,
-            support,
-            lambda x, kk=k: x**kk,
-            points=(base.mode,),
-        )
-        craw[k] = _expect_vectorized(
-            base.neg_log,
-            support,
-            lambda x, kk=k: (sigma_eff * x + mu_eff) ** kk,
-            points=(base.mode,),
-        )
-    data["raw_moments"] = raw
-    data["canonical_raw_moments"] = craw
-    if upto >= 4:
-        stats = _pf._stats_from_raw_moments(*map(float, raw[1:5]))
-        for name in ("mean", "var", "std", "skew", "kurt"):
-            data[name] = float(stats[name])
-    data["median"] = float(base.ppf(0.5))
-
-    try:
-        qlo = float(base.ppf(1e-12))
-        qhi = float(base.isf(1e-12))
-    except NUMERIC_FAILURES as exc:
-        _reraise_if_debug(
-            exc, "serialized-state moment-window reconstruction", routine=True
-        )
-    else:
-        with np.errstate(over="ignore", invalid="ignore"):
-            zwin = np.sort(
-                np.array(
-                    [sigma_eff * qlo + mu_eff, sigma_eff * qhi + mu_eff],
-                    dtype=np.float64,
-                )
-            )
-        if np.all(np.isfinite(zwin)) and zwin[0] < zwin[1]:
-            data["window"] = zwin
-
-    result = _structured_scalar(data)
-    _check_state_invariants(result)
-    return result
-
-
 class _Component:
     """Internal single-component log-concave density estimator.
 
@@ -603,23 +69,19 @@ class _Component:
     """
 
     __slots__ = (
-        "_base_base_potential",
         "_base_cdf",
         "_base_exp_potential",
-        "_base_pdf",
         "_base_ppf",
         "_base_view",
+        "_basis",
         "_canonical_moments",
         "_center",
         "_context",
         "_data",
-        "_direction",
         "_exp_view",
         "_scale",
         "_spectral_cdf_eval",
         "_spectral_ppf_eval",
-        "_tail_integrator",
-        "_window",
     )
 
     def __init__(self, uni_state: Mapping[str, float | NDArray] | None = None):
@@ -634,18 +96,15 @@ class _Component:
         # Fitted storage is backed by immutable bytes, not a reversible
         # ndarray writeability flag.
         self._data: np.ndarray | None = None
-        self._window: Any = None
         self._center: float = float("nan")
         self._scale: float = float("nan")
-        self._direction: float = 1.0
-        self._base_pdf: Any = None
         self._base_cdf: Any = None
         self._base_ppf: Any = None
         self._spectral_cdf_eval: Any = None
         self._spectral_ppf_eval: Any = None
-        self._base_base_potential: Any = None
         self._base_exp_potential: Any = None
-        self._tail_integrator: Any = None
+        # The component's normalized G3 potential (G3-046); ``None`` unfitted.
+        self._basis: Any = None
         self._base_view = _BaseSpaceView(self)
         self._exp_view = _ExpSpaceView(self)
         self._context = None
@@ -700,91 +159,6 @@ class _Component:
     def exp(self) -> _ExpSpaceView:
         """Exp-space view."""
         return self._exp_view
-
-    @classmethod
-    def _fit(
-        cls,
-        samples: ArrayLike,
-        *,
-        poly_degree: int | str | None,
-        support: tuple[float, float] | None,
-        log_boundary_lower: bool | None,
-        log_boundary_upper: bool | None,
-        verbose: int,
-        suppress_warnings: bool,
-        init_from: Union["_Component", Mapping[str, Any]] | None,
-        sample_weight: ArrayLike | None,
-        degree_config: _DegreeSelectionConfig,
-    ) -> "_Component":
-        """Privately fit and return a new completed read-only component.
-
-        Parameters
-        ----------
-        samples : array_like
-            Observations.
-        poly_degree : int, ``'auto'``, or None
-            Degree of the polynomial potential. Explicit ``None``
-            means ``"auto"`` when no seed is given, or inherit from the
-            seed when ``init_from`` is provided.  Pass ``'auto'`` to
-            select degree by the omitted-information criterion.
-        support : tuple of (float, float) or None
-            Domain of the density.  ``None`` means the full real line
-            ``(-inf, +inf)``; specify structural boundaries explicitly.
-            Ignored when ``init_from`` is given (inherited from seed).
-        log_boundary_lower, log_boundary_upper : bool or None
-            Whether to include a log-singularity boundary term at the
-            lower / upper finite endpoint. Explicit ``None`` selects the term
-            from the data at a finite unseeded endpoint, excludes it at an
-            infinite endpoint, or inherits the seed policy with ``init_from``.
-            Explicit ``True``/``False`` overrides the seed.
-            An enabled basis has a direct nonnegative fitted amplitude
-            that is allowed to optimize to zero.
-        verbose : int
-            Verbosity level for fitting progress and diagnostics.
-        suppress_warnings : bool
-            Whether numerical fitting warnings should be suppressed.
-        init_from : _Component, Mapping, or None
-            Warm-start seed.
-        sample_weight : array_like or None
-            Optional non-negative relative weight assigned to each observation.
-        degree_config : _DegreeSelectionConfig
-            Explicit omitted-information policy owned by the fit request.
-
-        Returns
-        -------
-        _Component
-            A new fitted component.
-
-        Raises
-        ------
-        ValueError
-            If inputs are invalid (bad shapes, unsupported ``poly_degree``,
-            samples outside support, etc.).
-        RuntimeError
-            If the fit encounters a degenerate numerical state.
-        """
-        if isinstance(init_from, _Component):
-            init_from = init_from._seed_state()
-        norm = _normalize_univariate_fit_inputs(
-            _Component,
-            samples,
-            poly_degree,
-            support,
-            log_boundary_lower,
-            log_boundary_upper,
-            verbose,
-            suppress_warnings,
-            init_from,
-            sample_weight,
-        )
-        with _maybe_suppress(norm["suppress_warnings"], SUPPRESSED_WARNINGS):
-            objective, result, effective_n, p_values = _run_natural_fit(
-                norm, degree_config
-            )
-            data = _pack_natural_fit(
-                objective, result, effective_n=effective_n, boundary_p_values=p_values
-            )
-        return cls(data)
 
     # -- Convenience delegation to active view --
 
@@ -1049,63 +423,38 @@ class _Component:
         return self._active.tail_rate(side)
 
     def log_concavity_margin(self) -> float:
-        """Return a certified base-space lower bound on ``q''``.
+        """Return the smallest base-space ``V''`` found on a quantile grid.
 
-        The full curvature ``p(z) + a_L / (z - L)^2 + a_U / (U - z)^2`` was
-        certified nonnegative by the exact separator when the fit finished,
-        so zero is a valid bound.  The boundary terms are nonnegative, so on a
-        bounded support a positive Bernstein-subdivision bound on the
-        polynomial part ``p`` sharpens it; on an unbounded support a
-        non-constant ``p`` has no finite positive bound.  A fit whose
-        certificate failed reports the polynomial bound alone (``-inf`` on an
-        unbounded support).
+        A fit whose shape verdict is not ``nonnegative`` has no grid margin
+        (``-inf``); otherwise the smallest ``V''`` over a quantile grid,
+        floored at the verdict's zero (G3-046, G3-047).  On an infinite side
+        the grid reaches the quantiles ``1e-300`` (standing for the tail
+        limit); a finite side's limit is its endpoint, approached
+        geometrically in ``x`` from the grid's innermost quantile, since
+        ultratail quantiles need not be representable there (G3-059).
         """
         data = self._ensure_fitted()
-        certified = bool(int(data["separator_certified"]))
-        floor = 0.0 if certified else -np.inf
-        q_poly = np.asarray(data["q_poly"], dtype=np.float64)
-        q2 = np.polynomial.polynomial.polyder(q_poly, 2)
-        if q2.size == 0:
+        if str(data["basis_shape"]) != "nonnegative":
+            return -np.inf
+        base = self.base
+        lo, hi = map(float, base.support)
+        levels = np.linspace(1e-12, 0.5, 257)
+        far = np.array([1e-300, 1e-100, 1e-30])
+        approach = np.logspace(0.0, -30.0, 31)
+        parts = []
+        for inverse, end in ((base.ppf, lo), (base.isf, hi)):
+            if np.isfinite(end):
+                inner = np.asarray(inverse(levels[1:]), dtype=np.float64)
+                parts += [inner, end + (inner[0] - end) * approach]
+            else:
+                parts.append(inverse(np.concatenate((far, levels))))
+        x = np.unique(np.concatenate(parts))
+        x = x[(x > lo) & (x < hi)]
+        curvature = np.asarray(base.neg_log(x, 2), dtype=np.float64)
+        curvature = curvature[np.isfinite(curvature)]
+        if curvature.size == 0:
             return 0.0
-
-        # Drop exact trailing zero coefficients so the certificate sees the
-        # true polynomial degree rather than the requested maximum degree.
-        while q2.size > 1 and q2[-1] == 0.0:
-            q2 = q2[:-1]
-
-        mu_eff, sigma_eff = self._mu_sigma_eff()
-        lo, hi = map(float, self.base.support)
-        with np.errstate(invalid="ignore"):
-            z_bounds = np.sort(
-                np.asarray(
-                    [
-                        sigma_eff * lo + mu_eff,
-                        sigma_eff * hi + mu_eff,
-                    ],
-                    dtype=np.float64,
-                )
-            )
-
-        if q2.size == 1:
-            lower = max(floor, float(q2[0]))
-        elif np.all(np.isfinite(z_bounds)):
-            cheb = Polynomial(q2).convert(
-                kind=Chebyshev, domain=[float(z_bounds[0]), float(z_bounds[1])]
-            )
-            coeff = np.asarray(cheb.coef, dtype=np.float64)
-            lower = max(
-                floor,
-                float(
-                    chebyshev_lower_bound(
-                        coeff,
-                        chebyshev_bernstein_matrix(coeff.size - 1),
-                        12,
-                    )
-                ),
-            )
-        else:
-            lower = floor
-        return float((sigma_eff * sigma_eff) * lower)
+        return max(0.0, float(np.min(curvature)))
 
     def neg_log(self, x, n: int = 0):
         """Evaluate the negative log-density or one of its derivatives.
@@ -1263,9 +612,7 @@ class _Component:
 
         old = self.data
         data = {name: np.array(old[name], copy=True) for name in old.dtype.names}
-        q_poly = np.asarray(data["q_poly"], dtype=np.float64).copy()
-        q_poly[0] += log_mass
-        data["q_poly"] = q_poly
+        data["basis_log_z"] = float(data["basis_log_z"]) + log_mass
         data["support"] = np.array([lo, hi], dtype=np.float64)
 
         mu_eff, sigma_eff = self._mu_sigma_eff()
@@ -1274,7 +621,6 @@ class _Component:
             z_bounds = sigma_eff * base_bounds + mu_eff
         trunc_z_support = np.sort(z_bounds)
 
-        original_z_support, canonical_amps = self._internal_model_geometry()
         old_z_mode = float(data["canonical_mode"])
         z_mode = float(np.clip(old_z_mode, trunc_z_support[0], trunc_z_support[1]))
         crm = np.asarray(data["canonical_raw_moments"], dtype=np.float64)
@@ -1292,26 +638,10 @@ class _Component:
             )
         z_std = max(z_std, np.sqrt(np.finfo(float).tiny))
 
-        zl, zu = (float(v) for v in original_z_support)
-        density = density_spec(
-            [
-                (
-                    q_poly,
-                    zl,
-                    zu,
-                    float(canonical_amps[0]),
-                    float(canonical_amps[1]),
-                    0.0,
-                    0.0,
-                    1.0,
-                    1.0,
-                    1.0,
-                    -np.inf,
-                    np.inf,
-                )
-            ],
-            view=False,
-        )
+        part = self._density_part(0.0, 1.0, 1.0, 1.0, -np.inf, np.inf)
+        # Renormalized by the retained mass (the truncated log Z).
+        part = (*part[:4], part[4] + log_mass, *part[5:])
+        density = density_spec([part], view=False)
         cdf_rep = SpectralCDF(
             trunc_z_support,
             density=density,
@@ -1400,20 +730,6 @@ class _Component:
         self._ensure_fitted()
         return self._data.copy()
 
-    def _seed_state(self):
-        """Materialize seed conditioning in the common current model coordinate."""
-        state = self.data
-        shift, scale = self._affine()
-        state["support"] = self.base.support
-        state["fit_center"] = shift + scale * self._center
-        state["fit_scale"] = scale * self._scale
-        for name in ("mode", "median", "mean", "var", "std", "skew", "kurt"):
-            state[name] = self._base_stat(name)
-        raw = state["raw_moments"]
-        for order in np.flatnonzero(np.isfinite(raw)):
-            raw[order] = self._raw_moment_base(int(order))
-        return state
-
     def copy(self) -> "_Component":
         """Create an independent deep copy.
 
@@ -1472,7 +788,9 @@ class _Component:
             return float(rm[k])
         if k in self._canonical_moments:
             return self._canonical_moments[k]
-        val = float(_pf._univariate_canonical_raw_moment(data, k))
+        # The packed moments stop at order 4; higher orders integrate the
+        # potential directly (breakpoint at the canonical mean).
+        val = _canonical_raw_moment(self._basis, float(rm[1]), int(k))
         self._canonical_moments[k] = val
         return val
 
@@ -1480,7 +798,7 @@ class _Component:
         """Return ``(common_origin, local_mean)`` for the base affine map."""
         origin, scale = self._affine()
         z_mean = float(self._canonical_raw_moment(1))
-        local = (self._center + self._direction * self._scale * z_mean) * scale
+        local = (self._center + self._scale * z_mean) * scale
         return float(origin), float(local)
 
     def _support_base(self):
@@ -1526,37 +844,39 @@ class _Component:
         data = np.array(struct, copy=True)
         _check_state_invariants(data)
         self._data = np.frombuffer(data.tobytes(), dtype=data.dtype).reshape(())
-        self._window = self._data["window"]
         self._center = float(self._data["fit_center"])
         self._scale = float(self._data["fit_scale"])
-        self._direction = float(self._data["fit_direction"])
-        internal_support = self._data["canonical_support"]
-        kernel_boundary = _canonical_boundary_amplitudes(
-            self._data["boundary_amplitudes"], self._direction
-        )
-        self._base_pdf = _pdf_func(
-            internal_support, self._data["q_poly"], kernel_boundary
-        )
         self._spectral_cdf_eval = build_cdf_evaluator(self._data)
         self._spectral_ppf_eval = build_ppf_evaluator(self._data)
         self._base_cdf = self._spectral_cdf_eval
         self._base_ppf = self._spectral_ppf_eval.eval_x
-        self._base_base_potential = _potential_base_func(
-            internal_support, self._data["q_poly"], kernel_boundary
-        )
         self._base_exp_potential = _potential_exp_from_x_potential(
             lambda x, n: self._base_view.neg_log(x, n)
         )
-        self._tail_integrator = TailIntegrator(self._data["q_poly"])
+        if not _is_basis_state(self._data):
+            raise ValueError("component state is not a G3 basis state")
+        self._basis = _potential_of(self._data)
 
-    def _internal_model_geometry(self):
-        """Return the canonical support and kernel-order boundary amplitudes."""
-        return (
-            np.asarray(self._data["canonical_support"], dtype=np.float64),
-            _canonical_boundary_amplitudes(
-                self._data["boundary_amplitudes"], self._direction
-            ),
+    def _density_part(self, mu, sigma, jf, weight, lo, hi, /, z_support=None):
+        """This component as one entry of a spectral ``density_spec``.
+
+        Parameters
+        ----------
+        mu, sigma, jf, weight, lo, hi : float
+            G1 ``density_spec`` entry fields (affine map, Jacobian, weight
+            and public mask).
+        z_support : tuple of float or None
+            Canonical potential support (default: the stored anchors).
+        """
+        zl, zu = (
+            map(float, self._data["canonical_support"])
+            if z_support is None
+            else map(float, z_support)
         )
+        tail = (float(mu), float(sigma), float(jf), float(weight), lo, hi)
+        log_norm = self._basis.log_z - np.log(self._basis.h)
+        head = (self._basis.kernel, self._basis.theta, zl, zu)
+        return (*head, log_norm, *tail)
 
     def _ensure_fitted(self) -> np.ndarray:
         """Return the packed fitted record, raising if there is none.
@@ -1577,17 +897,7 @@ class _Component:
 
     def _mu_sigma_eff(self):
         """Compute the effective affine parameters mapping user *x* to internal *z*."""
-        direction = float(self._direction)
         shift, scale = self._affine()
-        mu_eff = direction * (-shift / scale - self._center) / self._scale
-        sigma_eff = direction / (scale * self._scale)
+        mu_eff = (-shift / scale - self._center) / self._scale
+        sigma_eff = 1.0 / (scale * self._scale)
         return mu_eff, sigma_eff
-
-    def _potential_support_base(self):
-        """Return the original potential support in current base coordinates."""
-        self._ensure_fitted()
-        z_support = np.asarray(self._data["canonical_support"], dtype=np.float64)
-        mu_eff, sigma_eff = self._mu_sigma_eff()
-        with np.errstate(invalid="ignore"):
-            x_support = (z_support - mu_eff) / sigma_eff
-        return np.sort(np.asarray(x_support, dtype=np.float64))

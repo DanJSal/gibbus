@@ -1,0 +1,13 @@
+PID 5
+solver run 7 seconds 0.2 status non_descent bound inf
+solver run 8 seconds 0.3 status non_descent bound inf
+solver run 9 seconds 0.3 status non_descent bound inf
+solver run 41 seconds 8.1 status non_descent bound inf
+solver run 100 seconds 11.5 status line_search_failed bound 5.190614575847121
+solver run 200 seconds 34.0 status cut_required bound 0.053237853973098666
+solver run 298 seconds 88.5 status non_descent bound inf
+solver run 299 seconds 88.5 status non_descent bound inf
+solver run 300 seconds 88.6 status non_descent bound inf
+solver run 331 seconds 124.8 status non_descent bound inf
+solver run 400 seconds 131.1 status cut_required bound 1.2689986518072658
+solver run 500 seconds 164.3 status cut_required bound 0.3347741148005241

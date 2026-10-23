@@ -4,19 +4,24 @@ Ordered roughly by pipeline position:
 
 * :mod:`.inputs` — the public-boundary validation and canonicalization seam.
   No other module performs user-level validation.
-* :mod:`.objective` — likelihood geometry (NLL, gradient, Fisher and observed
-  Hessian) of one normalized state for point and interval observations.
-* :mod:`.natural_objective` — point/interval objectives, fixed-degree and
-  automatic-degree fit drivers.
-* :mod:`.conic_qp` — finite cone descriptions of nonnegative full curvature.
-* :mod:`.conic_newton` — the conic Newton solver and its certificates.
-* :mod:`.separation` — exact-arithmetic full-curvature separator.
-* :mod:`.degree` — information-based automatic polynomial-degree selection.
-* :mod:`.mixture` — multi-component helpers: E-steps, initialization
-  candidates, identifiability diagnostics, mixture state packing and modes.
-* :mod:`.natural_mixture` — the mixture EM, joint Newton polish and
-  multi-start.
-* ``_conic_kernels`` / ``_curvature_certificate`` / ``_mixture_kernels`` —
-  compiled interior point and Newton loop, curvature certificate, and
-  point-statistic/posterior/joint-information reductions.
+* :mod:`.basis_objective` — weighted point and interval likelihood geometry
+  (NLL, gradient, Fisher and observed Hessian) of the G3 basis.
+* :mod:`.coordinates` — runtime recurrence coordinates, direct observation
+  rebinding and canonical output validation.
+* :mod:`.basis_constraints` — coefficient-linear constraint rows (log bounds,
+  curvature cuts, tail rows) and their cone description.
+* :mod:`.curvature_search` — where ``q''`` may fall below zero (cut points).
+* :mod:`.conic_qp` / :mod:`.conic_newton` — cone descriptions, the shared
+  Newton policy and the preconditioned subproblem.
+* :mod:`.basis_newton` — the face Newton fit over the constraint rows.
+* :mod:`.boundary` — likelihood-ratio selection of endpoint logs.
+* :mod:`.degree` — omitted-statistic score-test policy and PSD helpers.
+* :mod:`.basis_selection` — degree ladder, endpoint logs and span expansion
+  of single fits.
+* :mod:`.mixture` — mixture initialization candidates, E-steps,
+  identifiability diagnostics, packing and modes.
+* :mod:`.basis_mixture` — mixture EM, joint polish, growth inside a mixture
+  and component-count selection.
+* ``_conic_kernels`` / ``_basis_newton_kernels`` / ``_curvature_kernels`` —
+  compiled interior point, fused face Newton loop and curvature separation.
 """

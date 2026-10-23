@@ -13,25 +13,26 @@ The views are not instantiated directly; reach them through
 ``Distribution.base`` / ``Distribution.exp`` or a component's ``.base`` / ``.exp``.
 """
 
+import math
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from .._defaults import (
     PROB_EPS,
-    TAIL_QUAD_EPSABS,
-    TAIL_QUAD_LIMIT,
-    _reraise_if_debug,
 )
 from .._fit.inputs import _coerce_sample_size, _to_generator
-from .._model.numerics import _terms_for_quad
 from .._postfit import analytics as _pf
 from .._postfit.analytics import (
     _exp_moment_from_stats,
     _exp_stats_from_log_moments,
-    _tail_rate_from_geometry,
 )
-from .._postfit.evaluators import _potential_oriented_affine_eval
+from .._postfit.basis_state import _exp_log_mode as _basis_exp_log_mode
+from .._postfit.basis_state import _log_exp_moment as _basis_log_exp_moment
+from .._postfit.basis_state import (
+    _relative_centered_exp_moment as _basis_relative_centered_exp_moment,
+)
+from .._postfit.basis_state import _tail_rate as _basis_tail_rate
 from .._postfit.expectation import expect as _expect
 from .._postfit.expectation import expect_vectorized as _expect_vectorized
 from .._postfit.information import cross_entropy as _cross_entropy
@@ -203,9 +204,9 @@ class _BaseSpaceView:
         self._p._ensure_fitted()
         x = np.asarray(x, dtype=np.float64)
         scalar = x.ndim == 0
-        mu_eff, sigma_eff = self._p._mu_sigma_eff()
-        z = sigma_eff * x + mu_eff
-        out = abs(sigma_eff) * self._p._base_pdf(z)
+        # Exact basis units (``_BasisPotential.neg_log``).
+        with np.errstate(under="ignore", over="ignore"):
+            out = np.exp(-self._p._basis.neg_log(x, *self._p._affine(), 0))
         lo, hi = map(float, self.support)
         mask = np.isfinite(x)
         if np.isfinite(lo):
@@ -373,23 +374,13 @@ class _BaseSpaceView:
         ValueError
             If *n* is negative.
         """
-        data = self._p._ensure_fitted()
+        self._p._ensure_fitted()
         n = int(n)
         if n < 0:
             raise ValueError("n must be >= 0")
         x = np.asarray(x, dtype=np.float64)
         scalar = x.ndim == 0
-        mu_eff, sigma_eff = self._p._mu_sigma_eff()
-        potential_support = self._p._potential_support_base()
-        out = _potential_oriented_affine_eval(
-            x,
-            potential_support,
-            mu_eff,
-            sigma_eff,
-            data["q_poly"],
-            data["boundary_amplitudes"],
-            n,
-        )
+        out = self._p._basis.neg_log(x, *self._p._affine(), n)
         active_lo, active_hi = map(float, self.support)
         active = np.isfinite(x)
         if np.isfinite(active_lo):
@@ -415,22 +406,7 @@ class _BaseSpaceView:
             Select the upper tail instead of the lower tail.
         """
         self._p._ensure_fitted()
-        mu_eff, sigma_eff = self._p._mu_sigma_eff()
-        value, message = self._p._tail_integrator.log_mass(
-            float(x),
-            float(endpoint),
-            bool(upper),
-            self._p._potential_support_base(),
-            self._p._data["boundary_amplitudes"],
-            float(mu_eff),
-            float(sigma_eff),
-            epsabs=TAIL_QUAD_EPSABS,
-            limit=TAIL_QUAD_LIMIT,
-        )
-        if message is not None:
-            side = "upper" if upper else "lower"
-            _reraise_if_debug(RuntimeError(message), f"{side}-tail compiled quadrature")
-        return float(value)
+        return float(self._basis_tail_log_masses(np.array([float(x)]), endpoint)[0])
 
     def _exact_tail_log_masses(self, x, endpoint, /, *, upper):
         """Evaluate many exact tail masses in one compiled call.
@@ -445,25 +421,40 @@ class _BaseSpaceView:
             Select the upper tail instead of the lower tail.
         """
         self._p._ensure_fitted()
-        mu_eff, sigma_eff = self._p._mu_sigma_eff()
-        values, failed = self._p._tail_integrator.log_masses(
-            np.asarray(x, dtype=np.float64),
-            float(endpoint),
-            bool(upper),
-            self._p._potential_support_base(),
-            self._p._data["boundary_amplitudes"],
-            float(mu_eff),
-            float(sigma_eff),
-            epsabs=TAIL_QUAD_EPSABS,
-            limit=TAIL_QUAD_LIMIT,
-        )
-        if failed:
-            side = "upper" if upper else "lower"
-            _reraise_if_debug(
-                RuntimeError(f"{failed} tail integrals reached the subdivision limit"),
-                f"{side}-tail compiled quadrature",
-            )
-        return values
+        return self._basis_tail_log_masses(np.asarray(x, dtype=np.float64), endpoint)
+
+    def _basis_tail_log_masses(self, x, endpoint, /):
+        """Exact G3 masses between view points and an endpoint (G3-046).
+
+        The view points and endpoint map to model units through the fitted
+        affine coordinate; the masses share the endpoint, so the G3
+        normalizer resolves them cumulatively in log space
+        (``log_masses_from``).
+
+        Parameters
+        ----------
+        x : array_like
+            View points.
+        endpoint : float
+            View endpoint the masses run to.
+        """
+        basis = self._p._basis
+        shift, scale = self._p._affine()
+        x = np.asarray(x, dtype=np.float64).reshape(-1)
+        endpoint = float(endpoint)
+        view_lo, view_hi = map(float, self.support)
+        if endpoint in (view_lo, view_hi) and math.isfinite(endpoint):
+            # Anchor at the exact model end: the presentation round trip
+            # would round a row of width 1e-300 at a finite end to nothing.
+            lower_end = (endpoint == view_lo) == (scale > 0.0)
+            end = basis.active[0] if lower_end else basis.active[1]
+            with np.errstate(over="ignore", invalid="ignore"):
+                dist = np.abs(x - endpoint) / abs(scale)
+            return basis.log_masses_from(end, end + dist if lower_end else end - dist)
+        with np.errstate(over="ignore", invalid="ignore"):
+            u = (x - shift) / scale
+            e = (endpoint - shift) / scale
+        return basis.log_masses_from(e, u)
 
     def logpdf(self, x):
         """Evaluate the log density in base coordinates.
@@ -772,10 +763,8 @@ class _BaseSpaceView:
         side : {'lower', 'upper'}
             Tail to inspect.
         """
-        support, _amps = self._p._internal_model_geometry()
-        q_poly = np.asarray(self._p.data["q_poly"], dtype=np.float64)
         mu_eff, sigma_eff = self._p._mu_sigma_eff()
-        return _tail_rate_from_geometry(support, q_poly, mu_eff, sigma_eff, side)
+        return _basis_tail_rate(self._p._basis, mu_eff, sigma_eff, side)
 
     def sample(self, size=None, rng=None):
         """Draw random samples in base coordinates.
@@ -911,7 +900,6 @@ class _ExpSpaceView:
         self._log_raw_cache: dict[int, float] = {}
         self._cumulant_cache: dict[int, float] = {}
         self._stats_cache = None
-        self._q_cache = None
 
     def _invalidate_if_needed(self):
         """Reset caches if the parent version has changed."""
@@ -921,29 +909,11 @@ class _ExpSpaceView:
             self._log_raw_cache.clear()
             self._cumulant_cache.clear()
             self._stats_cache = None
-            self._q_cache = None
 
-    def _ensure_q_cache(self):
-        """Return the quadrature-parameter tuple required by moment integrals."""
-        data = self._p._ensure_fitted()
+    def _refresh(self):
+        """Require a fitted parent and drop caches of an older parent version."""
+        self._p._ensure_fitted()
         self._invalidate_if_needed()
-        if self._q_cache is not None:
-            return self._q_cache
-        base_support, boundary_amplitudes = self._p._internal_model_geometry()
-        q_poly = np.asarray(data["q_poly"], dtype=np.float64)
-        window = np.asarray(data["window"], dtype=np.float64)
-        mu_eff, sigma_eff = self._p._mu_sigma_eff()
-        terms = _terms_for_quad(base_support, boundary_amplitudes)
-        self._q_cache = (
-            base_support,
-            q_poly,
-            boundary_amplitudes,
-            window,
-            mu_eff,
-            sigma_eff,
-            terms,
-        )
-        return self._q_cache
 
     def _log_raw_moment(self, k: int) -> float:
         """Return ``log E[Y^k]`` without materializing the dimensional moment.
@@ -953,33 +923,21 @@ class _ExpSpaceView:
         k : int
             Non-negative raw-moment order.
         """
-        q_cache = self._ensure_q_cache()
+        self._refresh()
         k = int(k)
         if k == 0:
             return 0.0
         hit = self._log_raw_cache.get(k)
         if hit is not None:
             return hit
-        (
-            base_support,
-            q_poly,
-            boundary_amplitudes,
-            window,
-            mu_eff,
-            sigma_eff,
-            terms,
-        ) = q_cache
-        value = float(
-            _pf._log_raw_moment_exp(
-                base_support,
-                q_poly,
-                boundary_amplitudes,
-                window,
-                mu_eff,
-                sigma_eff,
-                k,
-                terms,
-            )
+        base = self._p.base
+        value = _basis_log_exp_moment(
+            base.neg_log,
+            base.support,
+            base.tail_rate("upper"),
+            k,
+            float(base.median),
+            float(base.std),
         )
         self._log_raw_cache[k] = value
         return value
@@ -997,7 +955,7 @@ class _ExpSpaceView:
         float
         """
         self._p._ensure_fitted()
-        self._ensure_q_cache()
+        self._refresh()
         k = int(k)
         if k == 0:
             return 1.0
@@ -1012,24 +970,14 @@ class _ExpSpaceView:
 
     def _log_mode_coordinate(self):
         """Return the exp-space component mode in base/log coordinates."""
-        (
-            base_support,
-            q_poly,
-            boundary_amplitudes,
-            window,
-            mu_eff,
-            sigma_eff,
-            _terms,
-        ) = self._ensure_q_cache()
-        shift = -1.0 / float(sigma_eff)
-        z_star = _pf._valley(
-            window, base_support, q_poly, boundary_amplitudes, float(shift)
+        base = self._p.base
+        return _basis_exp_log_mode(
+            base.neg_log, base.support, float(base.mode), float(base.std)
         )
-        return float((z_star - mu_eff) / sigma_eff)
 
     def _ensure_stats(self):
         """Return exp-space statistics, computing them on first use."""
-        self._ensure_q_cache()
+        self._refresh()
         if self._stats_cache is not None:
             return self._stats_cache
         log_mode = self._log_mode_coordinate()
@@ -1054,26 +1002,9 @@ class _ExpSpaceView:
         k : int
             Centered-moment order.
         """
-        (
-            base_support,
-            q_poly,
-            boundary_amplitudes,
-            window,
-            mu_eff,
-            sigma_eff,
-            _terms,
-        ) = self._ensure_q_cache()
-        return float(
-            _pf._relative_centered_moment_exp(
-                base_support,
-                q_poly,
-                boundary_amplitudes,
-                window,
-                mu_eff,
-                sigma_eff,
-                float(log_mean),
-                int(k),
-            )
+        base = self._p.base
+        return _basis_relative_centered_exp_moment(
+            base.neg_log, base.support, float(log_mean), int(k), float(base.mode)
         )
 
     @property

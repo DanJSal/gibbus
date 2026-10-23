@@ -30,6 +30,7 @@ as pullback (internal coordinate) parameters; see that method's docstring.
 
 import copy as _copy
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Optional
 
 import numpy as np
@@ -40,11 +41,17 @@ from .._defaults import (
     BOOTSTRAP_MAX_FAILURE_FRACTION,
     PROB_EPS,
 )
-from .._fit.inputs import _coerce_sample_size, _to_generator
+from .._fit.budget import _fit_time_budget
+from .._fit.inputs import (
+    _coerce_sample_size,
+    _normalize_sample_weight_1d,
+    _to_generator,
+)
 from .._fit.mixture import (
     _find_mixture_modes_exp,
     _sort_components_by_mode,
 )
+from .._model.basis_spec import BasisSpec
 from .._postfit.analytics import _cumulant_from_centered, _exp_moment_from_stats
 from .._postfit.expectation import expect as _expect
 from .._postfit.expectation import expect_vectorized as _expect_vectorized
@@ -77,9 +84,14 @@ from .._postfit.survival import mean_residual_life as _mean_residual_life
 from .._postfit.survival import residual_entropy as _residual_entropy
 from .._serialization import load_distribution_state, pack_distribution_state
 from .._spectral.tail import refine_tail_quantiles
-from .component import _Component, _Presentation, _rebuild_component_state
+from .component import _Component, _Presentation
 from .diagnostics import _DiagnosticsMixin
-from .fitting import _FitRequest, _prepare_fit_request, _run_fit_request
+from .fitting import (
+    _FitRequest,
+    _prepare_fit_request,
+    _run_fit_request,
+    _seed_basis_spec,
+)
 from .mixture_stats import _MixtureAnalyticsMixin
 from .validation import (
     _validate_level,
@@ -89,7 +101,9 @@ from .validation import (
 from .views import _BaseSpaceView, _ExpSpaceView
 
 
-def _restore_distribution_pickle(cls, state, em_diagnostics, selection_diagnostics):
+def _restore_distribution_pickle(
+    cls, state, em_diagnostics, selection_diagnostics, tail_parameter_diagnostics=None
+):
     """Reconstruct a pickled Distribution while preserving session diagnostics.
 
     Parameters
@@ -104,6 +118,7 @@ def _restore_distribution_pickle(cls, state, em_diagnostics, selection_diagnosti
     obj = cls(state)
     obj._em_diagnostics = em_diagnostics
     obj._selection_diagnostics = selection_diagnostics
+    obj._tail_parameter_diagnostics = tail_parameter_diagnostics
     return obj
 
 
@@ -196,6 +211,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._spectral_cache_valid: bool = False
         self._em_diagnostics = None
         self._selection_diagnostics = None
+        self._tail_parameter_diagnostics = None
 
         if state is not None:
             self.load(state)
@@ -223,13 +239,14 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         """Return a compact fitted/unfitted model representation."""
         if not self.is_fitted:
             return "Distribution(unfitted)"
-        degrees = tuple(
-            int(np.asarray(comp.data["q_poly"]).size - 1) for comp in self._components
-        )
         support = tuple(map(float, self._components[0].base.support))
+        degrees = tuple(
+            int(comp._basis.model.request.bulk_degree) for comp in self._components
+        )
+        label = "bulk_degrees"
         return (
             f"Distribution(n_components={self._K}, support={support}, "
-            f"poly_degrees={degrees}, default={self._default!r})"
+            f"{label}={degrees}, default={self._default!r})"
         )
 
     def __reduce__(self):
@@ -238,12 +255,27 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             return (type(self), ())
         return (
             _restore_distribution_pickle,
-            (type(self), self.data, self._em_diagnostics, self._selection_diagnostics),
+            (
+                type(self),
+                self.data,
+                self._em_diagnostics,
+                self._selection_diagnostics,
+                self._tail_parameter_diagnostics,
+            ),
         )
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def tail_parameter_diagnostics(self):
+        """Empirical automatic tail selections from this fit, if any.
+
+        The record is available for live fits and pickles/copies, but is not
+        included in the portable numeric distribution state.
+        """
+        return _copy.deepcopy(self._tail_parameter_diagnostics)
 
     @property
     def is_fitted(self) -> bool:
@@ -387,8 +419,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         em_tol: float | None = None,
         rng: Any = None,
         k_max: int | None = None,
-        progressive: bool = True,
         auto_k_subsample: str | int | bool = "auto",
+        basis: BasisSpec | None = None,
+        max_fit_seconds: float | None = None,
     ) -> "Distribution":
         """Fit a log-concave density to the supplied samples.
 
@@ -404,9 +437,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         n_components : int or ``'auto'``, optional
             Number of mixture components (default ``1``).
             Ignored when ``init_from`` is given (inherited from seed).
-            ``'auto'`` counts KDE modes to center a search range, picks
-            the best *K* by BIC over lightweight log-concave fits, then
-            runs the full log-concave EM only once for the chosen *K*.
+            ``'auto'`` uses KDE modes to propose a search range, screens
+            short log-concave EM fits, and refines admitted counts under
+            the requested degree policy before comparing their BIC.
             ``1`` fits a single unimodal density directly.  An explicit
             integer ``> 1`` skips selection and fits exactly that many
             components.
@@ -440,7 +473,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             the seed.  Per-component seeds are threaded automatically
             in seed-component order.
         sample_weight : array_like or None, optional
-            Non-negative observation weights.
+            Non-negative relative observation weights, normalized to sum to one.
+            Selection/inference use Kish effective sample size, not frequency counts.
         component_options : list of dict or None, optional
             Per-component keyword arguments (currently only
             ``poly_degree`` is allowed).  Length must match the
@@ -459,11 +493,6 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Maximum *K* to consider when ``n_components='auto'``.
             ``None`` (default) uses the library's own ceiling.
             Ignored for explicit *K*.
-        progressive : bool, optional
-            For mixture fits with an explicit integer ``poly_degree > 2``,
-            use a degree ladder from the lowest admissible degree to the
-            requested degree, warm-starting each rung.  This option has no
-            effect on single-component fits or when ``poly_degree="auto"``.
         auto_k_subsample : {"auto"}, int, or False, optional
             Size of the subsample used to *select* the component count
             when ``n_components="auto"``.  ``"auto"`` (the default)
@@ -473,6 +502,22 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             full-data sweep.  Once *K* is selected, the final model is
             refitted on every observation.  Ignored unless
             ``n_components="auto"``.
+        basis : BasisSpec or None, optional
+            Full potential-basis request (support, bulk degree, endpoint logs,
+            tail classes, span expansion).  It replaces ``poly_degree``,
+            ``support`` and ``log_boundary_*``, which must then be left at
+            ``None``; ``component_options`` may still set per-component
+            degrees.  With ``init_from`` it replaces the seed's basis family
+            (its support must equal the seed's); without it a warm start
+            inherits the seed's family (tails, span policy, tanh geometry).
+
+        max_fit_seconds : float or None, optional
+            Positive wall-time budget shared by selection, component fits,
+            degree growth and retries. ``None`` (default) imposes no time
+            limit. Exhaustion raises ``FitTimeoutError`` and preserves any
+            previously fitted state. Checks occur between solver runs and
+            fitting stages; a running native operation is allowed to finish,
+            so this is a cooperative budget, not a hard execution deadline.
 
         Returns
         -------
@@ -485,9 +530,11 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             If *samples* has an unsupported shape, holds fewer than two
             observations or no spread, falls outside *support*, or if
             any argument is outside its documented range.
+        FitTimeoutError
+            If ``max_fit_seconds`` is exhausted before the fit completes.
         RuntimeError
-            If the data admits no log-concave fit (heavy tails such as
-            Cauchy or Pareto), if a point-data mixture component is
+            If a fit cannot establish its numerical convergence, if a
+            point-data mixture component is
             effectively supported on fewer than two distinct observed
             locations (the classical unconstrained mixture-likelihood
             singularity), or if the optimizer reaches a degenerate numerical
@@ -495,6 +542,27 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             point-density estimability check because their row contributions
             are probability masses rather than point densities.
         """
+        if basis is not None:
+            if not isinstance(basis, BasisSpec):
+                raise TypeError("basis must be a BasisSpec or None")
+            given = [
+                name
+                for name, value in (
+                    ("poly_degree", poly_degree),
+                    ("support", support),
+                    ("log_boundary_lower", log_boundary_lower),
+                    ("log_boundary_upper", log_boundary_upper),
+                )
+                if value is not None
+            ]
+            if given:
+                raise ValueError(
+                    "basis replaces poly_degree, support and log_boundary_*; got "
+                    + ", ".join(given)
+                )
+            support = tuple(map(float, basis.support))
+            log_boundary_lower = basis.log_lower
+            log_boundary_upper = basis.log_upper
         request = _FitRequest(
             samples=samples,
             n_components=n_components,
@@ -511,11 +579,12 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             em_tol=em_tol,
             rng=rng,
             k_max=k_max,
-            progressive=progressive,
             auto_k_subsample=auto_k_subsample,
+            basis=basis,
         )
-        request = _prepare_fit_request(Distribution, request)
-        result = _run_fit_request(request)
+        with _fit_time_budget(max_fit_seconds):
+            request = _prepare_fit_request(Distribution, request)
+            result = _run_fit_request(request)
         self._install_fit_result(result)
         return self
 
@@ -538,6 +607,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         )
         target._em_diagnostics = _copy.deepcopy(result.em_diagnostics)
         target._selection_diagnostics = _copy.deepcopy(result.selection_diagnostics)
+        target._tail_parameter_diagnostics = _copy.deepcopy(
+            result.tail_parameter_diagnostics
+        )
         self.__dict__.update(target.__dict__)
 
     # ------------------------------------------------------------------
@@ -1272,10 +1344,12 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Random-number source used for the simulated null.
         fit_kwargs : dict or None, optional
             Overrides for the refit performed on each simulated dataset.
-            Defaults to the fitted component count and support, which
-            holds model selection fixed; pass ``{"n_components": "auto"}``
-            to propagate selection uncertainty into the null at
-            proportionally greater cost.
+            Defaults to the selected component count/degrees, endpoint logs and
+            resolved tail family/parameters. Data-adaptive geometry and
+            automatic span expansion are recomputed. Pass a new ``basis``
+            or legacy structural overrides to change that policy; use
+            ``{"n_components": "auto"}`` to reselect the count. Simulation
+            and refitting use base coordinates in both active views.
 
         Returns
         -------
@@ -1329,9 +1403,12 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
 
         gen = _to_generator(rng)
         refit_kwargs = self._resampling_fit_kwargs(fit_kwargs)
+        sampler = self if self.default == "base" else self.copy().set_default("base")
 
         def simulate():
-            draw = np.asarray(self.sample(size=n, rng=gen), dtype=np.float64)
+            # The PIT is unchanged by exp. Fit the simulated base variable,
+            # avoiding both a change of model family and exp overflow.
+            draw = np.asarray(sampler.sample(size=n, rng=gen), dtype=np.float64)
             replica = Distribution().fit(draw, **refit_kwargs)
             return _gof_statistic(_canonical_pit(replica.cdf(draw)), key)
 
@@ -1391,11 +1468,13 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         rng : optional
             Random-number source for the resampling indices.
         fit_kwargs : dict or None, optional
-            Overrides for each refit.  Defaults to the fitted component
-            count and support, which holds model selection fixed and so
-            reports uncertainty *conditional* on the selected structure;
-            pass ``{"n_components": "auto"}`` to let each replicate
-            reselect and widen the bands accordingly.
+            Overrides for each refit. Defaults to the selected component
+            count/degrees, endpoint logs and resolved tail family/parameters.
+            Automatic geometry and span expansion are recomputed. A new
+            ``basis`` replaces inherited structure; legacy structural
+            overrides update it. Use ``{"n_components": "auto"}`` to
+            reselect the count. If ``sample_weight`` is supplied here, it
+            must match the original rows and is resampled with those rows.
 
         Returns
         -------
@@ -1429,9 +1508,18 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         gen = _to_generator(rng)
         refit_kwargs = self._resampling_fit_kwargs(fit_kwargs)
         active = self._default
+        weights = refit_kwargs.pop("sample_weight", None)
+        if weights is not None:
+            weights = _normalize_sample_weight_1d(rows.shape[0], weights)
 
         def evaluate(indices):
-            replica = Distribution().fit(rows[indices], **refit_kwargs)
+            options = dict(refit_kwargs)
+            if weights is not None:
+                selected = weights[indices]
+                if not np.any(selected > 0):
+                    return None
+                options["sample_weight"] = selected
+            replica = Distribution().fit(rows[indices], **options)
             replica.set_default(active)
             return np.asarray(getattr(replica, name)(grid), dtype=np.float64)
 
@@ -1477,14 +1565,58 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         """
         if overrides is not None and not isinstance(overrides, Mapping):
             raise TypeError("fit_kwargs must be a mapping or None")
-        base_support = tuple(map(float, self._components[0].base.support))
+        first = self._components[0]
+        degrees = tuple(
+            int(c._basis.parent.request.bulk_degree) for c in self._components
+        )
+        basis = replace(
+            _seed_basis_spec(first),
+            support=tuple(map(float, first.base.support)),
+            bulk_degree=degrees[0],
+            log_lower=first._basis.parent.request.log_lower,
+            log_upper=first._basis.parent.request.log_upper,
+            expansion=first._basis.parent.request.expansion,
+        )
         kwargs: dict[str, Any] = {
             "n_components": self._K,
-            "support": base_support,
+            "basis": basis,
             "verbose": 0,
         }
-        if overrides:
-            kwargs.update(dict(overrides))
+        if len(set(degrees)) > 1:
+            kwargs["component_options"] = [{"poly_degree": d} for d in degrees]
+        updates = dict(overrides or {})
+        if "basis" in updates:
+            # Explicit caller conflicts remain the fitter's responsibility.
+            kwargs.pop("component_options", None)
+        else:
+            fields = {
+                "support": "support",
+                "poly_degree": "bulk_degree",
+                "log_boundary_lower": "log_lower",
+                "log_boundary_upper": "log_upper",
+            }
+            changes = {
+                target: updates.pop(source)
+                for source, target in fields.items()
+                if source in updates
+            }
+            defaults = {
+                "support": (-np.inf, np.inf),
+                "bulk_degree": "auto",
+                "log_lower": "auto",
+                "log_upper": "auto",
+            }
+            changes = {
+                name: defaults[name] if value is None else value
+                for name, value in changes.items()
+            }
+            if changes:
+                kwargs["basis"] = replace(basis, **changes)
+                if "bulk_degree" in changes:
+                    kwargs.pop("component_options", None)
+        if "n_components" in updates:
+            kwargs.pop("component_options", None)
+        kwargs.update(updates)
         return kwargs
 
     def quantile_residuals(self, x, rng=None) -> np.ndarray:
@@ -2030,9 +2162,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         Distribution
             ``self``.
         """
-        loaded = load_distribution_state(
-            state, rebuild_component=_rebuild_component_state
-        )
+        loaded = load_distribution_state(state)
         target = Distribution()
         metadata = loaded.fit_metadata
         target._fit_metadata = _model_metadata(
@@ -2061,6 +2191,9 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         clone = Distribution(self.data)
         clone._em_diagnostics = _copy.deepcopy(self._em_diagnostics)
         clone._selection_diagnostics = _copy.deepcopy(self._selection_diagnostics)
+        clone._tail_parameter_diagnostics = _copy.deepcopy(
+            self._tail_parameter_diagnostics
+        )
         return clone
 
     # ------------------------------------------------------------------

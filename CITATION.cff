@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: "Salib"
     given-names: "Daniel"
-version: "0.1.0"
+version: "0.2.0.dev0"
 license: "MIT"
 repository-code: "https://github.com/DanJSal/gibbus"
 url: "https://github.com/DanJSal/gibbus"

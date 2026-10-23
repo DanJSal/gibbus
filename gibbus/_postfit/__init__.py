@@ -5,8 +5,10 @@ Everything here runs *after* the optimizer has converged:
 * :mod:`.analytics` — moments, summary statistics, affine updates, and mode
   finding without re-running the optimizer.
 * :mod:`.evaluators` — cached closures for exact PDF and potential evaluation.
-* :mod:`.fitted_state` — fitted-state packing and validation, including
-  the packed spectral CDF/PPF fields.
+* :mod:`.basis_state` — the durable G3 record, the fitted potential (on its
+  leader face), exact masses and the packed state with its spectral fields.
+* :mod:`.fitted_state` — shared component geometry, model metadata and
+  fitted-state validation.
 * :mod:`.logsumexp` — batched derivative recurrence for mixture potentials.
 * ``_mix_kernels`` — compiled stable mixture log-sum-exp and derivative recurrences.
 * :mod:`.logspace` — stable log-space probability primitives used by post-fit APIs.

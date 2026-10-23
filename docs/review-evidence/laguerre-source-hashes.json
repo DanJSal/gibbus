@@ -1,0 +1,15 @@
+{
+  "gibbus/_fit/laguerre.py": "70533bf02b87be8d161eb59cb95e6d2648273835f7973e5b21ad1efbf3512baf",
+  "gibbus/_fit/basis_newton.py": "6ce801938d34e9fadec9eac5419d06f50421c1b685e8e5600db9d6f61b841dd2",
+  "gibbus/_fit/basis_objective.py": "1f504f342c35081fdcb9c44a769a3f62d4654cd8771196a24579959e7ba0dca6",
+  "gibbus/_fit/curvature_search.py": "d8560f3438bcd51c3d36b5e72d0301c441fc9c4a115142fc5fd0688b2bd56a13",
+  "gibbus/_model/basis.py": "1560439b738097e2ad18197386bcc7cb5f618ac6148f1426110c4de3d7d4dcf9",
+  "gibbus/_model/basis_interval.py": "76ad608c17bc20bf7dc8eb7241b5c360c6c511dc5b985232999e14c3f33a05b2",
+  "gibbus/_model/_basis_kernels.pyx": "ab4d38929d7ea641b39c1f328730e89d4f8bc41b23b23fcdf8d75404864d43fd",
+  "gibbus/_model/_basis_kernels.pxd": "7a0dab50cea47a4607405d15fd8ebe7881c43daadd42fe80fe9754aa22f54f69",
+  "gibbus/_model/_normalizer_kernels.pyx": "ed4ef9f4885478ecd342877c4be9a6d2e89059e1364afdf929a1de448a6ffa50",
+  "gibbus/_fit/_curvature_kernels.pyx": "0f13e76ebb443abae5ae9f32560cfbc979109e5dc8dcf0490cc2c826d5fa5dc0",
+  "tests/test_laguerre_coordinates.py": "839590c83ead4d85117879c394501939258ea1554faa9dfa65ab8962fe031f12",
+  "tests/test_numerical_regressions.py": "ff21242c59000ced18dd1d1195320ae6941fc0819802ccb10292dd99cc7b0b9f",
+  "tests/test_basis_interval.py": "c1f5b7d43b3dcff677150317c5da988540bd43000559fd0bae877814073e2805"
+}

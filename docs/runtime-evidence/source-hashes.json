@@ -1,0 +1,38 @@
+{
+  "CHANGELOG.md": {
+    "original_sha256": "7d035a831fb338a1ed8a0299c49f26ab25222a93bc025180352c4e8599bfe23d",
+    "updated_sha256": "6e71871e3282e1c98fd1bf04683beae4b806066bb72ab2c9e635d8923f2b88fb"
+  },
+  "docs/fitting.md": {
+    "original_sha256": "600de413c6fe1b2d80ec01d84405aecc13247be5c88520cc808b84cdf8c0e08a",
+    "updated_sha256": "b581a48abb067be18f1b89f984e593c19bb7bdfad61689a24665b2eb2f425e26"
+  },
+  "gibbus/__init__.py": {
+    "original_sha256": "91a25b0ad83c7c18af5f8e4153cbe88906732635d7946e0c066aa2abf512e704",
+    "updated_sha256": "61d9846ee1980f8d639887e0c5d60b90a7b91cfd0d6608df6fef4fb09e2eb40f"
+  },
+  "gibbus/_api/distribution.py": {
+    "original_sha256": "91aee6c84deb5308c0ce02435a1f5d2e2d827460d3eb7f80464d43bb3a198f70",
+    "updated_sha256": "1ffbb7924fa1fb52054bb55c3e4b118bc46323a55f3b8600ff197e191729fcd4"
+  },
+  "gibbus/_defaults.py": {
+    "original_sha256": "292880110ed994ec23fa0546587389733fb568dcb2aa89fa72ee020855b03bac",
+    "updated_sha256": "912056cb3a673b6c7f12b88d4f5155d9007f480c4098f8bdb0957057047908fb"
+  },
+  "gibbus/_fit/basis_mixture.py": {
+    "original_sha256": "acaab53b3d724c142d5310fa79143f364ec08abe053a3f28d2144a431af5ac72",
+    "updated_sha256": "09be227d9bf57dfa97568bb4e39cb0ce2ab33adb3d32c8729898f6d5a227a138"
+  },
+  "gibbus/_fit/basis_newton.py": {
+    "original_sha256": "43b9c86c1f0bb8ce7e04126f51fcc19e4a45f76782965926fea1f22e90371e42",
+    "updated_sha256": "0221d090beb4af8359e85621df47c33942dbc246550047fa09b9f8085bd46298"
+  },
+  "gibbus/_fit/basis_selection.py": {
+    "original_sha256": "1cfc5e411c8da74a2acfb951465dbb88b4df59e17537af245340df6b044af6fc",
+    "updated_sha256": "6a69cba48512f7fdb2d84dcee70727bd0783ee21effe46f7cae0533c84ddc326"
+  },
+  "tests/test_auto_k.py": {
+    "original_sha256": "511fc221819506ceeb73ed37e5a782369db4177a0061f3caa8a2790d18f0c5f9",
+    "updated_sha256": "1f457bf76adb7b66c78b15331fe8b3df354156af02b018ba22bc67e8feaf30ed"
+  }
+}

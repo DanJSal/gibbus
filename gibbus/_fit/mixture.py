@@ -372,46 +372,6 @@ def _initial_responsibility_candidates(
     return candidates
 
 
-def _init_responsibilities(samples_1d, n_components, rng, /, *, weights=None):
-    """Initial responsibilities: valleys where they exist, GMM otherwise.
-
-    :func:`_valley_init_responsibilities` is preferred -- it is
-    deterministic, honors *weights*, and reuses the KDE sweep the
-    pipeline already runs.  It declines when no bandwidth in the sweep
-    resolves exactly *n_components* peaks, which is a real limitation
-    rather than a numerical failure.  In practice that means asking for
-    more components than the density has modes: two components sharing
-    a location differ only in scale and have no valley between them at
-    any bandwidth, and an explicit *K* above the mode count has nothing
-    to split on.  Where the modes do exist, valleys resolve them
-    reliably, including a component carrying 1% of the mass.
-    :func:`_gmm_init_responsibilities` covers the remainder.
-
-    Parameters
-    ----------
-    samples_1d : numpy.ndarray, shape (R,)
-        Point samples (or interval midpoints).
-    n_components : int
-        Number of mixture components.
-    rng : numpy.random.Generator
-        Only consumed by the GMM fallback.
-    weights : numpy.ndarray, shape (R,) or None, optional
-        Non-negative observation weights.  Used by the valley path; the
-        GMM fallback ignores them.
-
-    Returns
-    -------
-    resp : numpy.ndarray, shape (R, K)
-    mix_weights : numpy.ndarray, shape (K,)
-    """
-    # This helper returns the first available seed.  EM callers that compare
-    # converged candidates use ``_initial_responsibility_candidates`` directly.
-    _, resp, mix = _initial_responsibility_candidates(
-        samples_1d, n_components, rng, weights=weights
-    )[0]
-    return resp, mix
-
-
 def _gmm_init_responsibilities(samples_1d, n_components, rng, /):
     """Compute initial responsibilities from a one-dimensional Gaussian mixture.
 

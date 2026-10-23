@@ -1,0 +1,723 @@
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,6 +1,18 @@
+ # Changelog
+ 
+ This file records notable user-visible changes to Gibbus.
++
++## Component-search accuracy and fitting budgets (2026-10-22; not released)
++
++- Mixture component-count screens use a `1e-6` per-observation Newton bound.
++  Candidate degrees, admission rules and strict final refinement are retained;
++  selection diagnostics expose the screening target.
++- `Distribution.fit(max_fit_seconds=...)` provides an optional cooperative
++  wall-time budget shared by selection, component solves and retries.
++  Exhaustion raises the public `FitTimeoutError` and preserves existing fitted
++  state. Native operations finish before the next check. The default is no
++  time limit.
++- The fitting guide covers complexity, predictive tail checks and time budgets.
+ 
+ ## Cached-series Newton candidate experiment (2026-10-22; not released)
+ 
+--- a/docs/fitting.md
++++ b/docs/fitting.md
+@@ -28,6 +28,7 @@
+ | `k_max` | `int` or `None` | `None` (default: 10) | Maximum number of components to consider when `n_components='auto'`. Ignored when `n_components` is an explicit integer. |
+ | `auto_k_subsample` | `'auto'`, `int`, or `False` | `'auto'` | Size of the subsample used to *select* the component count when `n_components='auto'`. `'auto'` subsamples only above 20,000 samples; an integer sets the size directly; `False` scores every candidate on the full dataset. Subsampling can change which *K* wins; after selection, the winning *K* is refitted on all observations. Ignored when `n_components` is an explicit integer. |
+ | `basis` | `BasisSpec` or `None` | `None` | Full potential-basis request: support, bulk degree, endpoint logs, tail classes and span expansion (see [Basis requests](#basis-requests)). It replaces `poly_degree`, `support` and `log_boundary_*`, which must then be left at `None`; `component_options` may still set per-component degrees. With `init_from` it replaces the seed's basis family (its support must equal the seed's). |
++| `max_fit_seconds` | positive `float` or `None` | `None` | Cooperative wall-time budget shared by selection, degree growth, component fits and retries. Exhaustion raises `FitTimeoutError` and preserves any previously fitted state. A running native operation finishes before the next check; the elapsed time may exceed the budget. |
+ 
+ ---
+ 
+@@ -38,6 +39,49 @@
+ This procedure is intentionally pragmatic rather than exhaustive or globally certified. On large inputs, selection may use a stratified subsample controlled by `auto_k_subsample`; the selected component count is then refit on all observations. Use `selection_diagnostics` to retain the proposal, candidate scores, subsample information, and selected count when the decision is scientifically material.
+ 
+ For interval-censored observations, candidate models are scored using the actual interval probability masses rather than midpoint-density surrogates.
++
++Mixture screens use a certified Newton target of `1e-6` nats per observation,
++without changing the curvature-feasibility threshold. Admitted candidates use
++the final optimizer's requested tolerances. `selection_diagnostics` reports the
++screen target as `screen_newton_tolerance`. Screening scores are heuristic and
++are not certified bounds on the corresponding fully refined BIC.
++
++## Runtime and model complexity
++
++Use automatic degree unless a fixed degree is justified by the application.
++Increasing degree can add expensive curvature constraints and retries, and can
++worsen predictions outside the observed range even when optimization converges.
++A convergence certificate describes the fitted objective, not predictive quality.
++Check independent log-density scores and relevant tail behavior when comparing
++complexity; a close central CDF alone can conceal poor tail predictions.
++
++The default `n_components=1` is appropriate for a single log-concave component.
++Supply a known component count when that information is available; otherwise use
++`n_components="auto"` when mixture selection is needed. Automatic count selection
++has additional screening and refinement cost.
++
++A positive `max_fit_seconds` shares one budget across the entire fitting search:
++
++```python
++from gibbus import Distribution, FitTimeoutError
++
++model = Distribution()
++try:
++    model.fit(data, n_components="auto", max_fit_seconds=3.0)
++except FitTimeoutError as exc:
++    print(f"Fitting stopped after {exc.elapsed_seconds:.3f} seconds")
++```
++
++`FitTimeoutError` is a `TimeoutError`, separate from numerical-fit `RuntimeError`
++failures. It escapes candidate-failure recovery: an exhausted request does not
++start a fresh retry with a reset clock. An existing fitted `model` retains its
++previous state, and an unfitted model remains unfitted. Subsequent calls have
++independent budgets. With the default `None`, no time limit is imposed.
++
++The budget is checked between solver runs and fitting stages. Native numerical
++operations are not interrupted, so it is not a hard process deadline and does
++not guarantee convergence within the requested number of seconds. No partial
++candidate is installed or reported as a completed fit on timeout.
+ 
+ ## Basis requests
+ 
+--- a/gibbus/__init__.py
++++ b/gibbus/__init__.py
+@@ -73,6 +73,7 @@
+ from importlib.metadata import version as _distribution_version
+ 
+ from ._api.distribution import Distribution
++from ._fit.budget import FitTimeoutError
+ from ._defaults import clear_suppressed_failures, suppressed_failures
+ from ._model.basis_spec import (
+     BasisSpec,
+@@ -91,6 +92,7 @@
+ __all__ = [
+     "BasisSpec",
+     "Distribution",
++    "FitTimeoutError",
+     "Exponential",
+     "GibbusBasisWarning",
+     "Polynomial",
+--- a/gibbus/_api/distribution.py
++++ b/gibbus/_api/distribution.py
+@@ -40,6 +40,7 @@
+     BOOTSTRAP_MAX_FAILURE_FRACTION,
+     PROB_EPS,
+ )
++from .._fit.budget import _fit_time_budget
+ from .._fit.inputs import _coerce_sample_size, _to_generator
+ from .._fit.mixture import (
+     _find_mixture_modes_exp,
+@@ -403,6 +404,7 @@
+         k_max: int | None = None,
+         auto_k_subsample: str | int | bool = "auto",
+         basis: BasisSpec | None = None,
++        max_fit_seconds: float | None = None,
+     ) -> "Distribution":
+         """Fit a log-concave density to the supplied samples.
+ 
+@@ -418,9 +420,9 @@
+         n_components : int or ``'auto'``, optional
+             Number of mixture components (default ``1``).
+             Ignored when ``init_from`` is given (inherited from seed).
+-            ``'auto'`` counts KDE modes to center a search range, picks
+-            the best *K* by BIC over lightweight log-concave fits, then
+-            runs the full log-concave EM only once for the chosen *K*.
++            ``'auto'`` uses KDE modes to propose a search range, screens
++            short log-concave EM fits, and refines admitted counts under
++            the requested degree policy before comparing their BIC.
+             ``1`` fits a single unimodal density directly.  An explicit
+             integer ``> 1`` skips selection and fits exactly that many
+             components.
+@@ -491,6 +493,14 @@
+             (its support must equal the seed's); without it a warm start
+             inherits the seed's family (tails, span policy, tanh geometry).
+ 
++        max_fit_seconds : float or None, optional
++            Positive wall-time budget shared by selection, component fits,
++            degree growth and retries. ``None`` (default) imposes no time
++            limit. Exhaustion raises ``FitTimeoutError`` and preserves any
++            previously fitted state. Checks occur between solver runs and
++            fitting stages; a running native operation is allowed to finish,
++            so this is a cooperative budget, not a hard execution deadline.
++
+         Returns
+         -------
+         Distribution
+@@ -502,6 +512,8 @@
+             If *samples* has an unsupported shape, holds fewer than two
+             observations or no spread, falls outside *support*, or if
+             any argument is outside its documented range.
++        FitTimeoutError
++            If ``max_fit_seconds`` is exhausted before the fit completes.
+         RuntimeError
+             If the data admits no log-concave fit (heavy tails such as
+             Cauchy or Pareto), if a point-data mixture component is
+@@ -552,8 +564,9 @@
+             auto_k_subsample=auto_k_subsample,
+             basis=basis,
+         )
+-        request = _prepare_fit_request(Distribution, request)
+-        result = _run_fit_request(request)
++        with _fit_time_budget(max_fit_seconds):
++            request = _prepare_fit_request(Distribution, request)
++            result = _run_fit_request(request)
+         self._install_fit_result(result)
+         return self
+ 
+--- a/gibbus/_defaults.py
++++ b/gibbus/_defaults.py
+@@ -546,6 +546,15 @@
+ noisier than the final one, transiently produce a small component and
+ get a whole *K* rejected on that basis."""
+ 
++AUTO_LC_SWEEP_NEWTON_TOL: Final = 1e-6
++"""Absolute per-observation Newton bound used only for mixture BIC screens.
++
++Screening compares short EM explorations rather than final fits. Component
++M-steps need not attain the final optimizer's much tighter bound here.
++Admitted candidates are refitted with the original requested Newton policy.
++"""
++
++
+ AUTO_LC_SWEEP_EM_MAX_ITER: Final = 5
+ """Maximum EM iterations for each candidate *K* (>= 2) during the LC BIC
+ sweep.  The sweep only needs a rough BIC ranking, not converged fits, so
+--- a/gibbus/_fit/basis_mixture.py
++++ b/gibbus/_fit/basis_mixture.py
+@@ -41,6 +41,7 @@
+     AUTO_K_MAX,
+     AUTO_LC_MIN_COMPONENT_N,
+     AUTO_LC_SWEEP_EM_MAX_ITER,
++    AUTO_LC_SWEEP_NEWTON_TOL,
+     BOUNDARY_ALPHA,
+     EM_MIN_EFFECTIVE_DISTINCT_N,
+     NUMERIC_FAILURES,
+@@ -78,6 +79,7 @@
+     _tested,
+     _UntestableSpan,
+ )
++from .budget import _check_fit_time
+ from .boundary import _effective_n, _select_boundary_terms
+ from .conic_newton import _CONVERGED, _NewtonOptions
+ from .curvature_search import _CurvatureOptions
+@@ -754,6 +756,7 @@
+             ``(theta, log_weights, face, statuses)``.
+         """
+ 
++        _check_fit_time("mixture M-step")
+         data, k = self.data, self.k
+         r = np.asarray(responsibilities, dtype=np.float64)
+         if not data.intervals and k > 1:
+@@ -901,6 +904,7 @@
+     n = problem.blocks.n
+     steps = 0
+     while steps < int(max_steps):
++        _check_fit_time("EM exploration")
+         state1 = problem.em_map(state)
+         steps += 1
+         if not accelerate:
+@@ -2372,6 +2376,15 @@
+     enabled = tuple(flag is True or flag == _AUTO for flag in (lower, upper))
+     screen_expansion = _MINIMAL if spec.expansion == _AUTO_EXPANSION else spec.expansion
+     screen_em = _EMOptions(max_steps=AUTO_LC_SWEEP_EM_MAX_ITER, accelerate=False)
++    # Screens rank short EM explorations. Their component M-steps use a
++    # coarser certified bound; the single-component screens and all admitted
++    # refinements retain the requested optimizer policy and shape checks.
++    screen_options = dataclasses.replace(
++        options,
++        tolerance=max(options.tolerance, AUTO_LC_SWEEP_NEWTON_TOL),
++        certified_tolerance=max(options.certified_tolerance, AUTO_LC_SWEEP_NEWTON_TOL),
++        accuracy_floor=max(options.accuracy_floor, AUTO_LC_SWEEP_NEWTON_TOL),
++    )
+     log_n = math.log(max(effective_n, 1.0))
+     screens, screening_scores, refined, scores = {}, [], {}, []
+     admissions = {1: "mandatory_single"}
+@@ -2425,12 +2438,13 @@
+                 sample.data.x[:, None], sample.data.weights, start
+             )
+         models = _component_models(sample, (concrete,) * count, r)
+-        problem = _MixtureProblem(models, sample.data, options)
++        problem = _MixtureProblem(models, sample.data, screen_options)
+         return _run_em(
+             problem, start, em_options=screen_em, polish=False, initialization=name
+         )
+ 
+     def screen(count):
++        _check_fit_time("component-count screening")
+         if count in screens:
+             return
+         screens[count] = {}
+@@ -2512,6 +2526,7 @@
+                     )
+ 
+     def refine(count):
++        _check_fit_time("component-count refinement")
+         record = {"n_components": count, "admission": admissions[count]}
+         try:
+             screen(count)
+@@ -2595,6 +2610,7 @@
+         ),
+         "screen_boundary_enabled": enabled,
+         "screen_degrees": degrees,
++        "screen_newton_tolerance": float(screen_options.certified_tolerance),
+         "screening_scores": tuple(screening_scores),
+         "scores": tuple(scores),
+         "admissions": tuple(sorted(admissions.items())),
+--- a/gibbus/_fit/basis_newton.py
++++ b/gibbus/_fit/basis_newton.py
+@@ -58,6 +58,7 @@
+     _structural_rows,
+ )
+ from .basis_objective import _ObjectiveEvaluation
++from .budget import _check_fit_time
+ from .conic_newton import (
+     _CONVERGED,
+     _UNCERTIFIED,
+@@ -534,6 +535,7 @@
+             its first violating trial
+             (``[]`` or ``[(_TrialCuts, theta)]``).
+         """
++        _check_fit_time("Newton run")
+         compiled = self.compiled()
+         coefficient_blocks = self.curvature.blocks
+         a_packed, sizes, a_offsets, q_offsets = representation.packed
+@@ -577,6 +579,7 @@
+             compiled.end()
+             if _TRACE is not None:
+                 _TRACE.extend(compiled.traced())
++        _check_fit_time("Newton run")
+         self._ledger(compiled.failures())
+         queued = []
+         pending = compiled.pending()
+@@ -1168,6 +1171,7 @@
+     separation = None
+     queued = []
+     for exchange in range(problem.max_exchanges + 1):
++        _check_fit_time("curvature exchange")
+         theta = face_obj.full(phi)
+         separation = curvature.separate(theta, problem.curvature_options)
+         if separation.status == "nonnegative":
+@@ -1722,6 +1726,7 @@
+     _QuadratureFailure
+         At the start, an accepted iterate or the final state.
+     """
++    _check_fit_time("component solve")
+     options = _NewtonOptions() if options is None else options
+     if not isinstance(options, _NewtonOptions):
+         raise TypeError("options must be _NewtonOptions or None")
+--- a/gibbus/_fit/basis_selection.py
++++ b/gibbus/_fit/basis_selection.py
+@@ -75,6 +75,7 @@
+     _uniform_statistics,
+ )
+ from .boundary import _select_boundary_terms
++from .budget import _check_fit_time
+ from .conic_newton import _CONVERGED, _UNCERTIFIED, _NewtonOptions
+ from .degree import _DegreeSelectionConfig, _project_psd, _psd_pinv
+ from .inputs import _admissible_degrees, _normalize_basis_inputs
+@@ -895,6 +896,7 @@
+     -------
+     _Stage
+     """
++    _check_fit_time("degree selection")
+     base = dataclasses.replace(
+         spec, log_lower=lower, log_upper=upper, expansion=_MINIMAL
+     )
+--- a/tests/test_auto_k.py
++++ b/tests/test_auto_k.py
+@@ -352,3 +352,35 @@
+         a, _ = _gmm_init_responsibilities(x, 2, np.random.default_rng(0))
+         b, _ = _gmm_init_responsibilities(10.0 * x, 2, np.random.default_rng(0))
+         assert np.allclose(np.sort(a, axis=1), np.sort(b, axis=1), atol=1e-6)
++
++
++def test_screen_accuracy_is_separate_from_final_refinement(monkeypatch):
++    """Cheap screens retain strict candidate refinement and the degree set."""
++    from gibbus import BasisSpec
++    from gibbus._defaults import AUTO_LC_SWEEP_NEWTON_TOL, AUTO_LC_VALIDATION_DEGREES
++    from gibbus._fit.conic_newton import _NewtonOptions
++    policy = _NewtonOptions()
++    observed = []
++    refined = []
++    original = _basis_mixture._run_em
++    original_refine = _basis_mixture._fit_mixture_auto
++    def capture(problem, *args, **kwargs):
++        em = kwargs.get('em_options')
++        if em is not None and not em.accelerate and not kwargs.get('polish', True):
++            observed.append(problem.options)
++        return original(problem, *args, **kwargs)
++    def capture_refinement(*args, **kwargs):
++        refined.append(kwargs['options'])
++        return original_refine(*args, **kwargs)
++    monkeypatch.setattr(_basis_mixture, '_run_em', capture)
++    monkeypatch.setattr(_basis_mixture, '_fit_mixture_auto', capture_refinement)
++    x = np.random.default_rng(190).normal(size=150)
++    result = _basis_mixture._select_components(
++        BasisSpec(bulk_degree='auto', expansion='minimal'), x, options=policy, rng=0
++    )
++    assert observed
++    assert all(o.certified_tolerance == AUTO_LC_SWEEP_NEWTON_TOL for o in observed)
++    assert all(o.tolerance == AUTO_LC_SWEEP_NEWTON_TOL for o in observed)
++    assert refined and all(o is policy for o in refined)
++    assert result.diagnostics['screen_degrees'] == AUTO_LC_VALIDATION_DEGREES
++    assert result.diagnostics['screen_newton_tolerance'] == AUTO_LC_SWEEP_NEWTON_TOL
+--- /dev/null
++++ b/gibbus/_fit/budget.py
+@@ -0,0 +1,78 @@
++"""Cooperative wall-time budgets shared by every stage of one fit."""
++
++import math
++import time
++from contextlib import contextmanager
++from contextvars import ContextVar
++from dataclasses import dataclass
++from numbers import Real
++
++
++class FitTimeoutError(TimeoutError):
++    """A fitting request exhausted its wall-time budget.
++
++    Attributes
++    ----------
++    max_fit_seconds : float
++        Requested budget in seconds.
++    elapsed_seconds : float
++        Elapsed wall time when a fitting checkpoint detected exhaustion.
++    stage : str
++        Fitting stage at that checkpoint.
++    """
++
++    def __init__(self, max_fit_seconds, elapsed_seconds, stage):
++        self.max_fit_seconds = float(max_fit_seconds)
++        self.elapsed_seconds = float(elapsed_seconds)
++        self.stage = str(stage)
++        super().__init__(
++            f"fit exceeded max_fit_seconds={self.max_fit_seconds:g} "
++            f"({self.elapsed_seconds:.3f} seconds elapsed; {self.stage})"
++        )
++
++    def __reduce__(self):
++        return (type(self), (self.max_fit_seconds, self.elapsed_seconds, self.stage))
++
++
++@dataclass(frozen=True)
++class _Deadline:
++    started: float
++    seconds: float
++
++
++_deadline = ContextVar("gibbus_fit_deadline", default=None)
++
++
++def _check_fit_time(stage="fitting"):
++    """Raise at a checkpoint when the active request's budget has expired."""
++    deadline = _deadline.get()
++    if deadline is not None:
++        elapsed = time.monotonic() - deadline.started
++        if elapsed >= deadline.seconds:
++            raise FitTimeoutError(deadline.seconds, elapsed, stage)
++
++
++@contextmanager
++def _fit_time_budget(seconds):
++    """Share the earliest deadline with nested work and restore it on exit."""
++    current = _deadline.get()
++    token = None
++    if seconds is not None:
++        if isinstance(seconds, bool) or not isinstance(seconds, Real):
++            raise TypeError("max_fit_seconds must be a positive finite number or None")
++        try:
++            seconds = float(seconds)
++        except OverflowError:
++            raise ValueError("max_fit_seconds must be a positive finite number or None") from None
++        if not math.isfinite(seconds) or seconds <= 0.0:
++            raise ValueError("max_fit_seconds must be a positive finite number or None")
++        started = time.monotonic()
++        if current is None or started + seconds < current.started + current.seconds:
++            token = _deadline.set(_Deadline(started, seconds))
++    try:
++        _check_fit_time("fit preparation")
++        yield
++        _check_fit_time("fit completion")
++    finally:
++        if token is not None:
++            _deadline.reset(token)
+--- /dev/null
++++ b/tests/test_fit_budget.py
+@@ -0,0 +1,127 @@
++"""Shared fitting deadlines and estimator-state preservation."""
++from contextvars import copy_context
++
++import numpy as np
++import pytest
++
++from gibbus import Distribution, FitTimeoutError
++from gibbus._fit import budget
++
++
++@pytest.fixture
++def clock(monkeypatch):
++    now = [100.0]
++    monkeypatch.setattr(budget.time, 'monotonic', lambda: now[0])
++    return now
++
++
++def test_budget_is_shared_and_cannot_be_reset_by_nested_work(clock):
++    with pytest.raises(FitTimeoutError) as caught:
++        with budget._fit_time_budget(2.0):
++            clock[0] += 1.0
++            with budget._fit_time_budget(10.0):
++                clock[0] += 1.1
++                budget._check_fit_time('retry')
++    assert caught.value.max_fit_seconds == 2.0
++    assert caught.value.elapsed_seconds == pytest.approx(2.1)
++    assert caught.value.stage == 'retry'
++    budget._check_fit_time()
++
++
++def test_shorter_nested_budget_restores_outer_deadline(clock):
++    with budget._fit_time_budget(10.0):
++        with pytest.raises(FitTimeoutError):
++            with budget._fit_time_budget(1.0):
++                clock[0] += 2.0
++        budget._check_fit_time()
++    budget._check_fit_time()
++
++
++def test_unlimited_fit_does_not_start_or_read_a_clock(monkeypatch):
++    def unexpected():
++        raise AssertionError('unlimited fit read the clock')
++    monkeypatch.setattr(budget.time, 'monotonic', unexpected)
++    with budget._fit_time_budget(None):
++        budget._check_fit_time()
++
++
++def test_context_does_not_modify_an_independent_execution_context(clock):
++    independent = copy_context()
++    with budget._fit_time_budget(1.0):
++        clock[0] += 2.0
++        independent.run(budget._check_fit_time)
++        with pytest.raises(FitTimeoutError):
++            budget._check_fit_time()
++        clock[0] = 100.0
++
++
++@pytest.mark.parametrize('value', [0, -1, np.inf, np.nan, 10**400])
++def test_invalid_budget_rejected(value):
++    with pytest.raises(ValueError, match='max_fit_seconds'):
++        Distribution().fit([0., 1., 2.], max_fit_seconds=value)
++
++
++@pytest.mark.parametrize('value', [True, '3', object()])
++def test_non_numeric_budget_rejected(value):
++    with pytest.raises(TypeError, match='max_fit_seconds'):
++        Distribution().fit([0., 1., 2.], max_fit_seconds=value)
++
++
++def test_timeout_does_not_replace_existing_fit_and_next_fit_is_unlimited(monkeypatch, clock):
++    import gibbus._api.distribution as api
++    samples = np.random.default_rng(31).normal(size=100)
++    fitted = Distribution().fit(samples, poly_degree=2)
++    before = fitted.logpdf(samples).copy()
++    original = api._run_fit_request
++    def expire(request):
++        clock[0] += 2.0
++        budget._check_fit_time('component-count screening')
++        raise AssertionError('timeout did not escape')
++    monkeypatch.setattr(api, '_run_fit_request', expire)
++    with pytest.raises(FitTimeoutError, match='component-count screening'):
++        fitted.fit(samples, n_components='auto', max_fit_seconds=1.0)
++    np.testing.assert_array_equal(fitted.logpdf(samples), before)
++    monkeypatch.setattr(api, '_run_fit_request', original)
++    assert fitted.fit(samples, poly_degree=2) is fitted
++
++
++def test_expired_deadline_prevents_starting_a_component_solve(clock):
++    from gibbus._fit.basis_newton import _solve_basis
++    with pytest.raises(FitTimeoutError, match='component solve'):
++        with budget._fit_time_budget(1.0):
++            clock[0] += 2.0
++            _solve_basis(None)
++
++
++def test_timeout_is_not_a_recoverable_numeric_failure():
++    from gibbus._defaults import NUMERIC_FAILURES
++    assert not isinstance(FitTimeoutError(1, 2, 'refinement'), NUMERIC_FAILURES)
++
++
++def test_timeout_exception_round_trips_through_pickle():
++    import pickle
++    original = FitTimeoutError(3.0, 3.2, 'Newton run')
++    restored = pickle.loads(pickle.dumps(original))
++    assert str(restored) == str(original)
++    assert restored.max_fit_seconds == 3.0
++    assert restored.elapsed_seconds == 3.2
++    assert restored.stage == 'Newton run'
++
++
++def test_auto_search_does_not_swallow_a_timed_out_screen(monkeypatch, clock):
++    import gibbus._fit.basis_mixture as mixture
++    original = mixture._MixtureProblem.m_step
++    calls = []
++    def expire(self, *args):
++        calls.append(self.k)
++        clock[0] += 2.0
++        return original(self, *args)
++    monkeypatch.setattr(mixture._MixtureProblem, 'm_step', expire)
++    rng = np.random.default_rng(91)
++    x = np.r_[rng.normal(-3, .5, 100), rng.normal(3, .5, 100)]
++    fitted = Distribution()
++    with pytest.raises(FitTimeoutError, match='mixture M-step'):
++        fitted.fit(x, n_components='auto', max_fit_seconds=1)
++    assert len(calls) == 1
++    with pytest.raises(RuntimeError):
++        fitted.logpdf(x)
+--- /dev/null
++++ b/tests/benchmark_component_selection.py
+@@ -0,0 +1,64 @@
++"""Benchmark automatic component selection on fixed train/holdout samples.
++
++Run original and updated source trees sequentially with the same BLAS limits:
++OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python tests/benchmark_component_selection.py --source . --output selection-runtime.json
++
++Existing output rows are resumed. Use a new output path for fresh timings.
++On POSIX a 30-second signal timer limits individual fits cooperatively; native
++operations can delay delivery. Use an external process deadline for hard limits.
++"""
++import argparse,sys,time,json,signal
++from pathlib import Path
++p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--output',required=True);p.add_argument('--screen-tolerance',type=float);p.add_argument('--seed',type=int);p.add_argument('--skip-uniform',action='store_true');p.add_argument('--family');p.add_argument('--fit-budget',type=float);a=p.parse_args();sys.path.insert(0,str(Path(a.source).resolve()))
++import numpy as np
++from gibbus import Distribution
++import gibbus._fit.basis_mixture as mixture
++if a.screen_tolerance is not None: mixture.AUTO_LC_SWEEP_NEWTON_TOL=a.screen_tolerance
++class BenchmarkTimeout(TimeoutError):
++ pass
++
++def expired(*args):
++ raise BenchmarkTimeout('30-second benchmark budget exhausted')
++
++if hasattr(signal, 'SIGALRM'):
++ signal.signal(signal.SIGALRM, expired)
++records=json.loads(Path(a.output).read_text()) if Path(a.output).exists() else []
++finished={(r['seed'],r['family']) for r in records}
++
++for seed in (91,2045,20261022):
++ if a.seed is not None and seed!=a.seed: continue
++ for index,name in enumerate(('normal','gumbel','separated','overlap','unbalanced','gamma','beta','beta_mixture','uniform','four_mode')):
++  if index>=5 and seed!=91: continue
++  if a.skip_uniform and name=='uniform': continue
++  if a.family is not None and name!=a.family: continue
++  if (seed,name) in finished: continue
++  support=None;extra={}
++  if a.fit_budget is not None: extra['max_fit_seconds']=a.fit_budget
++  r=np.random.default_rng(np.random.SeedSequence([seed,index,0]));h=np.random.default_rng(np.random.SeedSequence([seed,index,1]))
++  if name=='normal':x=r.normal(size=600);test=h.normal(size=20000)
++  elif name=='gumbel':x=r.gumbel(size=600);test=h.gumbel(size=20000)
++  elif name=='gamma':
++   x=r.gamma(2.,1.,600);test=h.gamma(2.,1.,20000);support=(0.,np.inf)
++  elif name=='beta':
++   x=r.beta(2.,5.,600);test=h.beta(2.,5.,20000);support=(0.,1.)
++  elif name=='beta_mixture':
++   x=np.r_[r.beta(2.,5.,300),r.beta(5.,2.,300)];z=h.random(20000)<.5;test=h.beta(np.where(z,2.,5.),np.where(z,5.,2.));support=(0.,1.)
++  elif name=='uniform':
++   x=r.uniform(size=600);test=h.uniform(size=20000);support=(0.,1.)
++  elif name=='four_mode':
++   w=np.full(4,.25);m=np.array([-6.,-2.,2.,6.]);s=np.array([.4,.6,.5,.4]);x=np.concatenate([r.normal(mu,sd,150) for mu,sd in zip(m,s)]);z=h.choice(4,size=20000,p=w);test=h.normal(m[z],s[z]);extra.update(k_max=4)
++  else:
++   weights,means,scales={'separated':([.5,.5],[-2,3],[1,1.5]),'overlap':([.5,.5],[-.5,.5],[1,1]),'unbalanced':([.9,.1],[-2,3],[.6,1.5])}[name]
++   w,m,s=map(np.array,(weights,means,scales));x=np.concatenate([r.normal(mu,sd,int(600*mass)) for mass,mu,sd in zip(w,m,s)])
++   z=h.choice(2,size=20000,p=w);test=h.normal(m[z],s[z])
++  start=time.perf_counter()
++  try:
++   if hasattr(signal,'setitimer'): signal.setitimer(signal.ITIMER_REAL,30)
++   f=Distribution().fit(x,n_components='auto',rng=0,support=support,**extra)
++   seconds=time.perf_counter()-start
++   if hasattr(signal,'setitimer'): signal.setitimer(signal.ITIMER_REAL,0)
++   row=dict(seed=seed,family=name,seconds=seconds,k=f.n_components,degrees=[int(c._basis.model.request.bulk_degree) for c in f.components],train_logpdf=float(np.mean(f.logpdf(x))),holdout_logpdf=float(np.mean(f.logpdf(test))),em=f._em_diagnostics,selection=f.selection_diagnostics,grid_logpdf=f.logpdf(np.linspace(np.min(test),np.max(test),301)).tolist())
++  except Exception as e:
++   if hasattr(signal,'setitimer'): signal.setitimer(signal.ITIMER_REAL,0)
++   row=dict(seed=seed,family=name,seconds=time.perf_counter()-start,error=repr(e))
++  records.append(row);Path(a.output).write_text(json.dumps(records,indent=2,default=str));print(seed,name,round(row['seconds'],3),row.get('k'),row.get('error'),flush=True)
+--- /dev/null
++++ b/docs/fit-runtime-update.md
+@@ -0,0 +1,79 @@
++# Fitting controller: screening accuracy and time budgets
++
++October 22, 2026. Unreleased working source based on GIBBUS_Borrowable_Aspects_Tested.zip.
++
++## Behavior
++
++Automatic component-count selection uses a default certified Newton target of 1e-6 nats per observation for provisional mixture screens. Single-component screens and all admitted refinements retain the requested final optimizer settings. Screening degrees remain 4 and 6 for the automatic policy. The KDE proposal, initializer families, BIC scoring, minimum component mass, admission rules, winner-neighbor exploration and degree-growth decisions retain their existing definitions. No new BIC-margin pruning rule was introduced.
++
++The purpose is to avoid spending final-fit precision on component M-steps inside five-step screening EM explorations. The screening target is reported as selection_diagnostics['screen_newton_tolerance']. Curvature feasibility, properness and final-fit convergence thresholds are not relaxed. Coarser screens are still a heuristic: their scores are not bounds on the corresponding fully refined model.
++
++Distribution.fit(max_fit_seconds=...) provides an optional shared wall-time budget across preparation, selection, component solves, degree growth, faces and retries. The default None imposes no time limit. Exhaustion raises gibbus.FitTimeoutError, a TimeoutError that is not swallowed as a recoverable numerical candidate failure. Its max_fit_seconds, elapsed_seconds and stage attributes identify the exhausted request. Existing fitted state is installed only after successful completion, so a timeout preserves the previous model. An unfitted model remains unfitted.
++
++The budget uses a context-local monotonic deadline. Nested work cannot extend or reset an outer deadline; shorter nested deadlines are restored correctly. Deadline state is reset when a request exits, including exceptional exits, and is independent across execution contexts. Unlimited fitting does not read the clock at checkpoints.
++
++Budget checks occur between solver runs and fitting stages. A native numerical operation finishes before the next check, so the elapsed time may exceed the requested budget. This is not process-level preemption and is not a guarantee of a converged result within a fixed number of seconds. No partial fit is installed or labelled successful on exhaustion.
++
++```python
++from gibbus import Distribution, FitTimeoutError
++
++model = Distribution()
++try:
++    model.fit(data, n_components="auto", max_fit_seconds=3.0)
++except FitTimeoutError as exc:
++    print(exc.elapsed_seconds, exc.stage)
++```
++
++Use automatic degree unless a fixed degree is justified. Supply a known component count when available, or request automatic count selection when that information is unknown. A high-degree optimizer certificate does not establish predictive quality, especially beyond the observed range. The fitting guide includes these distinctions and examples.
++
++## Selection and prediction comparison
++
++The main comparison repeats the five-family settings study on three training seeds (91, 2045, 20261022), using 600 matched training observations and 20,000 matched held-out observations per family/seed. Both trees run the public API with n_components='auto', rng=0, and default selection policies. Additional single-seed controls cover half-line gamma, bounded beta, a bounded two-beta mixture, uniform data, and a four-mode normal mixture. The four-mode control supplies k_max=4 in both trees; the other cases use the library's default ceiling.
++
++For all 19 cases that completed in both arms:
++
++- Selected component counts and per-component degrees match.
++- Training and held-out mean log density match exactly in these recorded runs.
++- Log densities on each shared 301-point grid match exactly.
++
++This is empirical agreement on these cases, not a proof of unchanged selection on every dataset. Component selection remains heuristic.
++
++Median public fit seconds across the three main training datasets (one timing per dataset/settings pair, not repeated measurements of identical data):
++
++| Family | Original | Updated |
++| --- | ---: | ---: |
++| normal | 0.993 | 0.962 |
++| gumbel | 3.140 | 3.208 |
++| separated | 5.241 | 4.516 |
++| overlap | 1.157 | 1.014 |
++| unbalanced | 5.860 | 5.291 |
++
++The gains are modest and mixed. For example, the separated mixture is faster, while Gumbel has little change. The single-seed gamma control measured 4.613 to 4.151 seconds; beta measured 6.754 to 7.206 seconds; the bounded two-beta mixture measured 17.075 to 18.566 seconds; the four-mode control measured 2.468 to 2.324 seconds. These differences include solver-path and timing variation, so small changes should not be treated as robust speedups or regressions without repeated measurements.
++
++The additional uniform-data control is not a completed quality comparison: the original source returned one component in an uncapped preliminary run of about 102 seconds; the updated run was interrupted by the benchmark's 30-second timer. It is excluded from timing and quality agreement aggregates. This broader case shows that the earlier five-family study did not establish a general few-second ceiling for automatic selection. The benchmark's POSIX signal timer is delivered at Python checkpoints and can itself be delayed by native work; use an external process watchdog when a hard benchmark deadline is required.
++
++With max_fit_seconds=2 on the updated uniform-data request, the public budget raised FitTimeoutError at about 2.000 seconds in a Newton run. A separate degree-8 overlapping-mixture request with max_fit_seconds=1 stopped at about 1.001 seconds and retained the previous model's density exactly. These are individual smoke checks, not worst-case latency guarantees. Their raw records are included.
++
++A coarser 1e-4 screen target was tried on nine single-seed controls. It retained selected models on those controls and helped some timings, but did not consistently improve the bounded cases. The more conservative 1e-6 default is retained. Neither trial justifies promising a universal runtime ceiling.
++
++## Validation
++
++- Focused fitting/API suite: 127 passed, 1 xfailed, 1 failed. The failure is test_stacked_m_step_without_shared_columns_is_independent_fits, already reproduced on the original source during the earlier investigation: iteration_limit instead of the expected converged status.
++- Final budget/screen-policy/default suite: see budget-final-tests.log. It covers shared deadlines, shorter nested deadlines, context isolation, no clock reads for unlimited fits, input validation, pickle round trips, existing-state preservation, later unlimited calls, prevention of expired component solves, and propagation out of automatic screening. It also verifies that screens use the separate target while every refinement receives the original optimizer-policy object.
++- The broader auto-K/selection-battery run was stopped after its initial 50 passing tests and three failures in explicit degree-6 lognormal requests with counts 2, 3 and 4. Those requests bypass the changed screening policy. The run did not finish, and these three failures were not separately replayed on the original source in this update. They are unresolved validation failures, not a claim that the broader suite passes. The partial output is retained.
++- The complete repository suite, debug extension build and cross-platform matrix were not run. This source is a working update, not a release certification.
++
++All original-source comparison runs use the archive's compiled conic kernel, not the earlier experimental reduced-system patch. This update does not incorporate that experimental kernel change. Source hashes and a patch against the uploaded archive are included.
++
++## Reproduce and review
++
++The archive contains the full updated source tree. Build/install it using the existing project instructions, then run:
++
++```sh
++python -m pytest tests/test_fit_budget.py tests/test_auto_k.py -q
++OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python tests/benchmark_component_selection.py --source . --output selection-runtime.json
++```
++
++Run original and updated trees sequentially with the same compiled optimization flags and BLAS limits. Benchmark imports, sample generation and scoring are outside the recorded fit timer. Existing output rows are resumed; use fresh output paths for new timing runs. Raw comparison data and test output live in docs/runtime-evidence/.
++
++Runtime environment for this validation: CPython 3.12.14, NumPy 2.3.5, SciPy 1.17.0, GCC 13 at -O3, single-threaded BLAS/OpenMP. Absolute times depend on the environment. No additional runtime dependency was introduced by the budget implementation.

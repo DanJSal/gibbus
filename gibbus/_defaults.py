@@ -6,10 +6,11 @@ they are not part of the public contract and are not shared across modules.
 
 Groups
 ------
-* **Floating-point sentinels and mode/root numerics** — ``MAX_FAC``,
-  ``PROB_EPS``, ``TINY_FLOAT``, ``LOG_THRESH``, Newton/bracketing/backtracking constants
-* **Quadrature and moments** — ``QUAD_EPSABS``, ``QUAD_EPSREL``,
-  ``QUAD_LIMIT``, ``INTERVAL_GL_ORDER``, ``MAX_CACHED_MOMENTS``
+* **Floating-point sentinels and mode/root numerics** —
+  ``PROB_EPS``, ``TINY_FLOAT``, ``LOG_THRESH`` and bracketing constants
+* **Quadrature and moments** — ``INTERVAL_GL_ORDER``, ``MAX_CACHED_MOMENTS``
+* **G3 basis, curvature separation and normalizer** — ``BASIS_*`` and the
+  Stage 2/3 policy constants
 * **EM and component-count selection** — ``EM_*``, ``AUTO_K_*``,
   ``AUTO_KDE_*``, ``AUTO_LC_*`` and selection-subsampling constants
 * **Automatic polynomial degree** — ``AUTO_POLY_DEGREE_MIN``,
@@ -231,16 +232,13 @@ _F64_INFO: Final = np.finfo(np.float64)
 # Floating-point sentinels
 # ---------------------------------------------------------------------------
 
-MAX_FAC: Final = 64
-"""Maximum order for the pre-computed factorial table in ``_model/vec.py``."""
-
 EXP_NARROW_D2_THRESHOLD: Final = 1e-4
 """Switch to direct centered exp-space quadrature below this log-variance."""
 
 LOG_THRESH: Final = -np.log(_F64_INFO.eps)
 """Log-density threshold (≈ 36.04) at which exp(-q) is considered negligible
-relative to the peak; used by ``_state_kernels._q_window_and_mode`` to set
-the fitting window on unbounded sides."""
+relative to the peak; sets the evaluation window of a fitted component on
+unbounded sides (``basis_state._mode_and_window``)."""
 
 PROB_EPS: Final = _F64_INFO.eps
 """Minimum probability value used to clip uniform samples before inversion,
@@ -253,10 +251,7 @@ sums, interval masses, and tail distances.
 
 It is **not** a density floor.  The point-data objective accumulates the
 potential ``q`` directly and never round-trips through ``exp``/``log``,
-so no PDF value is clipped there.  Note also that
-``_state_kernels._points_nll_grad_batch`` declares its own local
-``TINY = 1e-300`` which shadows this name and is unrelated to it; the
-two differ by eight orders of magnitude."""
+so no PDF value is clipped there."""
 
 # ---------------------------------------------------------------------------
 # Post-fit API extensions
@@ -334,65 +329,8 @@ HAZARD_MONOTONE_TOL: Final = 1e-9
 """Allowed relative hazard descent in the monotonicity diagnostic."""
 
 # ---------------------------------------------------------------------------
-# Newton / root-finding solver
-# ---------------------------------------------------------------------------
-
-GRAD_TOL: Final = 1e-12
-"""Gradient convergence tolerance for the Newton–Raphson solver in
-``_state_kernels``."""
-
-HESS_TOL: Final = 1e-16
-"""Minimum |Hessian| accepted as a valid Newton step denominator."""
-
-NEWT_TOL: Final = 1e-12
-"""Step-size convergence tolerance for Newton iterations."""
-
-NEWT_MAX: Final = 100
-"""Maximum Newton iterations per solve."""
-
-# ---------------------------------------------------------------------------
-# Bracket expansion (used when Newton does not converge)
-# ---------------------------------------------------------------------------
-
-BRACKET_MAX_EXPAND: Final = 30
-"""Maximum number of geometric bracket-expansion doublings."""
-
-BRACKET_INIT_STEP: Final = 1.0
-"""Initial bracket half-width before expansion."""
-
-BRACKET_STEP_GROWTH: Final = 2.0
-"""Multiplicative growth factor for the bracket step each iteration."""
-
-# ---------------------------------------------------------------------------
-# Backtracking line search
-# ---------------------------------------------------------------------------
-
-BACKTRACK_MAX_ITERS: Final = 20
-"""Maximum backtracking steps per Newton iteration."""
-
-BACKTRACK_REDUCE: Final = 0.5
-"""Step-size reduction factor during backtracking."""
-
-# ---------------------------------------------------------------------------
-# Boundary safety margin
-# ---------------------------------------------------------------------------
-
-BOUNDARY_EPS_MULT: Final = 1e-12
-"""Multiplicative guard distance from finite support boundaries used by the
-Newton solver to avoid singularities in the log-boundary terms."""
-
-# ---------------------------------------------------------------------------
 # Quadrature (scipy.integrate.quad)
 # ---------------------------------------------------------------------------
-
-QUAD_EPSABS: Final = 1.49e-08
-"""Absolute error tolerance passed to ``scipy.integrate.quad``."""
-
-QUAD_EPSREL: Final = 1.49e-08
-"""Relative error tolerance passed to ``scipy.integrate.quad``."""
-
-QUAD_LIMIT: Final = 100
-"""Maximum sub-interval limit passed to ``scipy.integrate.quad``."""
 
 TAIL_QUAD_EPSABS: Final = 1e-12
 """Absolute tolerance for scaled relative-tail quadrature."""
@@ -412,12 +350,6 @@ CONIC_QP_MAX_ITER: Final = 100
 
 CONIC_QP_STEP_FRACTION: Final = 0.99
 """Fraction of the maximal feasible conic interior-point step."""
-
-CURVATURE_CERT_MAX_DEPTH: Final = 48
-"""Subdivision-depth budget for compiled full-curvature certification."""
-
-CURVATURE_CERT_MAX_LEAVES: Final = 4096
-"""Leaf budget before compiled full-curvature certification returns uncertain."""
 
 # ---------------------------------------------------------------------------
 # Moment cache
@@ -452,10 +384,6 @@ adaptive interval reducer instead.  Order 24 gives near-float64 agreement for
 the maintained finite-row gradient stress cases while keeping that path
 vectorized.
 """
-
-INTERVAL_W_EPS_MULT: Final = 1e-12
-"""Relative width threshold for the point limit on the local finite-row path."""
-
 
 # ---------------------------------------------------------------------------
 # Variance tolerance
@@ -617,6 +545,15 @@ in 25-40 keeps ``beta(2, 5)`` at one component while leaving
 converged BIC comparisons; above ~45 the sweep's lite fits, which are
 noisier than the final one, transiently produce a small component and
 get a whole *K* rejected on that basis."""
+
+AUTO_LC_SWEEP_NEWTON_TOL: Final = 1e-6
+"""Absolute per-observation Newton bound used only for mixture BIC screens.
+
+Screening compares short EM explorations rather than final fits. Component
+M-steps need not attain the final optimizer's much tighter bound here.
+Admitted candidates are refitted with the original requested Newton policy.
+"""
+
 
 AUTO_LC_SWEEP_EM_MAX_ITER: Final = 5
 """Maximum EM iterations for each candidate *K* (>= 2) during the LC BIC
@@ -835,3 +772,87 @@ TAIL_SOLVE_MAX_ITER: Final = 200
 
 TAIL_SOLVE_TOL: Final = 1e-14
 """Relative bracket width at which an extreme quantile is accepted."""
+
+# ---------------------------------------------------------------------------
+# G3 potential basis: construction defaults
+# ---------------------------------------------------------------------------
+
+BASIS_DEFAULT_BULK_DEGREE: Final = 2
+"""Default highest bulk monomial degree of a :class:`gibbus.BasisSpec`.
+
+Degree 2 is the smallest bulk degree that gives a proper density on the full
+line with both tails unspecified (degree 1 is structurally improper there)."""
+
+BASIS_TANH_LOWER_QUANTILE: Final = 0.10
+"""Data quantile used as the automatic lower tanh location ``x_L``."""
+
+BASIS_TANH_UPPER_QUANTILE: Final = 0.90
+"""Data quantile used as the automatic upper tanh location ``x_U``."""
+
+BASIS_TANH_STEEPNESS_KAPPA: Final = 2.0
+"""Dimensionless automatic tanh steepness: ``alpha = kappa / s`` with ``s``
+the robust fitting scale, i.e. a transition width of about ``s / kappa``."""
+
+BASIS_SOFT_POWER_ETA: Final = 1.0
+"""Dimensionless automatic soft-power smoothing: ``delta = (eta * s)**2``."""
+
+# ---------------------------------------------------------------------------
+# G3 curvature separation (Stage 2, G3-026/G3-029)
+# ---------------------------------------------------------------------------
+
+CURVATURE_CUT_RHO: Final = 1e-3
+"""Dimensionless cut threshold: minima of ``q''`` below ``rho / h**2`` are cut
+(the constraint stays ``q'' >= 0``); benchmarked in Stage 4."""
+
+CURVATURE_INITIAL_CELLS: Final = 64
+"""Asinh-spaced initial cells of the compact curvature search."""
+
+CURVATURE_MAX_CELLS: Final = 4096
+"""Cell budget per curvature search; leftover cells make it inconclusive."""
+
+CURVATURE_MIN_WIDTH: Final = 1e-10
+"""Smallest search cell width, in units of the fitting scale ``h``."""
+
+CURVATURE_NEWTON_TOL: Final = 1e-12
+"""Minimum-refinement bracket width, in units of ``h``."""
+
+CURVATURE_NEWTON_MAX: Final = 60
+"""Maximum minimum-refinement iterations."""
+
+CURVATURE_ZETA_CAP: Final = 1e6
+"""Largest tail cutoff tried, in units of ``h``."""
+
+CURVATURE_FALLBACK_ZETA: Final = 12.0
+"""Half-width (units of ``h``) of the finite search toward an unproven tail."""
+
+CURVATURE_MAX_CUTS: Final = 16
+"""Most finite cuts returned per search (lowest minima first)."""
+
+CURVATURE_FEASIBILITY_TOL: Final = 1e-12
+"""Shape-verdict tolerance, G1's certificate value (``_certify``): ``q''``
+counts as nonnegative when ``q''_zz >= -1e-12`` in the fitting coordinate,
+i.e. ``q''_xx >= -1e-12 / h**2`` (G3-033).  It does not move the cut
+threshold or the constraint ``q'' >= 0``."""
+
+# ---------------------------------------------------------------------------
+# G3 normalizer and moments (Stage 3, G3-030)
+# ---------------------------------------------------------------------------
+
+NORMALIZER_REL_TOL: Final = 1e-12
+"""Target relative error of ``Z`` and of the model moments."""
+
+NORMALIZER_INITIAL_CELLS: Final = 32
+"""Asinh-spaced initial quadrature cells."""
+
+NORMALIZER_MAX_CELLS: Final = 4096
+"""Cell budget of one normalizer evaluation; exceeding it fails loudly."""
+
+NORMALIZER_MAX_LEVEL: Final = 8
+"""Finest tanh-sinh level (step ``2**-level``) of a cell ending at an endpoint
+log before it is split (other cells take Gauss--Kronrod 10/21)."""
+
+NORMALIZER_VARIATION: Final = 4.0
+"""Largest enclosed variation of ``q`` over an integrated cell."""
+
+NORMALIZER_DROP_TOL: Final = 1e-16
+"""Total relative mass that cells dropped by their enclosure bound may carry."""

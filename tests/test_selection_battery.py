@@ -22,7 +22,6 @@ from gibbus import Distribution
 from gibbus._defaults import AUTO_LC_MIN_COMPONENT_N
 from gibbus._fit.mixture import (
     _count_modes_kde,
-    _init_responsibilities,
     _valley_init_responsibilities,
 )
 
@@ -141,7 +140,6 @@ class TestHeavyTailRobustness:
             n_components=k,
             support=(0.0, np.inf),
             poly_degree=6,
-            progressive=False,
             rng=0,
         )
         assert c.n_components == k
@@ -159,7 +157,6 @@ class TestHeavyTailRobustness:
                 n_components=k,
                 support=(0.0, np.inf),
                 poly_degree=6,
-                progressive=False,
                 rng=0,
             )
             lls.append(float(np.mean(np.log(np.clip(c.pdf(data), 1e-300, None)))))
@@ -178,7 +175,6 @@ class TestHeavyTailRobustness:
             n_components=2,
             support=(0.0, np.inf),
             poly_degree=6,
-            progressive=False,
             rng=0,
             verbose=1,
         )
@@ -187,7 +183,7 @@ class TestHeavyTailRobustness:
         assert diagnostics["converged"]
         assert diagnostics["em"]["converged"]
         assert all(
-            record["separator_certified"] for record in diagnostics["components"]
+            record["shape"] == "nonnegative" for record in diagnostics["components"]
         )
 
 
@@ -317,14 +313,6 @@ class TestValleyInitialization:
         data = _mixture(np.random.default_rng(0), [(0, 0.5, 0.5), (0, 3.0, 0.5)])
         resp, _ = _valley_init_responsibilities(data, 2)
         assert resp is None
-
-    def test_falls_back_rather_than_failing(self):
-        """The wrapper must still return usable responsibilities there."""
-
-        data = _mixture(np.random.default_rng(0), [(0, 0.5, 0.5), (0, 3.0, 0.5)])
-        resp, _mix = _init_responsibilities(data, 2, np.random.default_rng(0))
-        assert resp is not None and resp.shape[1] == 2
-        assert np.allclose(resp.sum(axis=1), 1.0)
 
     def test_is_deterministic(self):
 

@@ -1,8 +1,8 @@
 """Fixed numerical coordinates used by the fitting pipeline.
 
-The model works on a full line, a lower half-line, or a bounded interval
-(an upper half-line is reflected), but the finite canonical endpoints need
-not be fixed at ``0`` or ``+-1``.  This module chooses one data-centered
+G1 owner retained (G3-031); G1's reflection of an upper half-line is gone:
+the G3 basis is side-aware and works in the user orientation.  The finite
+canonical endpoints need not be fixed at ``0`` or ``+-1``.  This module chooses one data-centered
 affine coordinate for every support type.  The transform is numerical
 preconditioning, not an optimizer parameter.
 
@@ -11,8 +11,8 @@ weights are relevant.  The scale uses a Gaussian-consistent weighted MAD
 about that origin, with overflow-safe weighted RMS fallback and a weighted
 interval-width floor.  On bounded supports an additional support-span floor
 prevents the two finite endpoints from being separated by an extreme number
-of canonical units; this protects polynomial cone and moment calculations
-without changing the affine model family.  Finite physical endpoints are then
+of canonical units; this protects the conditioning of the basis columns and
+moments without changing the affine model family.  Finite physical endpoints are then
 mapped into this coordinate and carried by the model specification.
 """
 
@@ -27,10 +27,10 @@ _LOWER_HALF_LINE = "lower_half_line"
 _UPPER_HALF_LINE = "upper_half_line"
 _BOUNDED = "bounded"
 
-# Bounded polynomial fits use raw canonical power moments internally.  Once
-# the finite support spans vastly more than this many fitting units, those
-# powers measure the arbitrary affine coordinate more than the model geometry
-# and can overflow in otherwise estimable endpoint-concentrated problems.
+# Basis monomials are powers of the fitting coordinate.  Once the finite
+# support spans vastly more than this many fitting units, those powers
+# measure the arbitrary affine coordinate more than the model geometry and
+# can overflow in otherwise estimable endpoint-concentrated problems.
 # Applying a scale floor is an invertible affine reparameterization: it changes
 # conditioning, not the represented density family.
 _BOUNDED_CANONICAL_SPAN_MAX = 1.0e6
@@ -104,13 +104,10 @@ class _FitCoordinate:
 
     The forward map is
 
-    ``z = direction * (x - center) / scale``
+    ``z = (x - center) / scale``
 
-    with ``scale > 0`` and ``direction`` equal to ``+1`` or ``-1``.  The
-    negative orientation is used only for an upper half-line so that, after
-    reflection, every one-sided support is represented as ``[A, +inf)``.
-    The finite endpoint ``A`` is generally data-dependent rather than fixed
-    at zero.
+    with ``scale > 0``.  Finite canonical endpoints are generally
+    data-dependent rather than fixed at zero.
 
     Parameters
     ----------
@@ -120,8 +117,6 @@ class _FitCoordinate:
         Coordinate origin in user units.
     scale : float
         Positive fixed numerical scale in user units.
-    direction : float
-        ``+1.0`` for the usual orientation or ``-1.0`` for reflection.
     canonical_support : tuple of (float, float)
         Support after transformation.  Finite endpoints are data-dependent
         under the robust affine coordinate.
@@ -134,7 +129,6 @@ class _FitCoordinate:
     support_kind: str
     center: float
     scale: float
-    direction: float
     canonical_support: tuple[float, float]
     physical_support: tuple[float, float]
 
@@ -151,7 +145,7 @@ class _FitCoordinate:
         numpy.ndarray
             Values in the canonical fitting coordinate.
         """
-        return self.direction * _safe_scaled_difference(values, self.center, self.scale)
+        return _safe_scaled_difference(values, self.center, self.scale)
 
     def from_canonical(self, values, /):
         """Map values from the fixed fitting coordinate back to user units.
@@ -167,7 +161,7 @@ class _FitCoordinate:
             Values in user coordinates.
         """
         z = np.asarray(values, dtype=np.float64)
-        return self.center + self.direction * self.scale * z
+        return self.center + self.scale * z
 
     def intervals_to_canonical(self, intervals, /):
         """Map ordered user-coordinate intervals and preserve endpoint order.
@@ -182,10 +176,7 @@ class _FitCoordinate:
         numpy.ndarray, shape (R, 2)
             Ordered lower/upper endpoints in canonical coordinates.
         """
-        z = self.to_canonical(intervals)
-        if self.direction < 0.0:
-            z = z[:, ::-1]
-        return np.ascontiguousarray(z, dtype=np.float64)
+        return np.ascontiguousarray(self.to_canonical(intervals), dtype=np.float64)
 
 
 def _weighted_median(values, weights, /, *, order=None):
@@ -390,17 +381,14 @@ def _build_fit_coordinate(
         if np.isfinite(support_scale) and support_scale > scale:
             scale = support_scale
 
-    direction = -1.0 if kind == _UPPER_HALF_LINE else 1.0
-    mapped_support = direction * _safe_scaled_difference(
-        np.asarray([lower, upper]), center, scale
+    canonical_support = tuple(
+        map(float, _safe_scaled_difference(np.asarray([lower, upper]), center, scale))
     )
-    canonical_support = tuple(np.sort(mapped_support))
 
     return _FitCoordinate(
         support_kind=kind,
         center=float(center),
         scale=float(scale),
-        direction=float(direction),
         canonical_support=canonical_support,
         physical_support=(float(lower), float(upper)),
     )
@@ -489,7 +477,12 @@ def _build_interval_fit_coordinate(support, intervals, weights=None, /):
     widths = np.asarray(width_floor, dtype=np.float64)
     scale_error = None
     try:
-        return _build_fit_coordinate(support, landmarks, landmark_weights, widths)
+        return _build_fit_coordinate(
+            support,
+            landmarks,
+            landmark_weights,
+            widths,
+        )
     except _RobustScaleZero as exc:
         scale_error = exc
 
@@ -522,16 +515,13 @@ def _build_interval_fit_coordinate(support, intervals, weights=None, /):
             "cannot construct a positive censored-data fitting scale"
         ) from scale_error
 
-    direction = -1.0 if kind == _UPPER_HALF_LINE else 1.0
-    mapped_support = direction * _safe_scaled_difference(
-        np.asarray([lower, upper]), center, scale
+    canonical_support = tuple(
+        map(float, _safe_scaled_difference(np.asarray([lower, upper]), center, scale))
     )
-    canonical_support = tuple(np.sort(mapped_support))
     return _FitCoordinate(
         support_kind=kind,
         center=float(center),
         scale=float(scale),
-        direction=float(direction),
         canonical_support=canonical_support,
         physical_support=(float(lower), float(upper)),
     )

@@ -49,7 +49,6 @@ def test_bounded_coordinate_is_data_centered_and_maps_support_affinely():
     assert coord.support_kind == _BOUNDED
     assert coord.center == pytest.approx(0.0)
     assert coord.scale == pytest.approx(2.0 * MAD_TO_SIGMA)
-    assert coord.direction == 1.0
     expected = (-3.0 / coord.scale, 5.0 / coord.scale)
     assert coord.canonical_support == pytest.approx(expected)
     assert np.allclose(
@@ -90,7 +89,6 @@ def test_real_line_uses_weighted_median_and_weighted_mad():
     assert coord.support_kind == _REAL_LINE
     assert coord.center == pytest.approx(1.0)
     assert coord.scale == pytest.approx(1.0 * MAD_TO_SIGMA)
-    assert coord.direction == 1.0
     assert coord.canonical_support == (-np.inf, np.inf)
 
 
@@ -115,7 +113,6 @@ def test_lower_half_line_is_data_centered_with_mapped_endpoint():
     assert coord.support_kind == _LOWER_HALF_LINE
     assert coord.center == pytest.approx(4.0)
     assert coord.scale == pytest.approx(2.0 * MAD_TO_SIGMA)
-    assert coord.direction == 1.0
     assert coord.canonical_support == pytest.approx((-2.0 / coord.scale, np.inf))
     assert np.allclose(
         coord.to_canonical(samples), (samples - coord.center) / coord.scale
@@ -137,15 +134,14 @@ def test_half_line_interval_width_supplies_scale_floor():
     assert coord.scale == pytest.approx(2.0 * UNIFORM_WIDTH_TO_SIGMA)
 
 
-def test_upper_half_line_reflects_about_data_center():
+def test_upper_half_line_keeps_the_user_orientation():
     samples = np.asarray([8.0, 6.0, 2.0])
     coord = _build_fit_coordinate((-np.inf, 8.0), samples, None, None)
     assert coord.support_kind == _UPPER_HALF_LINE
     assert coord.center == pytest.approx(6.0)
     assert coord.scale == pytest.approx(2.0 * MAD_TO_SIGMA)
-    assert coord.direction == -1.0
-    assert coord.canonical_support == pytest.approx((-2.0 / coord.scale, np.inf))
-    expected = -(samples - coord.center) / coord.scale
+    assert coord.canonical_support == pytest.approx((-np.inf, 2.0 / coord.scale))
+    expected = (samples - coord.center) / coord.scale
     assert np.allclose(coord.to_canonical(samples), expected)
 
 
@@ -153,9 +149,7 @@ def test_upper_half_line_interval_mapping_preserves_endpoint_order():
     coord = _build_fit_coordinate((-np.inf, 10.0), np.asarray([7.0, 8.0]), None, None)
     intervals = np.asarray([[6.0, 8.0], [8.0, 9.0]])
     got = coord.intervals_to_canonical(intervals)
-    direct = coord.to_canonical(intervals)
-    expected = direct[:, ::-1]
-    assert np.array_equal(got, expected)
+    assert np.array_equal(got, coord.to_canonical(intervals))
     assert np.all(got[:, 0] <= got[:, 1])
 
 

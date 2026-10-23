@@ -13,21 +13,22 @@ All parameters except `samples` are keyword-only. Returns `self` for method chai
 |-----------|------|---------|-------------|
 | `samples` | array_like | *(required)* | Observations. Shape `(R,)` or `(R,1)` for point samples; `(R,2)` for interval-censored samples. Point samples must be finite. Interval endpoints may be `-np.inf` or `np.inf` for one-sided censoring, but may not be NaN; an infinite zero-width row is invalid. Reversed rows (`lo > hi`) are swapped silently, and a finite zero-width row is treated as a point. |
 | `n_components` | `int` or `'auto'` | `1` | Number of mixture components. The default `1` fits a single unimodal density; `> 1` fits an EM mixture with exactly that many components. Opt-in `'auto'` uses KDE proposals, short shared-boundary screening fits, and policy-aware refinement of competitive candidates before choosing *K* by BIC. Ignored when `init_from` is given (inherited from seed). |
-| `poly_degree` | `int`, `'auto'`, or `None` | `None` | Requested degree of the polynomial potential. Must be ≥ 2. On full-infinite support `(-np.inf, np.inf)`, an explicit odd degree is rejected because it is structurally inadmissible; use an even degree. `'auto'` considers only admissible even degrees on full-infinite support. Odd degrees remain available on one-sided or bounded support. `None` means `'auto'` without a seed, or inheritance from a seed. Automatic mixtures grow component degrees using omitted-information diagnostics of the jointly fitted model, including shared boundary parameters and mixture-weight nuisance directions. Different components can retain different degrees. |
+| `poly_degree` | `int`, `'auto'`, or `None` | `None` | Bulk degree of the potential: the highest monomial power of the fitting coordinate. Must be ≥ 2. On full-infinite support `(-np.inf, np.inf)`, an explicit odd degree is rejected because it is structurally inadmissible; use an even degree. `'auto'` considers only admissible degrees and climbs them by an omitted-statistic score test. `None` means `'auto'` without a seed, or inheritance from a seed. Automatic mixtures grow component degrees using omitted-information diagnostics of the jointly fitted model, including shared boundary parameters and mixture-weight nuisance directions. Different components can retain different degrees. An explicit degree that does not converge raises `RuntimeError` (see [Failures](#failures)). |
 | `support` | `(float, float)` or `None` | `None` | Domain of the density, e.g. `(-np.inf, np.inf)`, `(0, np.inf)`, `(0, 1)`. `None` means the unconstrained real line `(-np.inf, np.inf)`; structural boundaries such as zero must be supplied explicitly. Ignored when `init_from` is given (inherited from seed). |
 | `log_boundary_lower` | `bool` or `None` | `None` | Allow the direct zero-offset lower-endpoint log term `-aL log(x - L)`, with `aL >= 0` (it may optimize to zero). Both its presence and its amplitude are shared across mixture components. `None` lets the data decide on a finite lower endpoint: the term is kept only when a calibrated one-sided likelihood-ratio comparison against the fit without it has `p < 0.05`, and never when a positive-weight observation sits exactly at the endpoint. `None` means no term on an infinite endpoint and inherits the seed setting with `init_from`. |
 | `log_boundary_upper` | `bool` or `None` | `None` | The same for the upper endpoint, `-aU log(U - x)`. |
 | `verbose` | `int` | `0` | Verbosity level for fitting and automatic selection diagnostics. |
 | `suppress_warnings` | `bool` | `False` | Suppress selected numerical warnings. Warning filters are process-global on supported Python versions, so leave this `False` for concurrent fitting. |
-| `init_from` | `Distribution` or `None` | `None` | Warm-start seed from a previously fitted `Distribution`. When given, `n_components` and `support` are inherited from the seed and cannot be overridden for that fit. Boundary flags inherit when left as `None` but may be explicitly overridden. Polynomial degree may be inherited or overridden globally/per component as documented below. Per-component seeds are threaded automatically in seed-component order. |
-| `sample_weight` | array_like or `None` | `None` | Non-negative **relative** observation weights, normalized to sum to 1. A row weighted 6 contributes twice what a row weighted 3 does; the absolute scale carries no meaning, so `[1,1,1]` and `[100,100,100]` are identical. Weights are *not* frequencies: they do not stand for repeated observations, and the model-selection sample size is the number of **rows** regardless of the weights. **Aggregated or binned data is therefore not supported through this argument** — 700 rows representing 1431 observations will be penalized as 700, biasing selection toward under-fitting. Expand such data to one row per observation instead. |
+| `init_from` | `Distribution` or `None` | `None` | Warm-start seed from a previously fitted `Distribution`. When given, `n_components` and `support` are inherited from the seed and cannot be overridden for that fit. Boundary flags inherit when left as `None` but may be explicitly overridden. The bulk degree may be inherited or overridden globally/per component as documented below. Per-component seeds are threaded automatically in seed-component order. |
+| `sample_weight` | array_like or `None` | `None` | Non-negative **relative** observation weights, normalized to sum to 1. A row weighted 6 contributes twice what a row weighted 3 does; the absolute scale carries no meaning, so `[1,1,1]` and `[100,100,100]` are identical. Weights are *not* frequencies: they do not stand for repeated observations, and selection and inference use the **Kish effective sample size**, `n_eff = 1 / sum(w**2)` for weights normalized to sum to one. Equal weights give the number of rows; concentrated weights reduce the effective size. **Aggregated or binned data is therefore not supported through this argument** — 700 weighted rows representing 1431 observations are not treated as 1431 independent observations; they are scored using their Kish effective size. Expand such data to one row per observation instead. |
 | `component_options` | `list[dict]` or `None` | `None` | Per-component keyword arguments for mixture fitting (length must equal effective `n_components`). Currently only `poly_degree` is allowed per-component; `support`, `sample_weight`, `init_from`, `log_boundary_*` are forbidden (they are global). Must be `None` when `n_components='auto'` and no seed is given. |
 | `em_max_iter` | `int` or `None` | `None` (default: 50) | Maximum EM iterations. |
 | `em_tol` | `float` or `None` | `None` (default: 1e-4) | EM relative log-likelihood convergence tolerance. |
 | `rng` | `None`, `int`, `Generator`, or `RandomState` | `None` | Random-number source for stratified subsampling and the fallback GMM initializer. For fitting, `None` uses deterministic seed 0; pass an explicit source to choose another stream. Sampling has separate semantics: `sample(..., rng=None)` uses NumPy entropy. |
 | `k_max` | `int` or `None` | `None` (default: 10) | Maximum number of components to consider when `n_components='auto'`. Ignored when `n_components` is an explicit integer. |
-| `progressive` | `bool` | `True` | For mixture fits with an explicit integer `poly_degree > 2`, climb through admissible degrees up to the target and warm-start each rung. Has no effect on single-component fits or when `poly_degree='auto'`. |
 | `auto_k_subsample` | `'auto'`, `int`, or `False` | `'auto'` | Size of the subsample used to *select* the component count when `n_components='auto'`. `'auto'` subsamples only above 20,000 samples; an integer sets the size directly; `False` scores every candidate on the full dataset. Subsampling can change which *K* wins; after selection, the winning *K* is refitted on all observations. Ignored when `n_components` is an explicit integer. |
+| `basis` | `BasisSpec` or `None` | `None` | Full potential-basis request: support, bulk degree, endpoint logs, tail classes and span expansion (see [Basis requests](#basis-requests)). It replaces `poly_degree`, `support` and `log_boundary_*`, which must then be left at `None`; `component_options` may still set per-component degrees. With `init_from` it replaces the seed's basis family (its support must equal the seed's). |
+| `max_fit_seconds` | positive `float` or `None` | `None` | Cooperative wall-time budget shared by selection, degree growth, component fits and retries. Exhaustion raises `FitTimeoutError` and preserves any previously fitted state. A running native operation finishes before the next check; the elapsed time may exceed the budget. |
 
 ---
 
@@ -38,6 +39,126 @@ The default `n_components=1` fits one log-concave component. Passing an explicit
 This procedure is intentionally pragmatic rather than exhaustive or globally certified. On large inputs, selection may use a stratified subsample controlled by `auto_k_subsample`; the selected component count is then refit on all observations. Use `selection_diagnostics` to retain the proposal, candidate scores, subsample information, and selected count when the decision is scientifically material.
 
 For interval-censored observations, candidate models are scored using the actual interval probability masses rather than midpoint-density surrogates.
+
+Mixture screens use a certified Newton target of `1e-6` nats per observation,
+without changing the curvature-feasibility threshold. Admitted candidates use
+the final optimizer's requested tolerances. `selection_diagnostics` reports the
+screen target as `screen_newton_tolerance`. Screening scores are heuristic and
+are not certified bounds on the corresponding fully refined BIC.
+
+## Runtime and model complexity
+
+Use automatic degree unless a fixed degree is justified by the application.
+Increasing degree can add expensive curvature constraints and retries, and can
+worsen predictions outside the observed range even when optimization converges.
+A convergence certificate describes the fitted objective, not predictive quality.
+Check independent log-density scores and relevant tail behavior when comparing
+complexity; a close central CDF alone can conceal poor tail predictions.
+
+The default `n_components=1` is appropriate for a single log-concave component.
+Supply a known component count when that information is available; otherwise use
+`n_components="auto"` when mixture selection is needed. Automatic count selection
+has additional screening and refinement cost.
+
+A positive `max_fit_seconds` shares one budget across the entire fitting search:
+
+```python
+from gibbus import Distribution, FitTimeoutError
+
+model = Distribution()
+try:
+    model.fit(data, n_components="auto", max_fit_seconds=3.0)
+except FitTimeoutError as exc:
+    print(f"Fitting stopped after {exc.elapsed_seconds:.3f} seconds")
+```
+
+`FitTimeoutError` is a `TimeoutError`, separate from numerical-fit `RuntimeError`
+failures. It escapes candidate-failure recovery: an exhausted request does not
+start a fresh retry with a reset clock. An existing fitted `model` retains its
+previous state, and an unfitted model remains unfitted. Subsequent calls have
+independent budgets. With the default `None`, no time limit is imposed.
+
+The budget is checked between solver runs and fitting stages. Native numerical
+operations are not interrupted, so it is not a hard process deadline and does
+not guarantee convergence within the requested number of seconds. No partial
+candidate is installed or reported as a completed fit on timeout.
+
+## Basis requests
+
+Without `basis`, a fit uses the minimal basis of its arguments: bulk monomials of the fitting coordinate up to `poly_degree` and the selected endpoint logarithms. `basis=BasisSpec(...)` requests the general potential family:
+
+```python
+from gibbus import BasisSpec, Distribution, Exponential
+
+spec = BasisSpec(
+    support=(0.0, np.inf),
+    bulk_degree="auto",
+    log_lower="auto",
+    upper_tail=Exponential(rate=1.0),
+)
+c = Distribution().fit(data, basis=spec)
+```
+
+| Field | Meaning |
+|---|---|
+| `support` | `(L, U)`, `L < U`; either end may be infinite. |
+| `bulk_degree` | Highest bulk monomial degree, or `"auto"` (degree ladder). |
+| `log_lower`, `log_upper` | `-log(x - L)` / `-log(U - x)` terms; `True` requires the finite endpoint; `"auto"` decides by the one-sided likelihood-ratio test. |
+| `lower_tail`, `upper_tail` | Leading tail class at an infinite end: `Polynomial(power)`, `SoftPower(power, delta)` (noninteger power; an integer power becomes `Polynomial` with a `GibbusBasisWarning`) or `Exponential(rate)`; `None` keeps the bulk behavior. |
+| `independent_equal_rate_coefficients` | Independent leading amplitudes for equal-rate tails instead of one shared amplitude. |
+| `expansion` | `"auto"` (default) starts from the minimal span and adds slots of the full span only when a score test resolves them; `"minimal"` and `"full"` fix the span. |
+| `tanh` | `TanhSpec` geometry of the tanh gates that confine tail terms to their side. |
+
+`BasisSpec()` defaults to `bulk_degree=2`, no endpoint logs, no explicit tail
+families, and `expansion="auto"`. In contrast, fitting without `basis` defaults
+to automatic degree and finite-endpoint log selection with a minimal expansion.
+Per-component `poly_degree` values override the corresponding basis degree;
+unspecified components retain `BasisSpec.bulk_degree`. General-basis properness
+is checked for each requested component.
+
+Omitting a selected family's parameter (`Polynomial()`, `SoftPower()`,
+`Exponential()`) requests empirical within-family estimation. See
+[Automatic tail parameters](AUTOMATIC_TAIL_PARAMETERS.md) for sample-size,
+weighting, censoring and persistence limits. Explicit parameters stay fixed.
+
+The basis is defined in a fixed robust fitting coordinate `z = (x - c) / h` (per component in mixtures). Every fit is constrained to a convex potential (`q'' >= 0`) and to proper outward growth at infinite ends. `BasisSpec` is provisional and may change.
+
+### Tail-family selection versus other automatic choices
+
+`BasisSpec.lower_tail` and `BasisSpec.upper_tail` accept an explicitly chosen
+`Polynomial`, `SoftPower`, or `Exponential` instance (or `None`, retaining
+bulk-determined behavior). G3 **does not automatically compare these three
+tail families** or choose a different tail class from the one requested.
+Automatic degree selection, optional endpoint-log tests, and automatic basis
+expansion are separate mechanisms. An explicitly constrained tail model may
+extrapolate poorly on incompatible data without indicating a solver error;
+Gibbus should not silently replace the user's specification. See
+[Model-selection research plan](model-selection-research.md).
+
+### Automatic tanh transition geometry
+
+Full-line, **single-component fits to unweighted point observations** use a
+sample-size-adjusted skew-aware geometry by default. The lower/upper gates
+are still fixed *before* convex coefficient optimization. There is no mode
+switch: specify explicit `TanhSpec` locations and/or steepnesses to override
+individual automatically chosen values. The full formula is in
+[Transition geometry](transition-geometry.md).
+
+For samples of at most 150 observations, full-line automatic gates retain the
+original 10th/90th percentile locations and shared `2/h` steepness. Between
+150 and 700 observations the skew adjustment is gradually introduced; from
+700 onward it applies in full. It is suppressed when the quantile spacing
+is unresolved or approximately symmetric. **Mixture components, weighted
+points, interval-censored observations, and half-line fits** retain their
+previous defaults; bounded support has no tanh gates.
+
+Because the automatic geometry is data dependent, a newly fitted model may
+differ from one fitted by an older release with the same observations. Saved
+fitted models preserve their already resolved gate geometry.
+
+## Failures
+
+Gibbus does not return a fit it could not compute. An explicit request whose fit does not converge raises `RuntimeError`: an explicit `poly_degree` (Gibbus first retries it from the nested next-smaller admissible degree), an explicit `n_components`, or `expansion="full"`. Automatic searches (`poly_degree="auto"`, automatic expansion, mixture degree growth, `n_components="auto"`) stop at the last size that converged and record why: for mixtures in `em_diagnostics["selection"][i]["failure"]`; the single-component degree ladder records it in its internal selection history, which is not yet public (see [Limitations](limitations.md)). A fit whose convexity check is inconclusive reports the status `uncertified` instead of raising.
 
 ## Input Formats
 
@@ -107,7 +228,7 @@ point-density collapse mechanism does not apply.
 
 ## Warm-Starting from a Previous Fit
 
-Use `init_from` to initialize a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the component count and support are inherited from the seed. Boundary flags inherit when left as `None` but can be explicitly overridden. Polynomial degree can also be overridden globally or per component. Other compatible per-component seed structure is carried forward automatically:
+Use `init_from` to initialize a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the component count, support and basis family (tail classes, span policy, tanh geometry, mapped through any presentation transform) are inherited from the seed; `basis=` replaces the family. Boundary flags inherit when left as `None` but can be explicitly overridden. The bulk degree can also be overridden globally or per component. Other compatible per-component seed structure is carried forward automatically:
 
 ```python
 # Single-component warm start

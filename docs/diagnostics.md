@@ -99,11 +99,19 @@ Two things to be careful about:
   `level` in isolation. A band covering the whole curve at once is wider, and
   these must not be reported as one. The returned `coverage_kind` field states
   this so the distinction survives being copied into a figure caption.
-- **By default the refit holds the component count and support fixed**, so the
-  bands describe uncertainty *conditional* on the selected structure. If `K` was
-  chosen automatically and that choice is itself uncertain, pass
-  `fit_kwargs={"n_components": "auto"}` to let each replicate reselect. The
-  bands widen, and the run costs proportionally more.
+- **The default refit conditions on the selected component count, degrees,
+  endpoint-log choices and resolved tail families/parameters.** Automatic
+  geometry and automatic span expansion are recomputed within that family.
+  Original automatic degree, endpoint-log and empirical tail-parameter searches
+  are not replayed by default. Supply a new `fit_kwargs={"basis": BasisSpec(...)}`
+  or structural overrides to select a different policy. A basis override replaces
+  inherited structure without injecting a conflicting `support` keyword.
+  `fit_kwargs={"n_components": "auto"}` reselects the component count.
+  Nonparametric bootstrap weights supplied in `fit_kwargs` must match the
+  original rows; each replicate resamples weights with their observations.
+  Monte Carlo simulation/refitting uses base coordinates even for an active
+  exp view, preserving the probability-integral-transform statistic.
+
 
 Cost is one full refit per replicate, so this is minutes-to-hours work rather
 than a property read. Replicates that fail — a resample can omit enough of a
@@ -112,7 +120,7 @@ mode's support that its component degenerates — are counted and reported; past
 reporting a band built from a biased remnant.
 ## Fit and Selection Diagnostics
 
-`Distribution.fit_diagnostics` distinguishes component geometry/feasibility from joint mixture convergence. Shared boundary amplitudes, standard errors, automatic-selection p-values, and weak-identification flags are reported once in the model-level `shared_boundary` record. Their errors use joint observed information, accounting for private component parameters and mixture weights, rather than independent component fits. A zero-face amplitude has no ordinary interior standard error; an unresolved positive direction has infinite uncertainty. `converged_approximately` remains distinct from `converged`, with its certified remaining-decrease bound reported. Treat `converged=False` as a reason to inspect the diagnostics before using the fit quantitatively.
+`Distribution.fit_diagnostics` distinguishes component geometry/feasibility from joint mixture convergence. Shared boundary amplitudes, standard errors, automatic-selection p-values, and weak-identification flags are reported once in the model-level `shared_boundary` record. Their errors use joint observed information, accounting for private component parameters and mixture weights, rather than independent component fits. A zero-face amplitude has no ordinary interior standard error; an unresolved positive direction has infinite uncertainty. `converged_approximately` remains distinct from `converged`, with its certified remaining-decrease bound reported. An `uncertified` return emits a `RuntimeWarning` unless warning suppression was requested; its shape verdict remains visible in diagnostics. Treat `converged=False` as a reason to inspect the diagnostics before using the fit quantitatively.
 
 ```python
 d = c.fit_diagnostics
@@ -128,7 +136,7 @@ if s is not None:
     print(s["selected_n_components"], s["scores"])
 ```
 
-Serialization format v1 may retain per-component optimizer termination records in its optional `provenance` section. Session-level EM and automatic-selection traces are not part of the durable state, so reconstructing with `Distribution(c.data)` or loading a saved `.npy` state does not restore those session records. If optional provenance is absent or unusable, historical optimizer fields and the active-face parameter count in `fit_diagnostics` are reported as unavailable, while the model-level provenance is derived from the reconstructed distribution rather than invented. `copy.copy`, `copy.deepcopy`, `Distribution.copy()`, and Python pickle preserve the in-process session records. Persist them separately when they are part of the analysis record. See [Serialization and compatibility](serialization.md).
+The serialization format may retain per-component optimizer termination records in its optional `provenance` section. Session-level EM and automatic-selection traces are not part of the durable state, so reconstructing with `Distribution(c.data)` or loading a saved `.npy` state does not restore those session records. If optional provenance is absent or unusable, historical optimizer fields and the active-face parameter count in `fit_diagnostics` are reported as unavailable, while the model-level provenance is derived from the reconstructed distribution rather than invented. `copy.copy`, `copy.deepcopy`, `Distribution.copy()`, and Python pickle preserve the in-process session records. Persist them separately when they are part of the analysis record. See [Serialization](serialization.md).
 
 ---
 ## Diagnostics — `Distribution.spectral_diagnostics`
@@ -146,7 +154,7 @@ A property (not a method) returning a `dict` that describes how well the CDF/PPF
 | `n_panels` | `int` | Panels in the final representation. |
 | `n_masses_recertified` | `int` or `None` | Panel masses re-verified after construction; `None` when the step does not apply. |
 | `ppf_fallback` | `bool` | Whether the stored spectral inverse fell back to CDF bisection rather than certified inverse panels. Extreme public tail queries may subsequently use direct potential-based tail inversion. |
-| `log_concavity_margin` | `float` | Certified lower bound on base-space convexity of the potential, minimized over components. Non-negative means every component's polynomial is certified convex. The mixture density itself need not be log-concave even when each component is. |
+| `log_concavity_margin` | `float` | Quantile-grid minimum of base-space potential curvature, minimized over components. The smallest `V''` over a quantile grid of each component, with a finite support end approached geometrically in `x` (numerical evidence, not a proof); non-negative means no grid point found negative curvature. The mixture density itself need not be log-concave even when each component is. |
 
 ```python
 d = c.spectral_diagnostics

@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gibbus"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Flexible maximum-likelihood modeling of smooth univariate log-concave distributions"
 readme = "README.md"
 license = "MIT"
@@ -56,11 +56,9 @@ dependencies = [
 Homepage = "https://github.com/DanJSal/gibbus"
 Repository = "https://github.com/DanJSal/gibbus"
 Issues = "https://github.com/DanJSal/gibbus/issues"
-Documentation = "https://github.com/DanJSal/gibbus/blob/main/docs/README.md"
-Changelog = "https://github.com/DanJSal/gibbus/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-test = ["pytest>=7.0", "pytest-cov"]
+test = ["mpmath>=1.3", "pytest>=7.0", "pytest-cov", "pytest-xdist>=3.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -71,7 +69,7 @@ include = ["gibbus*"]
 
 [tool.setuptools.package-data]
 "gibbus" = ["py.typed"]
-"*" = ["*.pyx"]
+"*" = ["*.pyx", "*.pxd", "*.hpp"]
 
 [tool.cibuildwheel]
 # Release wheels cover the package's declared CPython support range.
@@ -87,9 +85,20 @@ test-requires = ["pytest>=7.0"]
 test-sources = ["tests"]
 test-command = [
     "python tests/wheel_smoke.py",
-    "python -m pytest -q tests/test_api.py tests/test_serialization_v1.py tests/test_fitted_state.py tests/test_model_ownership.py",
+    "python -m pytest -q tests/test_api.py tests/test_serialization.py tests/test_fitted_state.py tests/test_model_ownership.py",
 ]
 
 [tool.cibuildwheel.linux]
 # Match the current binary compatibility floor of the SciPy dependency stack.
 manylinux-x86_64-image = "manylinux_2_28"
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

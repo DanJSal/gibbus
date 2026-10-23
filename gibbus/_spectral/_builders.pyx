@@ -12,8 +12,8 @@ evaluator arrays, and the monotone inverse in log-odds with its
 root-inversion validation.
 
 The density is described by data, not a Python callable: a weighted sum of
-fitted components, each the canonical kernel ``exp(-(q(z) - a_L log(z - L)
-- a_U log(U - z) + c))`` of :func:`gibbus._model._state_kernels._pdf_vec`
+fitted G3 components, each the canonical kernel ``exp(-(theta . Phi(x) + c))``
+of its compiled basis (``_basis_kernels.potential_point`` at ``x = c_f + h z``)
 at ``z = sigma x + mu``, times ``|sigma|`` and masked to the component's
 public support when it is a public-coordinate view.  One component with
 ``sigma = 1, mu = 0`` is the canonical state density used at packing time;
@@ -30,9 +30,10 @@ import numpy as np
 cimport numpy as cnp
 from libc.math cimport exp, log, log1p, fabs, hypot, isfinite, isnan, isinf, nextafter
 from libc.math cimport INFINITY, NAN
-from libc.stdlib cimport malloc, free
+from libc.stdlib cimport malloc, calloc, free
 from libc.string cimport memmove, memset
 
+from .._model._basis_kernels cimport BasisKernel, BasisTable, potential_point
 from ._certify cimport _chebyshev_lower_bound_c
 
 cnp.import_array()
@@ -43,50 +44,80 @@ cdef double _TINY = 2.2250738585072014e-308
 cdef double _PMIN = 5e-324
 cdef double _PMAX = 0.9999999999999999
 cdef int _MAXN = 72               # largest node/coefficient count handled
+cdef int _NPAR = 9                # scalar parameters per density component
 
 
 # ---------------------------------------------------------------------------
 # Density
 # ---------------------------------------------------------------------------
 
+cdef int _fitting_table(const BasisTable* physical, BasisTable* local,
+                        double** storage) noexcept nogil:
+    """Represent the basis in z=(x-c)/h without rounding back to physical x.
+
+    This mirrors the affine re-expression in the compiled normalizer.  Each
+    enabled endpoint log is shifted by -log(h) in the canonical basis; callers
+    must subtract its coefficient times log(h) from the density log normalizer.
+    """
+    cdef int j, nf = physical.nf
+    cdef double h = physical.h, c = physical.c
+    cdef double* a = <double*>malloc(3 * nf * sizeof(double))
+    if a == NULL:
+        return -1
+    storage[0] = a
+    local[0] = physical[0]
+    local.c = 0.0
+    local.h = 1.0
+    local.lower = (physical.lower - c) / h if isfinite(physical.lower) else physical.lower
+    local.upper = (physical.upper - c) / h if isfinite(physical.upper) else physical.upper
+    local.xl = (physical.xl - c) / h if physical.has_l else 0.0
+    local.xu = (physical.xu - c) / h if physical.has_u else 0.0
+    local.al = physical.al * h
+    local.au = physical.au * h
+    if physical.has_l and physical.has_u:
+        local.mid = 0.5 * local.xl + 0.5 * local.xu
+    elif physical.has_l:
+        local.mid = local.xl
+    elif physical.has_u:
+        local.mid = local.xu
+    else:
+        local.mid = INFINITY
+    for j in range(nf):
+        a[j] = physical.delta[j] / h / h
+        a[nf + j] = physical.rate[j] * h
+        a[2 * nf + j] = (physical.location[j] - c) / h
+    local.delta = a
+    local.rate = &a[nf]
+    local.location = &a[2 * nf]
+    return 0
+
 cdef struct Density:
     int K
     bint view                     # public-coordinate views: mask to [lo, hi]
-    const double* q               # concatenated normalized polynomials
-    const Py_ssize_t* qoff
-    const Py_ssize_t* nq
-    const double* par             # per component: Lz Uz aL aU log_norm mu sigma jf weight lo hi
+    const double* par             # per component: Lz Uz log_norm mu sigma jf w lo hi
+    # G3 basis components: the potential is ``theta . Phi(x)`` at
+    # ``x = c + h z`` and ``log_norm`` normalizes the canonical-coordinate
+    # density (G3-046).
+    const BasisTable** basis
+    const double** theta
+    double* fwork                 # scratch of the (single-threaded) evaluation
+    double* cwork
 
 
-cdef inline double _kernel(
-    const double* q, Py_ssize_t nq, double z, const double* p
+cdef inline double _basis_kernel(
+    const Density* d, int k, double z, const double* p
 ) noexcept nogil:
-    """``_pdf_vec`` at one point (``p``: Lz, Uz, aL, aU, log_norm)."""
-    cdef double Lz = p[0], Uz = p[1], aL = p[2], aU = p[3]
-    cdef bint finL = isfinite(Lz)
-    cdef bint finU = isfinite(Uz)
-    cdef double v, d, out
-    cdef Py_ssize_t k
+    """Canonical density of component ``k`` at ``z`` (``p``: its parameters)."""
+    cdef const BasisTable* t = d.basis[k]
+    cdef double q, v, out
     if isnan(z):
         return NAN
-    if finL and z < Lz:
+    if z <= p[0] or z >= p[1]:
+        # Open support: a finite endpoint carries zero density (an enabled
+        # log term is infinite there; the closure has measure zero).
         return 0.0
-    if finU and z > Uz:
-        return 0.0
-    v = q[nq - 1]
-    for k in range(nq - 2, -1, -1):
-        v = v * z + q[k]
-    if isfinite(aL) and aL > 0.0 and finL:
-        d = z - Lz
-        if d <= 0.0:
-            return 0.0
-        v = v - aL * log(d)
-    if isfinite(aU) and aU > 0.0 and finU:
-        d = Uz - z
-        if d <= 0.0:
-            return 0.0
-        v = v - aU * log(d)
-    v = v + p[4]
+    potential_point(t, d.theta[k], t.c + t.h * z, 0, d.fwork, d.cwork, &q)
+    v = q + p[2]
     out = 0.0
     if v < 700.0:
         out = exp(-v)
@@ -100,13 +131,13 @@ cdef inline double _density(const Density* d, double x) noexcept nogil:
     cdef const double* p
     cdef int k
     for k in range(d.K):
-        p = d.par + 11 * k
-        z = p[6] * x + p[5]
-        v = p[7] * _kernel(d.q + d.qoff[k], d.nq[k], z, p)
+        p = d.par + _NPAR * k
+        z = p[4] * x + p[3]
+        v = p[5] * _basis_kernel(d, k, z, p)
         if d.view:
-            if not (isfinite(x) and x >= p[9] and x <= p[10]):
+            if not (isfinite(x) and x >= p[7] and x <= p[8]):
                 v = NAN if isnan(x) else 0.0
-        total += p[8] * v
+        total += p[6] * v
     return total
 
 
@@ -1242,6 +1273,31 @@ cdef class DensitySpec:
 
     cdef object _keep
     cdef Density d
+    cdef const BasisTable** _tables
+    cdef const double** _thetas
+    cdef double* _work
+    cdef BasisTable* _local_tables
+    cdef double** _local_storage
+    cdef Py_ssize_t _nlocal
+
+    def __cinit__(self):
+        self._tables = NULL
+        self._thetas = NULL
+        self._work = NULL
+        self._local_tables = NULL
+        self._local_storage = NULL
+        self._nlocal = 0
+
+    def __dealloc__(self):
+        cdef Py_ssize_t i
+        if self._local_storage != NULL:
+            for i in range(self._nlocal):
+                free(self._local_storage[i])
+        free(self._local_storage)
+        free(self._local_tables)
+        free(self._tables)
+        free(self._thetas)
+        free(self._work)
 
     def __init__(self, components, bint view):
         """Pack components.
@@ -1249,45 +1305,82 @@ cdef class DensitySpec:
         Parameters
         ----------
         components : sequence of tuple
-            ``(q_poly, Lz, Uz, aL, aU, log_norm, mu, sigma, jf, weight, lo, hi)``
-            per component.
+            ``(kernel, theta, Lz, Uz, log_norm, mu, sigma, jf, weight, lo,
+            hi)`` per G3 basis component: ``kernel`` a
+            ``_basis_kernels.BasisKernel``, ``theta`` its coefficients, the
+            canonical coordinate the kernel's ``z = (x - c) / h`` and
+            ``log_norm = log Z - log h``.
         view : bool
             Mask each component to ``[lo, hi]`` (public-coordinate views).
         """
-        cdef const double[::1] qv
-        cdef const Py_ssize_t[::1] ov
-        cdef const Py_ssize_t[::1] nv
         cdef const double[::1] pv
+        cdef const double[::1] tv
+        cdef BasisKernel kern
+        cdef Py_ssize_t nfw = 0, ncw = 0
+        cdef double logh, offset
         k = len(components)
         if k < 1:
             raise ValueError("at least one component is required")
-        polys = [
-            np.ascontiguousarray(c[0], dtype=np.float64).reshape(-1) for c in components
-        ]
-        if any(p.size < 1 or not np.all(np.isfinite(p)) for p in polys):
-            raise ValueError("component polynomials must be finite and non-empty")
-        q = np.ascontiguousarray(np.concatenate(polys))
-        nq = np.array([p.size for p in polys], dtype=np.intp)
-        off = np.zeros(k, dtype=np.intp)
-        off[1:] = np.cumsum(nq[:k - 1])
+        if not all(isinstance(c[0], BasisKernel) for c in components):
+            raise TypeError("density components must carry a BasisKernel")
+        self._tables = <const BasisTable**>malloc(k * sizeof(BasisTable*))
+        self._thetas = <const double**>malloc(k * sizeof(double*))
+        self._local_tables = <BasisTable*>malloc(k * sizeof(BasisTable))
+        self._local_storage = <double**>calloc(k, sizeof(double*))
+        if (self._tables == NULL or self._thetas == NULL or
+                self._local_tables == NULL or self._local_storage == NULL):
+            raise MemoryError("density description")
+        self._nlocal = k
+        thetas = []
+        for i, c in enumerate(components):
+            kern = c[0]
+            theta = np.ascontiguousarray(c[1], dtype=np.float64).reshape(-1)
+            if theta.shape[0] != kern.t.d or not np.all(np.isfinite(theta)):
+                raise ValueError("basis coefficients must be finite, one per column")
+            thetas.append((kern, theta))
+            tv = theta
+            if abs(kern.t.c / kern.t.h) > 16777216.0:
+                if _fitting_table(&kern.t, &self._local_tables[i],
+                                  &self._local_storage[i]) != 0:
+                    raise MemoryError("fitting-coordinate spectral table")
+                self._tables[i] = &self._local_tables[i]
+            else:
+                self._tables[i] = &kern.t
+            self._thetas[i] = &tv[0]
+            nfw = max(nfw, 5 * kern.t.nf + 1)
+            ncw = max(ncw, kern.t.d + 1)
+        self._work = <double*>malloc((nfw + ncw) * sizeof(double))
+        if self._work == NULL:
+            raise MemoryError("density description")
         par = np.ascontiguousarray(
             np.array(
-                [[float(v) for v in c[1:]] for c in components], dtype=np.float64
+                [[float(v) for v in c[2:]] for c in components], dtype=np.float64
             ).reshape(-1)
         )
-        if par.size != 11 * k:
-            raise ValueError("each component needs eleven scalar parameters")
-        self._keep = (q, nq, off, par)
-        qv = q
-        ov = off
-        nv = nq
+        if par.size != _NPAR * k:
+            raise ValueError("each component needs nine scalar parameters")
+        for i, c in enumerate(components):
+            if self._local_storage[i] != NULL:
+                kern = c[0]
+                theta = thetas[i][1]
+                logh = log(kern.t.h)
+                offset = 0.0
+                if kern.t.log_col_lower >= 0:
+                    offset += theta[kern.t.log_col_lower]
+                if kern.t.log_col_upper >= 0:
+                    offset += theta[kern.t.log_col_upper]
+                # q_x = q_z - (sum endpoint amplitudes) * log(h).
+                # Hence q_x + logZ_x-logh = q_z + (logZ_x-logh-offset*logh).
+                par[_NPAR * i + 2] -= offset * logh
+        self._keep = (par, thetas)
         pv = par
         self.d.K = k
         self.d.view = view
-        self.d.q = &qv[0]
-        self.d.qoff = &ov[0]
-        self.d.nq = &nv[0]
         self.d.par = &pv[0]
+        self.d.basis = self._tables
+        self.d.theta = self._thetas
+        self.d.fwork = self._work
+        self.d.cwork = self._work + nfw
 
     def pdf(self, x):
         """Evaluate the described density (for tests).

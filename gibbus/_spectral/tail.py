@@ -46,11 +46,11 @@ from .._defaults import (
 )
 
 __all__ = [
-    "tail_log_cdf",
+    "exact_tail_log_cdf",
     "invert_tail",
     "needs_asymptotic_tail",
     "refine_tail_quantiles",
-    "exact_tail_log_cdf",
+    "tail_log_cdf",
     "tail_rate",
 ]
 
@@ -387,6 +387,10 @@ def _bisect_tail(log_target, f_at, lo, hi, /):
     return 0.5 * (lo + hi)
 
 
+_ENDPOINT_ULPS = 64
+"""Seeds this close to a finite endpoint (in its ulps) return the endpoint."""
+
+
 def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
     """Solve an extreme tail quantile with asymptotic seeding and exact correction.
 
@@ -434,6 +438,13 @@ def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
 
     # Re-bracket the *exact* target.  This is usually a very small adjustment,
     # but it also handles a spectral seed that was on the wrong side.
+    if np.isfinite(endpoint) and abs(to_x(v) - endpoint) <= _ENDPOINT_ULPS * np.spacing(
+        float(endpoint)
+    ):
+        # The seed lies within the last ulps of a finite endpoint, where no
+        # interior coordinate is representable enough to integrate; the
+        # endpoint is the representable quantile (G3-046).
+        return float(endpoint)
     f_v = exact_at(v)
     if not np.isfinite(f_v):
         raise RuntimeError("exact tail quadrature failed at asymptotic seed")
@@ -526,6 +537,11 @@ def refine_tail_quantiles(
     -------
     numpy.ndarray, shape (R,)
         *base_out* with the extreme entries replaced.
+
+    Raises
+    ------
+    RuntimeError
+        If an extreme quantile cannot be resolved from the potential.
     """
     lower, upper = needs_asymptotic_tail(p)
     if not (lower.any() or upper.any()):
@@ -546,12 +562,12 @@ def refine_tail_quantiles(
                 log_tail_mass=log_tail_mass,
             )
         except NUMERIC_FAILURES as exc:
-            # Keep the spectral answer rather than fail a query; it is
-            # wrong out here, but raising would be a regression for
-            # callers who only wanted a rough tail value.
-            _reraise_if_debug(
-                exc, f"asymptotic lower-tail quantile at p={p[idx]:.3e}", routine=True
-            )
+            # Fails loudly (G3-047, Phase E default 4): the spectral answer
+            # holds no significant digits out here.
+            raise RuntimeError(
+                f"asymptotic lower-tail quantile at p={p[idx]:.3e} did not "
+                "resolve; the spectral inverse has no significant digits there"
+            ) from exc
     for idx in np.flatnonzero(upper):
         try:
             out[idx] = invert_tail(
@@ -563,9 +579,10 @@ def refine_tail_quantiles(
                 log_tail_mass=log_tail_mass,
             )
         except NUMERIC_FAILURES as exc:
-            _reraise_if_debug(
-                exc, f"asymptotic upper-tail quantile at p={p[idx]:.3e}", routine=True
-            )
+            raise RuntimeError(
+                f"asymptotic upper-tail quantile at 1 - p={p[idx]:.3e} did not "
+                "resolve; the spectral inverse has no significant digits there"
+            ) from exc
     return out
 
 

@@ -13,9 +13,10 @@ from scipy.integrate import quad
 from scipy.integrate import quad as _quad
 
 from gibbus import Distribution
-from gibbus._api import component as _component
-from gibbus._api import fitting as _fitting
-from gibbus._postfit import fitted_state
+from gibbus._fit import basis_mixture as _basis_mixture
+from gibbus._fit import basis_selection as _basis_selection
+from gibbus._postfit import basis_state as _basis_state
+from gibbus._spectral import ppf as _spectral_ppf
 
 
 @pytest.fixture(scope="module")
@@ -255,7 +256,7 @@ class TestSpectralDegradationIsGraceful:
         component state, and routed through monotone CDF bisection.
         """
 
-        real_ppf = fitted_state.SpectralPPF
+        real_ppf = _spectral_ppf.SpectralPPF
 
         def constrained_ppf(cdf_rep, *, config):
             return real_ppf(
@@ -271,7 +272,10 @@ class TestSpectralDegradationIsGraceful:
                 ),
             )
 
-        monkeypatch.setattr(fitted_state, "SpectralPPF", constrained_ppf)
+        # G3 states build their inverse in ``basis_state``, which binds
+        # ``SpectralPPF`` at import.
+        monkeypatch.setattr(_spectral_ppf, "SpectralPPF", constrained_ppf)
+        monkeypatch.setattr(_basis_state, "SpectralPPF", constrained_ppf)
 
         rng = np.random.default_rng(314159)
         data = np.ascontiguousarray(rng.normal(size=500))
@@ -654,7 +658,7 @@ class TestShapeBugsAreNotSwallowed:
         def broken(*args, **kwargs):
             return np.zeros(3) + np.zeros(5)
 
-        monkeypatch.setattr(_fitting, "_fit_natural_mixture", broken)
+        monkeypatch.setattr(_basis_mixture, "_run_em", broken)
         rng = np.random.default_rng(0)
         data = np.ascontiguousarray(
             np.concatenate([rng.normal(-3, 1, 600), rng.normal(3, 1, 600)])
@@ -674,7 +678,7 @@ class TestShapeBugsAreNotSwallowed:
         def broken(*args, **kwargs):
             return np.zeros(3) + np.zeros(5)
 
-        monkeypatch.setattr(_component, "_fit_natural_conic_points_auto", broken)
+        monkeypatch.setattr(_basis_selection, "_span_diagnostic", broken)
         rng = np.random.default_rng(0)
         data = np.ascontiguousarray(rng.normal(size=300))
 
@@ -708,8 +712,7 @@ class TestMinorityComponentSpectralAccuracy:
         for comp in c.components:
             center = float(comp.data["fit_center"])
             scale = float(comp.data["fit_scale"])
-            direction = float(comp.data["fit_direction"])
-            z_at_peak = direction * (float(comp.mean) - center) / scale
+            z_at_peak = (float(comp.mean) - center) / scale
             assert abs(z_at_peak) < 1.0, (
                 f"component at {float(comp.mean):.3f} normalized to "
                 f"center={center:.3f}, giving z={z_at_peak:.2f}"
@@ -721,13 +724,13 @@ class TestMinorityComponentSpectralAccuracy:
         )
         for comp in c.components:
             d = comp.data
-            z = (
-                float(d["fit_direction"])
-                * (float(comp.mean) - float(d["fit_center"]))
-                / float(d["fit_scale"])
-            )
-            q = np.asarray(d["q_poly"], dtype=float)
-            terms = q * z ** np.arange(q.size)
+            z = (float(comp.mean) - float(d["fit_center"])) / float(d["fit_scale"])
+            # G3 state: on the full line the minimal span is the bulk powers
+            # ``z^1 .. z^d`` and the potential is ``theta . Phi(z) + log Z``.
+            theta = np.asarray(d["basis_theta"], dtype=float)
+            terms = np.r_[
+                float(d["basis_log_z"]), theta * z ** np.arange(1, theta.size + 1)
+            ]
             total = abs(float(terms.sum()))
             ratio = float(np.abs(terms).max()) / max(total, 1e-300)
             assert ratio < 1e3, f"cancellation ratio {ratio:.2e} at z={z:.2f}"

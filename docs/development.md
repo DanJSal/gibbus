@@ -2,6 +2,8 @@
 
 ## Building and testing
 
+Source builds require a C compiler, a C++ compiler (for the series extension), and Python development headers.
+
 Install the package in editable mode with its test dependencies, then run the suite from the repository root:
 
 ```bash
@@ -16,10 +18,14 @@ tests exercise it:
 python setup.py build_ext --inplace
 ```
 
+The `test` extra includes `pytest-xdist`; `python -m pytest -n 2` (or
+`-n auto`) runs the suite in parallel worker processes. Tests must not rely
+on module-level state set by another test.
+
 On Windows, run the build from an MSVC developer environment (`vcvars64.bat`).
 If the interpreter lacks `Python.h`, pass a matching development-header
 directory with `build_ext --include-dirs` rather than committing
-machine-specific configuration. Generated `.c`/`.h` files and compiled
+machine-specific configuration. Generated `.c`/`.cpp`/`.h` files and compiled
 extensions are build artifacts and are not versioned.
 
 ## Release metadata checks
@@ -60,16 +66,16 @@ failure ledger and are outside the debug-mode guarantees.
 
 ## Serialization maintenance
 
-Durable persistence is a public compatibility surface. See [Serialization and compatibility](serialization.md) for the v1 wire contract.
+Durable persistence is a public contract. See [Serialization](serialization.md) for the format-2 wire contract.
 
 - The `model` section of an existing serialization format is frozen. Do not add, remove, reorder, retype, or reinterpret its fields without introducing a new `format_version`.
 - Optional `provenance` may add ignorable fields. Missing or malformed provenance must not make a valid durable model unreadable.
 - Optional runtime `cache` data is not durable schema. Cache-layout changes do not require a new durable format version; incompatible caches must be discarded and rebuilt.
 - Validate optional `provenance` and `cache` sections explicitly (field names, dtypes, shapes, admissible values) before reading them, and treat an unrecognized section as absent. Do not detect malformed optional data by catching exceptions. A cache that passes the version and both digest checks but is still inconsistent indicates a Gibbus defect and must raise.
-- Committed fixtures carry no runtime cache. Pre-release builds share one version string, so a committed cache could be trusted by a build whose cache layout has changed. Test cache reuse with freshly written states.
-- Never silently reinterpret an old format number. Add an explicit reader/migration when a future format requires one, or reject unsupported formats clearly.
-- `tests/data/serialization/` contains immutable released-format fixtures. Do not regenerate old fixtures to make a compatibility failure disappear; add fixtures for a new format instead.
-- Cross-version tests should verify public mathematical behavior with tolerances and retain an independent plain-NumPy oracle for the frozen v1 density formula.
+- Cache reuse checks an implementation fingerprint over Python/native module contents, Python ABI/byte order, and NumPy/SciPy versions. Changed or missing fingerprints rebuild from the durable model, including between development builds sharing a version. Test both fresh reuse and mismatched-build rebuilding.
+- Never silently reinterpret a format number. A build reads only the format it writes: an incompatible change increments `format_version` and replaces the reader; no reader, converter, migration or compatibility-only test is kept for an earlier format, which is rejected with a refit message.
+- Serialization tests fit their models fresh and round-trip the current format; there are no committed old-format fixtures.
+- Verify the current mathematical density against independent analytic or high-precision oracles; current-format round trips do not establish numerical accuracy by themselves.
 - Keep durable fields explicitly typed and compatible with `np.save` / `np.load(..., allow_pickle=False)`; object dtype is not permitted.
 
 ## Coding standards

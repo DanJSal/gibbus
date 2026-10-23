@@ -1,25 +1,26 @@
 """Data-driven boundary-log terms and their identification diagnostics.
 
+G1 owner retained (adapted for basis log columns, G3-031): the one-sided
+likelihood-ratio selection of endpoint logs.
+
 A finite endpoint may carry the term ``-a log(z - L)`` (or ``-a log(U - z)``)
 with ``a >= 0``.  When the caller leaves the choice open, the term is kept
 only if the data resolve it: the fit with the term is compared with the fit
-without it at the same polynomial degree by a one-sided likelihood-ratio
+without it at the same bulk degree by a one-sided likelihood-ratio
 test.  Under ``a = 0`` the statistic is asymptotically the 50:50 mixture of
 ``chi2(0)`` and ``chi2(1)`` (the parameter sits on the boundary of its
 range), so ``p = chi2(1).sf(LR) / 2``.  Removing the term also removes the
-curvature it lends the polynomial near the endpoint, so the reference is a
+curvature it lends the potential near the endpoint, so the reference is a
 calibration device, like the omitted-information test for the degree, not
 an exact law.
 
 A kept amplitude also gets a standard error from the curvature of the
-likelihood on the solver's final face; an amplitude within two standard
-errors of zero is reported as weakly identified.
+likelihood on the solver's final face (``basis_state``); an amplitude within
+two standard errors of zero is reported as weakly identified.
 """
 
 import numpy as np
 from scipy.stats import chi2
-
-from .._defaults import _reraise_if_debug
 
 AUTO = "auto"
 """Boundary policy meaning "decide from the data"."""
@@ -147,72 +148,6 @@ def _select_boundary_terms(
         (flags["lower"], flags["upper"]),
         (p_values["lower"], p_values["upper"]),
     )
-
-
-def _amplitude_standard_errors(
-    params, information, layout, spec, effective_curvature_degree, effective_n, /
-):
-    """Standard errors of the physical-side amplitudes on the final face.
-
-    Parameters
-    ----------
-    params : numpy.ndarray
-        Natural parameters.
-    information : numpy.ndarray
-        Per-unit-weight information matrix (the NLL Hessian of point data,
-        the observed Hessian of interval data).
-    layout : _NaturalLayout
-        Natural layout.
-    spec : _ModelSpec
-        Model specification (maps physical sides to parameter indices).
-    effective_curvature_degree : int
-        Highest curvature coefficient free on the final face.
-    effective_n : float
-        Effective sample size.
-
-    Returns
-    -------
-    numpy.ndarray, shape (2,)
-        Physical ``(lower, upper)`` standard errors; ``nan`` where the side has
-        no term or its amplitude is zero, ``inf`` where the information in its
-        direction vanishes.
-    """
-    out = np.full(2, np.nan, dtype=np.float64)
-    theta = np.asarray(params, dtype=np.float64)
-    amplitude_indices = {
-        "lower": spec.physical_lower_a_index,
-        "upper": spec.physical_upper_a_index,
-    }
-    free = list(range(2 + int(effective_curvature_degree)))
-    active = {}
-    for side, index in amplitude_indices.items():
-        if index is not None and theta[index] > 0.0:
-            free.append(int(index))
-            active[side] = len(free) - 1
-    if not active or not effective_n > 0.0:
-        return out
-    h = np.asarray(information, dtype=np.float64)[np.ix_(free, free)]
-    h = 0.5 * (h + h.T)
-    try:
-        eigenvalues, vectors = np.linalg.eigh(h)
-    except np.linalg.LinAlgError as exc:
-        # Boundary standard errors are diagnostic only; a singular information
-        # matrix may degrade to unavailable (NaN) uncertainty without failing fit.
-        _reraise_if_debug(exc, "boundary amplitude standard errors")
-        return out
-    top = float(np.max(np.abs(eigenvalues))) if eigenvalues.size else 0.0
-    positive = eigenvalues > 1e-12 * max(top, np.finfo(np.float64).tiny)
-    for position, side in enumerate(_SIDES):
-        if side not in active:
-            continue
-        k = active[side]
-        weights = vectors[k, :]
-        if np.any(~positive & (np.abs(weights) > 1e-8)):
-            out[position] = np.inf
-            continue
-        variance = float(np.sum(weights[positive] ** 2 / eigenvalues[positive]))
-        out[position] = float(np.sqrt(variance / effective_n))
-    return out
 
 
 def _weakly_identified_sides(amplitudes, standard_errors, /):

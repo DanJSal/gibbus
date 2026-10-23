@@ -1,0 +1,552 @@
+{
+  "python": "3.12.14",
+  "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+  "results": [
+    {
+      "spec_index": 0,
+      "draws": 30,
+      "discovery": {
+        "staged": {
+          "median_microseconds": 9.4062,
+          "minima_found": 79,
+          "reference_minima": 79,
+          "trials_with_negative_minima": 30,
+          "trials_with_negative_candidate": 30,
+          "max_location_error_in_h": 6.426947835038465e-06,
+          "p95_location_error_in_h": 4.6528378327124595e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 8847,
+            "order": 16,
+            "replays": 0,
+            "scan_nodes": 38880,
+            "q2_builds": 1876,
+            "q3_builds": 1358,
+            "q4_builds": 1358,
+            "warm_probes": 2034,
+            "tracked_roots": 8
+          }
+        },
+        "previous": {
+          "median_microseconds": 14.004466666666668,
+          "minima_found": 79,
+          "reference_minima": 79,
+          "trials_with_negative_minima": 30,
+          "trials_with_negative_candidate": 30,
+          "max_location_error_in_h": 6.426947835038465e-06,
+          "p95_location_error_in_h": 4.596059437532818e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 9012,
+            "order": 16,
+            "replays": 0
+          }
+        }
+      }
+    },
+    {
+      "spec_index": 2,
+      "draws": 30,
+      "discovery": {
+        "staged": {
+          "median_microseconds": 8.598633333333334,
+          "minima_found": 37,
+          "reference_minima": 37,
+          "trials_with_negative_minima": 26,
+          "trials_with_negative_candidate": 26,
+          "max_location_error_in_h": 4.739302469664857e-06,
+          "p95_location_error_in_h": 4.570491949155851e-06,
+          "statistics": {
+            "panels": 27,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 4026,
+            "order": 16,
+            "replays": 0,
+            "scan_nodes": 58320,
+            "q2_builds": 1340,
+            "q3_builds": 819,
+            "q4_builds": 819,
+            "warm_probes": 849,
+            "tracked_roots": 5
+          }
+        },
+        "previous": {
+          "median_microseconds": 16.560333333333332,
+          "minima_found": 37,
+          "reference_minima": 37,
+          "trials_with_negative_minima": 26,
+          "trials_with_negative_candidate": 26,
+          "max_location_error_in_h": 4.739302469664857e-06,
+          "p95_location_error_in_h": 4.547389051125393e-06,
+          "statistics": {
+            "panels": 27,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 4035,
+            "order": 16,
+            "replays": 0
+          }
+        }
+      }
+    },
+    {
+      "spec_index": 8,
+      "draws": 30,
+      "discovery": {
+        "staged": {
+          "median_microseconds": 9.154133333333332,
+          "minima_found": 28,
+          "reference_minima": 28,
+          "trials_with_negative_minima": 18,
+          "trials_with_negative_candidate": 18,
+          "max_location_error_in_h": 4.098444042480046e-06,
+          "p95_location_error_in_h": 3.830285271045503e-06,
+          "statistics": {
+            "panels": 35,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 2965,
+            "order": 16,
+            "replays": 0,
+            "scan_nodes": 75600,
+            "q2_builds": 1487,
+            "q3_builds": 626,
+            "q4_builds": 626,
+            "warm_probes": 1091,
+            "tracked_roots": 6
+          }
+        },
+        "previous": {
+          "median_microseconds": 18.540633333333336,
+          "minima_found": 28,
+          "reference_minima": 28,
+          "trials_with_negative_minima": 18,
+          "trials_with_negative_candidate": 18,
+          "max_location_error_in_h": 4.612397659889926e-06,
+          "p95_location_error_in_h": 4.201256497236216e-06,
+          "statistics": {
+            "panels": 35,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 3066,
+            "order": 16,
+            "replays": 0
+          }
+        }
+      }
+    },
+    {
+      "spec_index": 14,
+      "draws": 30,
+      "discovery": {
+        "staged": {
+          "median_microseconds": 13.2403,
+          "minima_found": 65,
+          "reference_minima": 65,
+          "trials_with_negative_minima": 30,
+          "trials_with_negative_candidate": 30,
+          "max_location_error_in_h": 5.949910876495389e-06,
+          "p95_location_error_in_h": 4.8833926199501695e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 7929,
+            "order": 16,
+            "replays": 0,
+            "scan_nodes": 38880,
+            "q2_builds": 1761,
+            "q3_builds": 1195,
+            "q4_builds": 1195,
+            "warm_probes": 1478,
+            "tracked_roots": 5
+          }
+        },
+        "previous": {
+          "median_microseconds": 18.460866666666664,
+          "minima_found": 65,
+          "reference_minima": 65,
+          "trials_with_negative_minima": 30,
+          "trials_with_negative_candidate": 30,
+          "max_location_error_in_h": 5.949910876495389e-06,
+          "p95_location_error_in_h": 4.8415978564190376e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 7929,
+            "order": 16,
+            "replays": 0
+          }
+        }
+      }
+    },
+    {
+      "spec_index": 18,
+      "draws": 30,
+      "discovery": {
+        "staged": {
+          "median_microseconds": 17.7127,
+          "minima_found": 41,
+          "reference_minima": 41,
+          "trials_with_negative_minima": 27,
+          "trials_with_negative_candidate": 27,
+          "max_location_error_in_h": 4.631273258604148e-06,
+          "p95_location_error_in_h": 4.23651186112696e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 4814,
+            "order": 16,
+            "replays": 0,
+            "scan_nodes": 38880,
+            "q2_builds": 1049,
+            "q3_builds": 835,
+            "q4_builds": 835,
+            "warm_probes": 927,
+            "tracked_roots": 5
+          }
+        },
+        "previous": {
+          "median_microseconds": 30.946033333333332,
+          "minima_found": 41,
+          "reference_minima": 41,
+          "trials_with_negative_minima": 27,
+          "trials_with_negative_candidate": 27,
+          "max_location_error_in_h": 4.8497498084467664e-06,
+          "p95_location_error_in_h": 4.670732871798201e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 4752,
+            "order": 16,
+            "replays": 0
+          }
+        }
+      }
+    },
+    {
+      "spec_index": 22,
+      "draws": 30,
+      "discovery": {
+        "staged": {
+          "median_microseconds": 7.533033333333334,
+          "minima_found": 47,
+          "reference_minima": 47,
+          "trials_with_negative_minima": 30,
+          "trials_with_negative_candidate": 30,
+          "max_location_error_in_h": 5.03458636918119e-06,
+          "p95_location_error_in_h": 4.5359941870966656e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 4879,
+            "order": 16,
+            "replays": 0,
+            "scan_nodes": 38880,
+            "q2_builds": 1058,
+            "q3_builds": 821,
+            "q4_builds": 821,
+            "warm_probes": 1203,
+            "tracked_roots": 4
+          }
+        },
+        "previous": {
+          "median_microseconds": 12.625366666666666,
+          "minima_found": 47,
+          "reference_minima": 47,
+          "trials_with_negative_minima": 30,
+          "trials_with_negative_candidate": 30,
+          "max_location_error_in_h": 5.03458636918119e-06,
+          "p95_location_error_in_h": 4.4260214151293546e-06,
+          "statistics": {
+            "panels": 18,
+            "calls": 240,
+            "failures": 0,
+            "refinements": 5197,
+            "order": 16,
+            "replays": 0
+          }
+        }
+      }
+    }
+  ],
+  "clustered": {
+    "staged": {
+      "history": [
+        {
+          "scale": 0.6,
+          "roots": [
+            -0.475,
+            0.125,
+            0.725
+          ],
+          "points": [
+            -0.4750000063643696,
+            0.125,
+            0.7250000063643697
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.45,
+          "roots": [
+            -0.325,
+            0.125,
+            0.575
+          ],
+          "points": [
+            -0.3250001561851298,
+            -0.32499999999999996,
+            0.125,
+            0.1250019073486328,
+            0.5750000000000001,
+            0.5750001561851299
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.3,
+          "roots": [
+            -0.175,
+            0.125,
+            0.425
+          ],
+          "points": [
+            -0.17500000000006413,
+            0.125,
+            0.425000000000064
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.2,
+          "roots": [
+            -0.07500000000000001,
+            0.125,
+            0.325
+          ],
+          "points": [
+            -0.07500000000004278,
+            -0.0749988555908631,
+            0.12499999999999999,
+            0.3249988555908628,
+            0.3250000000000425
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.14,
+          "roots": [
+            -0.015000000000000013,
+            0.125,
+            0.265
+          ],
+          "points": [
+            -0.015000000000000065,
+            -0.014999771118164128,
+            0.1250000000000001,
+            0.26499999999999985,
+            0.2650013525342134
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.09,
+          "roots": [
+            0.035,
+            0.125,
+            0.215
+          ],
+          "points": [
+            0.034999999999999996,
+            0.12499999999999876,
+            0.2149909763324107,
+            0.21500000000000133
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.06,
+          "roots": [
+            0.065,
+            0.125,
+            0.185
+          ],
+          "points": [
+            0.06499999999998685,
+            0.12499999999999145,
+            0.12500190734862426,
+            0.18500000000001096
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.04,
+          "roots": [
+            0.08499999999999999,
+            0.125,
+            0.165
+          ],
+          "points": [
+            0.0849999999999847,
+            0.12499999999988219,
+            0.12501036406816665,
+            0.16499999999998471
+          ],
+          "hits": 3
+        }
+      ],
+      "minima_found": 24,
+      "reference_minima": 24,
+      "statistics": {
+        "panels": 1,
+        "calls": 8,
+        "failures": 0,
+        "refinements": 194,
+        "order": 6,
+        "replays": 0,
+        "scan_nodes": 72,
+        "q2_builds": 8,
+        "q3_builds": 8,
+        "q4_builds": 8,
+        "warm_probes": 162,
+        "tracked_roots": 4
+      }
+    },
+    "previous": {
+      "history": [
+        {
+          "scale": 0.6,
+          "roots": [
+            -0.475,
+            0.125,
+            0.725
+          ],
+          "points": [
+            -0.4750000063643696,
+            0.125,
+            0.7250000063643697
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.45,
+          "roots": [
+            -0.325,
+            0.125,
+            0.575
+          ],
+          "points": [
+            -0.3249719636429508,
+            0.125,
+            0.1250019073486328,
+            0.5749719636429507
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.3,
+          "roots": [
+            -0.175,
+            0.125,
+            0.425
+          ],
+          "points": [
+            0.12499999999999938,
+            0.1250019073486328
+          ],
+          "hits": 1
+        },
+        {
+          "scale": 0.2,
+          "roots": [
+            -0.07500000000000001,
+            0.125,
+            0.325
+          ],
+          "points": [
+            -0.07500007429560893,
+            0.1249999999999986,
+            0.1250019073486322,
+            0.3250000742956088
+          ],
+          "hits": 3
+        },
+        {
+          "scale": 0.14,
+          "roots": [
+            -0.015000000000000013,
+            0.125,
+            0.265
+          ],
+          "points": [
+            -0.019054620374744667,
+            -0.014997650125668192,
+            0.2649753767475912
+          ],
+          "hits": 2
+        },
+        {
+          "scale": 0.09,
+          "roots": [
+            0.035,
+            0.125,
+            0.215
+          ],
+          "points": [
+            0.02965693504716905,
+            0.1250002261547701
+          ],
+          "hits": 1
+        },
+        {
+          "scale": 0.06,
+          "roots": [
+            0.065,
+            0.125,
+            0.185
+          ],
+          "points": [
+            0.12499999999998901,
+            0.1250002261547701,
+            0.12500190734862182
+          ],
+          "hits": 1
+        },
+        {
+          "scale": 0.04,
+          "roots": [
+            0.08499999999999999,
+            0.125,
+            0.165
+          ],
+          "points": [
+            0.12498963593161119,
+            0.12499999999989563,
+            0.12500190734862182
+          ],
+          "hits": 1
+        }
+      ],
+      "minima_found": 15,
+      "reference_minima": 24,
+      "statistics": {
+        "panels": 1,
+        "calls": 8,
+        "failures": 0,
+        "refinements": 209,
+        "order": 6,
+        "replays": 0
+      }
+    }
+  }
+}

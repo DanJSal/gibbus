@@ -1,5 +1,11 @@
 # cython: language_level=3
-"""Compiled interior-point solver for one conic Newton model.
+"""Compiled interior-point solver and face Newton loop of the conic subproblems.
+
+G1 owner extended: ``_fit/_conic_kernels.pyx``.  G1's natural-coordinate point
+and interval objectives and their Newton loops are replaced by the G3
+objectives of ``_basis_newton_kernels`` (G3-039, G3-044); kept are the
+interior-point solver, the saddle-free metric and the generic face Newton loop
+those objectives drive through ``FaceObjective``.
 
 The test suite keeps a pure-Python translation (``tests/conic_reference.py``)
 and compares the two.  One call solves
@@ -37,24 +43,21 @@ from .._defaults import (
     CONIC_QP_GAP_TOL,
     CONIC_QP_MAX_ITER,
     CONIC_QP_STEP_FRACTION,
-    _reraise_if_debug,
 )
-from libc.math cimport sqrt, fabs, exp, log, copysign, isinf, isfinite, NAN, INFINITY
+from libc.math cimport sqrt, fabs, exp, log, copysign, isinf, NAN, INFINITY
 from libc.float cimport DBL_MIN
 from libc.stdlib cimport malloc, free
 from libc.string cimport memcpy, memset
 
-from .._model._state_kernels cimport _state_numerics_c
-from .._observations._finite_reductions cimport (
-    finite_natural_objective_c,
-    finite_natural_real_line_objective_c,
-)
-from .._observations._interval_integrals cimport adaptive_natural_objective_c
-
 cnp.import_array()
+
 
 cdef double _QP_GAP_TOL = CONIC_QP_GAP_TOL
 cdef int _QP_MAX_ITER = CONIC_QP_MAX_ITER
+# A repeated step hint in one line search must shorten the step by at least
+# this factor: a moving curvature minimum otherwise shortened it by
+# 1e-4 per objective evaluation, doubling the evaluations (G3-060).
+cdef double _HINT_SHRINK = 0.9
 cdef double _QP_STEP_FRACTION = CONIC_QP_STEP_FRACTION
 
 cdef extern from * nogil:
@@ -386,7 +389,7 @@ cdef struct Rep:
     const double* a          # packed row matrices
     const double* ref        # r
     # derived
-    double* pinv             # n x r, B^+ with lstsq's cutoff
+    double* pinv             # n x r, B^+ over the resolved range (1e-12)
     double* complement       # r x r projector onto range(B)^perp
     bint has_complement
     double* gg_vec           # r x r, eigenvectors of the Gram of the rows (transposed)
@@ -396,29 +399,36 @@ cdef struct Rep:
     int* exact_col
     int n_exact
     double margin            # smallest eigenvalue of the reference slacks
+    # Rows with a nonzero operator in each block (CSR): block bb reads rows
+    # blk_rows[blk_start[bb]:blk_start[bb + 1]].  Every block loop skips the
+    # exact zeros (G3 descriptions: one row per 1 x 1 block, G3-040).
+    int* blk_start
+    int* blk_rows
 
 
 cdef void _gram_map(const Rep* rep, const double* q, double* out) noexcept nogil:
     """``out_i = sum_b <A_{b,i}, Q_b>``."""
-    cdef int i, bb, kk
+    cdef int i, bb, kk, t
     cdef const double* ab
     memset(out, 0, rep.r * sizeof(double))
     for bb in range(rep.nb):
         kk = rep.k[bb]
         ab = rep.a + rep.aoff[bb]
-        for i in range(rep.r):
+        for t in range(rep.blk_start[bb], rep.blk_start[bb + 1]):
+            i = rep.blk_rows[t]
             out[i] += c_dot(ab + i * kk * kk, q + rep.qoff[bb], kk * kk)
 
 
 cdef void _slacks(const Rep* rep, const double* y, double* s) noexcept nogil:
     """``S_b = -sum_i y_i A_{b,i}`` for every block."""
-    cdef int i, bb, kk
+    cdef int i, bb, kk, t
     cdef const double* ab
     memset(s, 0, rep.qtot * sizeof(double))
     for bb in range(rep.nb):
         kk = rep.k[bb]
         ab = rep.a + rep.aoff[bb]
-        for i in range(rep.r):
+        for t in range(rep.blk_start[bb], rep.blk_start[bb + 1]):
+            i = rep.blk_rows[t]
             if y[i] != 0.0:
                 c_axpy(-y[i], ab + i * kk * kk, s + rep.qoff[bb], kk * kk)
 
@@ -458,44 +468,117 @@ cdef void _reconstruct(
 cdef int _prepare(Rep* rep, bint need_complement, double* work) noexcept nogil:
     """Derived quantities of a description (``work``: see ``_prepare_size``)."""
     cdef int n = rep.n, r = rep.r
-    cdef int i, j, bb, kk, count, col
-    cdef double smax, cut, thr, v
+    cdef int i, j, bb, kk, count, col, t, u_
+    cdef bint separable
+    cdef double smax, thr, v
     cdef double* x = work
     cdef double* u = x + r * n
     cdef double* sigma = u + r * r
     cdef double* g = sigma + r
     cdef double* scratch = g + r * r
     cdef const double* ab
-    # SVD of B for B^+ and the range complement.
-    _svd_rows(rep.b, r, n, x, u, sigma)
-    smax = 0.0
-    for j in range(r):
-        if sigma[j] > smax:
-            smax = sigma[j]
-    cut = _EPS * (r if r > n else n) * smax
-    memset(rep.pinv, 0, n * r * sizeof(double))
-    for j in range(r):
-        if sigma[j] > cut:
-            # pinv += (x_j / sigma_j) u_j^T / sigma_j
-            for i in range(n):
-                v = x[j * n + i] / (sigma[j] * sigma[j])
-                c_axpy(v, u + j * r, rep.pinv + i * r, r)
+    # Row lists of the blocks; a description is row-separable when every row
+    # reads exactly one block (G3: pointwise curvature and structural rows).
+    count = 0
+    for bb in range(rep.nb):
+        kk = rep.k[bb]
+        ab = rep.a + rep.aoff[bb]
+        rep.blk_start[bb] = count
+        for i in range(r):
+            for j in range(kk * kk):
+                if ab[i * kk * kk + j] != 0.0:
+                    rep.blk_rows[count] = i
+                    count += 1
+                    break
+    rep.blk_start[rep.nb] = count
+    separable = count == r
+    if separable:
+        memset(scratch, 0, r * sizeof(double))
+        for t in range(count):
+            scratch[rep.blk_rows[t]] += 1.0
+        for i in range(r):
+            if scratch[i] != 1.0:
+                separable = False
+    # SVD of B for B^+ and the range complement by one-sided Jacobi: over the
+    # rows (G1), or over the n columns for a row-separable description with
+    # more rows than columns (G3's cut rows: O(n^2 r) per sweep instead of
+    # O(r^2 (n + r)), G3-040).  G1's polynomial descriptions keep the row
+    # sweep, so their arithmetic is unchanged.
     rep.has_complement = False
-    if need_complement:
-        memset(rep.complement, 0, r * r * sizeof(double))
-        thr = 1e-12 * (smax if smax > 1.0 else 1.0)
+    if not (separable and r > n):
+        _svd_rows(rep.b, r, n, x, u, sigma)
+        smax = 0.0
         for j in range(r):
-            if not (sigma[j] > thr):
-                rep.has_complement = True
-                for i in range(r):
-                    c_axpy(u[j * r + i], u + j * r, rep.complement + i * r, r)
+            if sigma[j] > smax:
+                smax = sigma[j]
+        # One rank decision for B^+ and the range complement: a direction
+        # outside the resolved range is not inverted (a near-null singular
+        # value of nearly parallel rows amplified the rounding of L(Q) into a
+        # large endpoint move, G3-050).
+        thr = 1e-12 * (smax if smax > 1.0 else 1.0)
+        memset(rep.pinv, 0, n * r * sizeof(double))
+        for j in range(r):
+            if sigma[j] > thr:
+                # pinv += (x_j / sigma_j) u_j^T / sigma_j
+                for i in range(n):
+                    v = x[j * n + i] / (sigma[j] * sigma[j])
+                    c_axpy(v, u + j * r, rep.pinv + i * r, r)
+        if need_complement:
+            memset(rep.complement, 0, r * r * sizeof(double))
+            for j in range(r):
+                if not (sigma[j] > thr):
+                    rep.has_complement = True
+                    for i in range(r):
+                        c_axpy(u[j * r + i], u + j * r, rep.complement + i * r, r)
+    else:
+        # B^T = sum_j sigma_j v_j u_j^T: x row j = sigma_j u_j (length r), u
+        # column j (at u + j * n) = v_j.  B^T is staged in g (r x r >= n x r).
+        for i in range(r):
+            for j in range(n):
+                g[j * r + i] = rep.b[i * n + j]
+        _svd_rows(g, n, r, x, u, sigma)
+        smax = 0.0
+        for j in range(n):
+            if sigma[j] > smax:
+                smax = sigma[j]
+        thr = 1e-12 * (smax if smax > 1.0 else 1.0)  # as above
+        memset(rep.pinv, 0, n * r * sizeof(double))
+        for j in range(n):
+            if sigma[j] > thr:
+                # pinv += v_j (sigma_j u_j)^T / sigma_j^2
+                for i in range(n):
+                    v = u[j * n + i] / (sigma[j] * sigma[j])
+                    c_axpy(v, x + j * r, rep.pinv + i * r, r)
+        if need_complement:
+            # Complement of the range, I - B B_thr^+ with B_thr^+ over
+            # sigma_j > thr (the r - n missing directions are null, so it is
+            # never empty).  Formed with B itself, the complement annihilates
+            # the computed range to roundoff; I - sum u_j u_j^T from the
+            # normalized x_j / sigma_j carries their eps / sigma_j direction
+            # error and stalled the primal residual near 1e-12 (G3-040).
+            rep.has_complement = True
+            memset(g, 0, n * r * sizeof(double))
+            for j in range(n):
+                if sigma[j] > thr:
+                    for i in range(n):
+                        v = u[j * n + i] / (sigma[j] * sigma[j])
+                        c_axpy(v, x + j * r, g + i * r, r)
+            memset(rep.complement, 0, r * r * sizeof(double))
+            for i in range(r):
+                rep.complement[i * r + i] = 1.0
+                for j in range(n):
+                    if rep.b[i * n + j] != 0.0:
+                        c_axpy(-rep.b[i * n + j], g + j * r, rep.complement + i * r, r)
+    if need_complement:
         # Gram of the rows, G_ij = sum_b <A_{b,i}, A_{b,j}>, for lstsq(G, .).
         memset(g, 0, r * r * sizeof(double))
         for bb in range(rep.nb):
             kk = rep.k[bb]
             ab = rep.a + rep.aoff[bb]
-            for i in range(r):
-                for j in range(i, r):
+            for t in range(rep.blk_start[bb], rep.blk_start[bb + 1]):
+                i = rep.blk_rows[t]
+                for u_ in range(t, rep.blk_start[bb + 1]):
+                    j = rep.blk_rows[u_]
                     v = c_dot(ab + i * kk * kk, ab + j * kk * kk, kk * kk)
                     g[i * r + j] += v
                     if j != i:
@@ -675,25 +758,30 @@ cdef double _certified_gap(
 
     ``work``: 2 r + qtot + max(2 r, 4 n, kmax^2 + 3 kmax).
     """
-    cdef int n = rep.n, r = rep.r, bb, kk, i
+    cdef int n = rep.n, r = rep.r, bb, kk, i, j
     cdef double* image = work
     cdef double* shifted = work + r
     cdef double* slack = shifted + r
     cdef double* scratch = slack + rep.qtot
-    cdef double residual = 0.0, deficit = 0.0, v, lower, big
+    cdef double deficit = 0.0, v, lower, big, floor_, row_mag
     memcpy(endpoint, theta, n * sizeof(double))
     _reconstruct(rep, endpoint, q, scratch)
     model_value[0] = _model(hs, g, theta0, endpoint, scratch)
     # Weak duality bounds only feasible points: refuse an endpoint that
-    # misses the description by more than roundoff.
+    # misses the description by more than roundoff -- 1e-13 of the image, or
+    # the rounding of the row product itself when that is larger (a far
+    # coefficient vector, |theta| ~ 1e4 on a near-unidentified span, cannot
+    # meet 1e-13 in B theta whatever its blocks, G3-050).
     _gram_map(rep, q, image)
     big = c_absmax(image, r)
+    floor_ = 1e-13 * (big if big > 1.0 else 1.0)
     for i in range(r):
         v = fabs(c_dot(rep.b + i * n, endpoint, n) - image[i])
-        if v > residual:
-            residual = v
-    if residual > 1e-13 * (big if big > 1.0 else 1.0):
-        return INFINITY
+        row_mag = 0.0
+        for j in range(n):
+            row_mag += fabs(rep.b[i * n + j] * endpoint[j])
+        if v > floor_ and v > 8.0 * n * _EPS * row_mag:
+            return INFINITY
     # Shift a boundary dual along the strictly feasible reference until every
     # slack is PSD; weak duality then holds exactly at the shifted multiplier.
     _slacks(rep, y, slack)
@@ -734,7 +822,7 @@ cdef void _spd_inverse(
 cdef void _schur(const Rep* rep, const double* q, const double* sinv, double* schur,
                  double* work) noexcept nogil:
     """``-M`` with ``M_ij = sum_b tr(A_i Q A_j S^-1)``, symmetrized (``work``: (2 r + 1) kmax^2)."""
-    cdef int r = rep.r, i, j, bb, kk, k2
+    cdef int r = rep.r, i, j, bb, kk, k2, t, u_
     cdef const double* ab
     cdef double* xa
     cdef double* xb
@@ -748,13 +836,16 @@ cdef void _schur(const Rep* rep, const double* q, const double* sinv, double* sc
         xa = work
         xb = work + r * k2
         tmp = xb + r * k2
-        for i in range(r):
+        for t in range(rep.blk_start[bb], rep.blk_start[bb + 1]):
+            i = rep.blk_rows[t]
             _matmul(ab + i * k2, q + rep.qoff[bb], xa + i * k2, kk)
             _matmul(ab + i * k2, sinv + rep.qoff[bb], tmp, kk)
             # tr(X_i Y_j) = <X_i, Y_j^T>: store Y transposed.
             _transpose(tmp, xb + i * k2, kk)
-        for i in range(r):
-            for j in range(i, r):
+        for t in range(rep.blk_start[bb], rep.blk_start[bb + 1]):
+            i = rep.blk_rows[t]
+            for u_ in range(t, rep.blk_start[bb + 1]):
+                j = rep.blk_rows[u_]
                 v = c_dot(xa + i * k2, xb + j * k2, k2)
                 schur[i * r + j] -= v
                 if j != i:
@@ -837,7 +928,7 @@ cdef void _direction(
 
     ``work``: 3 nn + 4 r + 2 kmax^2.
     """
-    cdef int n = rep.n, r = rep.r, nn = n + r, i, j, bb, kk, k2
+    cdef int n = rep.n, r = rep.r, nn = n + r, i, j, bb, kk, k2, t
     cdef int km2 = rep.kmax * rep.kmax
     cdef double* rhs = work
     cdef double* sol = rhs + nn
@@ -858,7 +949,8 @@ cdef void _direction(
         ab = rep.a + rep.aoff[bb]
         _matmul(targets + rep.qoff[bb], kkt.sinv + rep.qoff[bb], tmp, kk)
         _transpose(tmp, tmp2, kk)
-        for i in range(r):
+        for t in range(rep.blk_start[bb], rep.blk_start[bb + 1]):
+            i = rep.blk_rows[t]
             ell[i] += c_dot(ab + i * k2, tmp2, k2)
     for i in range(n):
         rhs[i] = -kkt.dual_res[i]
@@ -919,7 +1011,8 @@ cdef void _direction(
         kk = rep.k[bb]
         k2 = kk * kk
         ab = rep.a + rep.aoff[bb]
-        for i in range(r):
+        for t in range(rep.blk_start[bb], rep.blk_start[bb + 1]):
+            i = rep.blk_rows[t]
             if coef[i] != 0.0:
                 c_axpy(coef[i], ab + i * k2, d_q + rep.qoff[bb], k2)
 
@@ -1266,7 +1359,7 @@ cdef int _own(
     """Prepare a description (allocating its derived storage); 0 on success."""
     cdef Py_ssize_t storage = _rep_storage(n, r) + _prepare_size(n, r, qtot, kmax)
     own.storage = <double*> malloc(storage * sizeof(double))
-    own.ints = <int*> malloc((2 * r + 2) * sizeof(int))
+    own.ints = <int*> malloc((2 * r + 2 + nb + 1 + nb * r) * sizeof(int))
     if own.storage == NULL or own.ints == NULL:
         free(own.storage)
         free(own.ints)
@@ -1290,6 +1383,8 @@ cdef int _own(
     own.rep.gg_val = own.rep.gg_vec + r * r
     own.rep.exact_row = own.ints
     own.rep.exact_col = own.ints + r
+    own.rep.blk_start = own.ints + 2 * r + 2
+    own.rep.blk_rows = own.rep.blk_start + nb + 1
     if _prepare(&own.rep, need_complement, own.rep.gg_val + r) != 0:
         return -3
     return 0
@@ -1457,7 +1552,7 @@ def solve_conic_qp(
 def solve_preconditioned(
     hessian, gradient, params, b_matrix, a_packed, sizes, a_offsets, q_offsets,
     reference_dual, row_degrees, blocks_packed, double gap_tolerance,
-    int max_iterations, double step_fraction,
+    int max_iterations, double step_fraction, column_scale=None,
 ):
     """Solve one Newton model in Jacobi/geometric scaled variables.
 
@@ -1485,6 +1580,8 @@ def solve_preconditioned(
         Interior-point iteration budget.
     step_fraction : float
         Fraction of the maximal feasible step to take.
+    column_scale : array_like or None
+        Positive column scales replacing Jacobi (``None``: Jacobi).
 
     Returns
     -------
@@ -1509,6 +1606,7 @@ def solve_preconditioned(
     return _solve_preconditioned_buffers(
         h, g, theta, b, a, k, aoff, qoff, ref, deg, blocks,
         gap_tolerance, max_iterations, step_fraction,
+        None if column_scale is None else _as_c(column_scale),
     )
 
 
@@ -1527,8 +1625,12 @@ cdef tuple _solve_preconditioned_buffers(
     double gap_tolerance,
     int max_iterations,
     double step_fraction,
+    const double[::1] col_scale=None,
 ):
     """Solve a quadratic from bound contiguous buffers without recoercion.
+
+    ``col_scale`` (length ``n``, positive) replaces the Jacobi column scaling
+    when given; ``None`` keeps G1's Jacobi scaling.
 
     The caller retains the compatible quadratic/cone buffer owners and supplies
     explicit interior-point controls. Only the result buffers are allocated here.
@@ -1551,6 +1653,11 @@ cdef tuple _solve_preconditioned_buffers(
     cdef const double* ref_ptr = &ref[0] if r > 0 else NULL
     cdef const Py_ssize_t* deg_ptr = &deg[0] if r > 0 else NULL
     cdef const double* blocks_ptr = &blocks[0] if qtot > 0 else NULL
+    cdef const double* col_ptr = NULL
+    if col_scale is not None and n > 0:
+        if col_scale.shape[0] != n:
+            raise ValueError("column scale must have one entry per variable")
+        col_ptr = &col_scale[0]
     cdef double* endpoint_ptr = &endpoint[0] if n > 0 else NULL
     cdef double* out_blocks_ptr = &out_blocks[0] if qtot > 0 else NULL
     cdef double* out_dual_ptr = &out_dual[0] if r > 0 else NULL
@@ -1572,6 +1679,7 @@ cdef tuple _solve_preconditioned_buffers(
             ref_ptr,
             deg_ptr,
             blocks_ptr,
+            col_ptr,
             gap_tolerance,
             max_iterations,
             step_fraction,
@@ -1597,6 +1705,7 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
                          const double* h, const double* g, const double* theta,
                          const double* b, const double* a, const double* ref,
                          const Py_ssize_t* deg, const double* blocks,
+                         const double* col_scale,
                          double gap_tolerance, int max_iterations, double step_fraction,
                          double* endpoint, double* out_blocks, double* out_dual,
                          double* model_value, double* gap, int* iterations,
@@ -1666,10 +1775,14 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
     hwork = p
     p += 2 * n * n + 2 * n + 16
     work = p
-    # Jacobi column scaling.
+    # Column scaling: Jacobi, unless the caller supplies explicit positive
+    # scales (G3 row-flattening scales for 1 x 1 row descriptions).
     for j in range(n):
-        v = h[j * n + j]
-        column[j] = 1.0 / sqrt(v) if v > 0.0 else 1.0
+        if col_scale != NULL:
+            column[j] = col_scale[j]
+        else:
+            v = h[j * n + j]
+            column[j] = 1.0 / sqrt(v) if v > 0.0 else 1.0
     # Row magnitudes after column scaling; geometric rate over polynomial rows.
     m = 0
     mean_x = 0.0
@@ -1905,187 +2018,40 @@ cdef int _in_safeguarded_metric(
     return 0
 
 
-cdef int _in_evaluate(
-    int n, int curvature_degree,
-    const double* theta,
-    Py_ssize_t Rf, const double* finite_intervals, const double* finite_weights,
-    const double* point_lower_distance, const double* point_upper_distance,
-    Py_ssize_t Ra, const double* adaptive_intervals, const double* adaptive_weights,
-    double whole_weight, double log_coordinate_scale,
-    const double* support, const double* data_bounds,
-    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t width,
-    const double* controls, double epsabs, double epsrel, int limit,
-    Py_ssize_t G, const double* gl_nodes, const double* gl_log_weights,
-    double width_eps_mult, int lower_index, int upper_index,
-    double* q_poly, double* amplitudes, double* state_work, double* geometry,
-    double* points, double* moments, double* model_means, double* model_fisher,
-    double* natural_scale, double* log_probability,
-    double* obs_h, double* obs_cov, double* sum_h, double* sum_second, double* hbuf,
-    double* metric_work,
-    double* nll, double* gradient, double* metric, double* smallest_out,
-) noexcept nogil:
-    """Evaluate one natural interval objective and its Newton metric."""
-    cdef int status = _in_evaluate_raw(
-        n, curvature_degree, theta,
-        Rf, finite_intervals, finite_weights,
-        point_lower_distance, point_upper_distance,
-        Ra, adaptive_intervals, adaptive_weights,
-        whole_weight, log_coordinate_scale,
-        support, data_bounds, kinds, lengths, coefficients, width,
-        controls, epsabs, epsrel, limit,
-        G, gl_nodes, gl_log_weights, width_eps_mult, lower_index, upper_index,
-        q_poly, amplitudes, state_work, geometry, points, moments,
-        model_means, model_fisher, natural_scale, log_probability,
-        obs_h, obs_cov, sum_h, sum_second, hbuf,
-        nll, gradient, NULL, NULL, NULL, NULL, NULL,
-    )
-    if status != 0:
-        return status
-    _in_safeguarded_metric(n, model_fisher, obs_cov, metric, metric_work, smallest_out)
-    return 0
+def safeguarded_metric(fisher, missing):
+    """Saddle-free interval Newton metric (``_in_safeguarded_metric``).
 
+    Parameters
+    ----------
+    fisher : numpy.ndarray
+        Model Fisher matrix ``F``, shape ``(n, n)``.
+    missing : numpy.ndarray
+        Missing information ``C``, shape ``(n, n)``.
 
-cdef int _in_evaluate_raw(
-    int n, int curvature_degree,
-    const double* theta,
-    Py_ssize_t Rf, const double* finite_intervals, const double* finite_weights,
-    const double* point_lower_distance, const double* point_upper_distance,
-    Py_ssize_t Ra, const double* adaptive_intervals, const double* adaptive_weights,
-    double whole_weight, double log_coordinate_scale,
-    const double* support, const double* data_bounds,
-    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t width,
-    const double* controls, double epsabs, double epsrel, int limit,
-    Py_ssize_t G, const double* gl_nodes, const double* gl_log_weights,
-    double width_eps_mult, int lower_index, int upper_index,
-    double* q_poly, double* amplitudes, double* state_work, double* geometry,
-    double* points, double* moments, double* model_means, double* model_fisher,
-    double* natural_scale, double* log_probability,
-    double* obs_h, double* obs_cov, double* sum_h, double* sum_second, double* hbuf,
-    double* nll, double* gradient,
-    double* adaptive_log_probability,
-    double* finite_row_means, double* finite_row_cov,
-    double* adaptive_row_means, double* adaptive_row_cov,
-) noexcept nogil:
-    """Evaluate one natural interval objective's raw geometry without the GIL.
-
-    On success ``model_fisher`` holds the model Fisher matrix and ``obs_cov``
-    the weighted within-row (missing) information; no Newton metric is built.
-    Adaptive rows write their log probabilities to ``adaptive_log_probability``
-    (``log_probability`` when ``NULL``).  The optional feature-major per-row
-    moment outputs are forwarded to the finite and adaptive reducers.
+    Returns
+    -------
+    metric : numpy.ndarray
+        ``F - C`` when its smallest eigenvalue relative to ``F`` is at least
+        ``1e-8``, else its reflection ``F V max(|Lambda|, 1e-3) V^T F``
+        (``F`` itself when ``F`` is numerically singular).
+    smallest : float
+        Smallest relative eigenvalue (``-inf`` when ``F`` is singular).
     """
-    cdef int i, j, k, status, npts = 0
-    cdef Py_ssize_t nq = curvature_degree + 3
-    cdef int n_power = <int>(2 * width - 1)
-    cdef int n_log = <int>width
-    cdef bint featL = lower_index >= 0
-    cdef bint featU = upper_index >= 0
-    cdef bint natural_real_line = (
-        (not isfinite(support[0])) and (not isfinite(support[1]))
-        and not featL and not featU
-    )
-    cdef int F = n_power + (n_log if featL else 0) + (n_log if featU else 0) \
-        + (1 if featL else 0) + (1 if featU else 0) + (1 if (featL and featU) else 0)
-    cdef double shifted_z = 0.0
-
-    q_poly[0] = 0.0
-    q_poly[1] = theta[0]
-    for k in range(curvature_degree + 1):
-        q_poly[k + 2] = theta[k + 1] / ((k + 1.0) * (k + 2.0))
-    amplitudes[0] = theta[lower_index] if featL else NAN
-    amplitudes[1] = theta[upper_index] if featU else NAN
-
-    status = _state_numerics_c(
-        support, q_poly, nq, amplitudes, data_bounds,
-        featL, featU, n_power, n_log, F,
-        kinds, lengths, coefficients, n, width,
-        controls, epsabs, epsrel, limit, state_work,
-        geometry, points, &npts, &shifted_z, moments, model_means, model_fisher,
-    )
-    if status != 0 or not (shifted_z > 0.0 and _pn_finite(shifted_z)):
-        return 10 + status
-
-    if Rf > 0:
-        if natural_real_line:
-            natural_scale[0] = 0.0
-            for k in range(1, n):
-                natural_scale[k] = 1.0 / (k * (k + 1.0))
-            status = finite_natural_real_line_objective_c(
-                Rf, n, G, nq,
-                finite_intervals, finite_weights, q_poly, geometry[3], log(shifted_z),
-                geometry[2], log_coordinate_scale, natural_scale,
-                gl_nodes, gl_log_weights, width_eps_mult,
-                log_probability, obs_h, obs_cov, sum_h, sum_second, hbuf, nll,
-                finite_row_means, finite_row_cov,
-            )
-        else:
-            status = finite_natural_objective_c(
-                Rf,
-                n,
-                G,
-                width,
-                nq,
-                finite_intervals,
-                finite_weights,
-                point_lower_distance,
-                point_upper_distance,
-                q_poly,
-                amplitudes[0],
-                amplitudes[1],
-                geometry[3],
-                log(shifted_z),
-                geometry[2],
-                log_coordinate_scale,
-                kinds,
-                lengths,
-                coefficients,
-                support[0],
-                support[1],
-                gl_nodes,
-                gl_log_weights,
-                width_eps_mult,
-                log_probability,
-                obs_h,
-                obs_cov,
-                sum_h,
-                sum_second,
-                hbuf,
-                nll,
-                finite_row_means,
-                finite_row_cov,
-            )
-        if status != 0 or not _pn_finite(nll[0]):
-            return 30 + status
-    else:
-        nll[0] = 0.0
-        for i in range(n):
-            obs_h[i] = 0.0
-        for i in range(n * n):
-            obs_cov[i] = 0.0
-
-    if Ra > 0:
-        if adaptive_log_probability == NULL:
-            adaptive_log_probability = log_probability
-        status = adaptive_natural_objective_c(
-            Ra, n, width, nq,
-            adaptive_intervals, adaptive_weights, q_poly, amplitudes[0], amplitudes[1],
-            geometry[2], geometry[5], -geometry[3] + log(shifted_z),
-            kinds, lengths, coefficients, support[0], support[1],
-            epsabs, epsrel, limit, adaptive_log_probability, obs_h, obs_cov, nll,
-            adaptive_row_means, adaptive_row_cov,
-        )
-        if status != 0 or not _pn_finite(nll[0]):
-            return 50 + status
-
-    if whole_weight > 0.0:
-        for i in range(n):
-            obs_h[i] += whole_weight * model_means[i]
-            for j in range(n):
-                obs_cov[i * n + j] += whole_weight * model_fisher[i * n + j]
-
-    for k in range(n):
-        gradient[k] = obs_h[k] - model_means[k]
-    return 0
+    f = np.ascontiguousarray(fisher, dtype=np.float64)
+    c = np.ascontiguousarray(missing, dtype=np.float64)
+    cdef int n = f.shape[0]
+    if f.ndim != 2 or f.shape[1] != n or c.shape != (n, n) or n < 1:
+        raise ValueError("fisher and missing must be matching square matrices")
+    metric = np.zeros((n, n))
+    work = np.zeros(7 * n * n + 4 * n)
+    cdef double[:, ::1] fv = f
+    cdef double[:, ::1] cv = c
+    cdef double[:, ::1] mv = metric
+    cdef double[::1] wv = work
+    cdef double smallest = NAN
+    with nogil:
+        _in_safeguarded_metric(n, &fv[0, 0], &cv[0, 0], &mv[0, 0], &wv[0], &smallest)
+    return metric, float(smallest)
 
 
 # ---------------------------------------------------------------------------
@@ -2096,707 +2062,6 @@ cdef inline bint _pn_finite(double x) noexcept nogil:
     return (x == x) and (not isinf(x))
 
 
-cdef int _pn_evaluate(
-    int n, int curvature_degree, int lower_index, int upper_index,
-    const double* theta, const double* empirical, double coordinate_constant,
-    const double* support, const double* data_bounds, bint featL, bint featU,
-    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t width,
-    const double* controls, double epsabs, double epsrel, int limit,
-    double* q_poly, double* amplitudes, double* state_work, double* geometry,
-    double* points, double* moments, int n_power, int n_log, int F,
-    double* nll, double* gradient, double* means, double* fisher,
-) noexcept nogil:
-    """Evaluate one affine-natural point objective using the shared state kernel."""
-    cdef int k, status, npts = 0
-    cdef Py_ssize_t nq = curvature_degree + 3
-    cdef double shifted_z = 0.0
-    q_poly[0] = 0.0
-    q_poly[1] = theta[0]
-    for k in range(curvature_degree + 1):
-        q_poly[k + 2] = theta[k + 1] / ((k + 1.0) * (k + 2.0))
-    amplitudes[0] = theta[lower_index] if lower_index >= 0 else NAN
-    amplitudes[1] = theta[upper_index] if upper_index >= 0 else NAN
-    status = _state_numerics_c(
-        support, q_poly, nq, amplitudes, data_bounds,
-        featL, featU, n_power, n_log, F,
-        kinds, lengths, coefficients, n, width,
-        controls, epsabs, epsrel, limit, state_work,
-        geometry, points, &npts, &shifted_z, moments, means, fisher,
-    )
-    if status != 0:
-        return status
-    nll[0] = (
-        c_dot(empirical, theta, n) - geometry[3] + log(shifted_z) + coordinate_constant
-    )
-    if not _pn_finite(nll[0]):
-        return 1
-    for k in range(n):
-        gradient[k] = empirical[k] - means[k]
-    return 0
-
-
-cdef int _point_newton_loop(
-    int n, int r, int nb, const int* sizes, const Py_ssize_t* aoff,
-    const Py_ssize_t* qoff, Py_ssize_t qtot, Py_ssize_t na,
-    const double* b, const double* a, const double* ref, const Py_ssize_t* degrees,
-    const double* support, const double* data_bounds, bint featL, bint featU,
-    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t width,
-    const double* controls, double epsabs, double epsrel, int limit,
-    const double* empirical, double coordinate_constant, int curvature_degree,
-    int lower_index, int upper_index,
-    double* theta, double* blocks, double* current_nll, double* gradient,
-    double* hessian, double* means, double* dual,
-    double tolerance, double certified_tolerance, double accuracy_floor,
-    int max_iterations, double armijo, double backtrack, int max_line_search,
-    int min_steps, int* iterations_out, int* evaluations_out,
-    int* subproblem_iterations_out, double* bound_out,
-) noexcept nogil:
-    """Run the fixed-face point Newton loop entirely without the GIL.
-
-    Return codes 1--5 are the public solver statuses.  Trial-evaluation
-    failures are handled by backtracking inside this loop; negative codes are
-    propagated from the conic subproblem kernel.
-    """
-    cdef int nq = curvature_degree + 3
-    cdef int n_power = <int>(2 * width - 1)
-    cdef int n_log = <int>width
-    cdef int F = n_power + (n_log if featL else 0) + (n_log if featU else 0) \
-        + (1 if featL else 0) + (1 if featU else 0) + (1 if (featL and featU) else 0)
-    cdef Py_ssize_t state_size = 3 * nq + 2 * limit * F + 2 * limit + 8 * F
-    cdef Py_ssize_t total = (
-        nq + 2 + state_size + 6 + 16 + F
-        + n + qtot + r + n + qtot + r
-        + n + qtot + n + n * n + n + qtot
-    )
-    cdef double* arena = <double*>malloc(total * sizeof(double))
-    cdef double* p
-    cdef double* q_poly
-    cdef double* amplitudes
-    cdef double* state_work
-    cdef double* geometry
-    cdef double* points
-    cdef double* moments
-    cdef double* endpoint
-    cdef double* endpoint_blocks
-    cdef double* endpoint_dual
-    cdef double* chosen
-    cdef double* chosen_blocks
-    cdef double* chosen_dual
-    cdef double* trial_theta
-    cdef double* trial_blocks
-    cdef double* trial_gradient
-    cdef double* trial_hessian
-    cdef double* trial_means
-    cdef double* cold_blocks
-    cdef int iteration, _line_it, qp_iterations, status, bb, aa, kk, i
-    cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
-    cdef int first_solve, accepted, any_step
-    cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
-    cdef double model_value = 0.0, candidate_model = 0.0
-    cdef double gap = INFINITY, scaled_model = 0.0
-    cdef double directional, alpha, trial_nll, decrease, cert
-
-    if arena == NULL:
-        return -1
-    p = arena
-    q_poly = p
-    p += nq
-    amplitudes = p
-    p += 2
-    state_work = p
-    p += state_size
-    geometry = p
-    p += 6
-    points = p
-    p += 16
-    moments = p
-    p += F
-    endpoint = p
-    p += n
-    endpoint_blocks = p
-    p += qtot
-    endpoint_dual = p
-    p += r
-    chosen = p
-    p += n
-    chosen_blocks = p
-    p += qtot
-    chosen_dual = p
-    p += r
-    trial_theta = p
-    p += n
-    trial_blocks = p
-    p += qtot
-    trial_gradient = p
-    p += n
-    trial_hessian = p
-    p += n * n
-    trial_means = p
-    p += n
-    cold_blocks = p
-
-    memset(cold_blocks, 0, qtot * sizeof(double))
-    for bb in range(nb):
-        kk = sizes[bb]
-        for aa in range(kk):
-            cold_blocks[qoff[bb] + aa * kk + aa] = 1.0
-
-    for iteration in range(max_iterations):
-        scale = fabs(current_nll[0])
-        if scale < 1.0:
-            scale = 1.0
-        first_solve = 1
-        while True:
-            status = _preconditioned(
-                n, r, nb, sizes, aoff, qoff, qtot, na,
-                hessian, gradient, theta, b, a, ref, degrees,
-                blocks if first_solve else cold_blocks,
-                _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
-                endpoint, endpoint_blocks, endpoint_dual,
-                &candidate_model, &gap, &qp_iterations, &scaled_model,
-            )
-            if status != 0:
-                free(arena)
-                return status
-            sub_iterations += qp_iterations
-            solved_bound = (-candidate_model if candidate_model < 0.0 else 0.0) \
-                + (gap if gap > 0.0 else 0.0)
-            if first_solve or solved_bound < bound:
-                bound = solved_bound
-                model_value = candidate_model
-                memcpy(chosen, endpoint, n * sizeof(double))
-                memcpy(chosen_blocks, endpoint_blocks, qtot * sizeof(double))
-                memcpy(chosen_dual, endpoint_dual, r * sizeof(double))
-            directional = 0.0
-            any_step = 0
-            for i in range(n):
-                directional += gradient[i] * (chosen[i] - theta[i])
-                if chosen[i] != theta[i]:
-                    any_step = 1
-            if (
-                (_pn_finite(directional) and directional < 0.0 and any_step)
-                or (not first_solve)
-                or bound <= certified_tolerance * scale
-                or cold_starts >= 2
-            ):
-                break
-            cold_starts += 1
-            first_solve = 0
-
-        memcpy(dual, chosen_dual, r * sizeof(double))
-        if bound <= tolerance * scale and (
-            iteration >= min_steps or model_value >= 0.0
-        ):
-            iterations_out[0] = iteration
-            evaluations_out[0] = evaluations
-            subproblem_iterations_out[0] = sub_iterations
-            bound_out[0] = bound
-            free(arena)
-            return 1
-
-        if not (_pn_finite(directional) and directional < 0.0 and any_step):
-            if carried < bound:
-                bound = carried
-            iterations_out[0] = iteration
-            evaluations_out[0] = evaluations
-            subproblem_iterations_out[0] = sub_iterations
-            bound_out[0] = bound
-            free(arena)
-            if bound <= certified_tolerance * scale:
-                return 1
-            if bound <= accuracy_floor * scale:
-                return 2
-            return 3
-
-        alpha = 1.0
-        accepted = 0
-        for _line_it in range(max_line_search):
-            for i in range(n):
-                trial_theta[i] = theta[i] + alpha * (chosen[i] - theta[i])
-            for i in range(qtot):
-                trial_blocks[i] = (1.0 - alpha) * blocks[i] + alpha * chosen_blocks[i]
-            evaluations += 1
-            status = _pn_evaluate(
-                n, curvature_degree, lower_index, upper_index,
-                trial_theta, empirical, coordinate_constant,
-                support, data_bounds, featL, featU,
-                kinds, lengths, coefficients, width,
-                controls, epsabs, epsrel, limit,
-                q_poly, amplitudes, state_work, geometry, points, moments,
-                n_power, n_log, F,
-                &trial_nll, trial_gradient, trial_means, trial_hessian,
-            )
-            if status != 0:
-                # Use the standard line-search rule: a non-normalizable or
-                # numerically unresolved trial is a line-search rejection,
-                # not a reason to abandon the fused solve.
-                alpha *= backtrack
-                continue
-            if (
-                trial_nll <= current_nll[0] + armijo * alpha * directional
-                or (
-                    -model_value <= 1e-9 * scale
-                    and trial_nll <= current_nll[0] + 8.0 * _EPS * scale
-                )
-            ):
-                accepted = 1
-                break
-            alpha *= backtrack
-
-        if not accepted:
-            cert = bound if bound < carried else carried
-            if cert <= accuracy_floor * scale:
-                bound = cert
-                iterations_out[0] = iteration
-                evaluations_out[0] = evaluations
-                subproblem_iterations_out[0] = sub_iterations
-                bound_out[0] = bound
-                free(arena)
-                if cert <= certified_tolerance * scale:
-                    return 1
-                return 2
-            iterations_out[0] = iteration
-            evaluations_out[0] = evaluations
-            subproblem_iterations_out[0] = sub_iterations
-            bound_out[0] = bound
-            free(arena)
-            return 4
-
-        decrease = current_nll[0] - trial_nll
-        if bound <= accuracy_floor * scale and decrease <= bound:
-            carried = bound - (decrease if decrease > 0.0 else 0.0)
-            if carried < 0.0:
-                carried = 0.0
-        else:
-            carried = INFINITY
-        memcpy(theta, trial_theta, n * sizeof(double))
-        memcpy(blocks, trial_blocks, qtot * sizeof(double))
-        memcpy(gradient, trial_gradient, n * sizeof(double))
-        memcpy(hessian, trial_hessian, n * n * sizeof(double))
-        memcpy(means, trial_means, n * sizeof(double))
-        current_nll[0] = trial_nll
-
-    scale = fabs(current_nll[0])
-    if scale < 1.0:
-        scale = 1.0
-    cert = bound if bound < carried else carried
-    if cert <= accuracy_floor * scale:
-        bound = cert
-        iterations_out[0] = max_iterations
-        evaluations_out[0] = evaluations
-        subproblem_iterations_out[0] = sub_iterations
-        bound_out[0] = bound
-        free(arena)
-        if cert <= certified_tolerance * scale:
-            return 1
-        return 2
-    iterations_out[0] = max_iterations
-    evaluations_out[0] = evaluations
-    subproblem_iterations_out[0] = sub_iterations
-    bound_out[0] = bound
-    free(arena)
-    return 5
-
-
-cdef int _interval_newton_loop(
-    int n, int r, int nb, const int* sizes, const Py_ssize_t* aoff,
-    const Py_ssize_t* qoff, Py_ssize_t qtot, Py_ssize_t na,
-    const double* b, const double* a, const double* ref, const Py_ssize_t* degrees,
-    const double* support, const double* data_bounds,
-    const int* kinds, const int* lengths, const double* coefficients, Py_ssize_t width,
-    const double* controls, double epsabs, double epsrel, int limit,
-    Py_ssize_t Rf, const double* finite_intervals, const double* finite_weights,
-    const double* point_lower_distance, const double* point_upper_distance,
-    Py_ssize_t Ra, const double* adaptive_intervals, const double* adaptive_weights,
-    double whole_weight, double log_coordinate_scale,
-    Py_ssize_t G, const double* gl_nodes, const double* gl_log_weights,
-    double width_eps_mult, int curvature_degree, int lower_index, int upper_index,
-    double* theta, double* blocks, double* current_nll, double* gradient,
-    double* hessian, double* current_fisher, double* current_missing,
-    double* current_smallest, double* dual,
-    double tolerance, double certified_tolerance, double accuracy_floor,
-    int max_iterations, double armijo, double backtrack, int max_line_search,
-    int min_steps, bint initialize, int* iterations_out, int* evaluations_out,
-    int* subproblem_iterations_out, double* bound_out,
-) noexcept nogil:
-    """Run a mixed-geometry interval Newton loop entirely without the GIL."""
-    cdef int nq = curvature_degree + 3
-    cdef int n_power = <int>(2 * width - 1)
-    cdef int n_log = <int>width
-    cdef bint featL = lower_index >= 0
-    cdef bint featU = upper_index >= 0
-    cdef int F = n_power + (n_log if featL else 0) + (n_log if featU else 0) \
-        + (1 if featL else 0) + (1 if featU else 0) + (1 if (featL and featU) else 0)
-    cdef Py_ssize_t n2 = n * n
-    cdef Py_ssize_t Rwork = Rf if Rf > Ra else Ra
-    if Rwork < 1:
-        Rwork = 1
-    cdef Py_ssize_t state_size = 3 * nq + 2 * limit * F + 2 * limit + 8 * F
-    cdef Py_ssize_t metric_work_size = 7 * n2 + 4 * n
-    cdef Py_ssize_t total = (
-        nq + 2 + state_size + 6 + 16 + F + n + n2
-        + n + Rwork + n + n2 + n + n2 + n + metric_work_size
-        + n + qtot + r + n + qtot + r
-        + n + qtot + n + n2 + qtot
-    )
-    cdef double* arena = <double*>malloc(total * sizeof(double))
-    cdef double* p
-    cdef double* q_poly
-    cdef double* amplitudes
-    cdef double* state_work
-    cdef double* geometry
-    cdef double* points
-    cdef double* moments
-    cdef double* model_means
-    cdef double* model_fisher
-    cdef double* natural_scale
-    cdef double* log_probability
-    cdef double* obs_h
-    cdef double* obs_cov
-    cdef double* sum_h
-    cdef double* sum_second
-    cdef double* hbuf
-    cdef double* metric_work
-    cdef double* endpoint
-    cdef double* endpoint_blocks
-    cdef double* endpoint_dual
-    cdef double* chosen
-    cdef double* chosen_blocks
-    cdef double* chosen_dual
-    cdef double* trial_theta
-    cdef double* trial_blocks
-    cdef double* trial_gradient
-    cdef double* trial_hessian
-    cdef double* cold_blocks
-    cdef int iteration, _line_it, qp_iterations, status, bb, aa, kk, i
-    cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
-    cdef int first_solve, accepted, any_step
-    cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
-    cdef double model_value = 0.0, candidate_model = 0.0
-    cdef double gap = INFINITY, scaled_model = 0.0
-    cdef double directional, alpha, trial_nll, trial_smallest, decrease, cert
-
-    if arena == NULL:
-        return -1
-    p = arena
-    q_poly = p
-    p += nq
-    amplitudes = p
-    p += 2
-    state_work = p
-    p += state_size
-    geometry = p
-    p += 6
-    points = p
-    p += 16
-    moments = p
-    p += F
-    model_means = p
-    p += n
-    model_fisher = p
-    p += n2
-    natural_scale = p
-    p += n
-    log_probability = p
-    p += Rwork
-    obs_h = p
-    p += n
-    obs_cov = p
-    p += n2
-    sum_h = p
-    p += n
-    sum_second = p
-    p += n2
-    hbuf = p
-    p += n
-    metric_work = p
-    p += metric_work_size
-    endpoint = p
-    p += n
-    endpoint_blocks = p
-    p += qtot
-    endpoint_dual = p
-    p += r
-    chosen = p
-    p += n
-    chosen_blocks = p
-    p += qtot
-    chosen_dual = p
-    p += r
-    trial_theta = p
-    p += n
-    trial_blocks = p
-    p += qtot
-    trial_gradient = p
-    p += n
-    trial_hessian = p
-    p += n2
-    cold_blocks = p
-
-    memset(cold_blocks, 0, qtot * sizeof(double))
-    for bb in range(nb):
-        kk = sizes[bb]
-        for aa in range(kk):
-            cold_blocks[qoff[bb] + aa * kk + aa] = 1.0
-
-    if initialize:
-        status = _in_evaluate(
-            n,
-            curvature_degree,
-            theta,
-            Rf,
-            finite_intervals,
-            finite_weights,
-            point_lower_distance,
-            point_upper_distance,
-            Ra,
-            adaptive_intervals,
-            adaptive_weights,
-            whole_weight,
-            log_coordinate_scale,
-            support,
-            data_bounds,
-            kinds,
-            lengths,
-            coefficients,
-            width,
-            controls,
-            epsabs,
-            epsrel,
-            limit,
-            G,
-            gl_nodes,
-            gl_log_weights,
-            width_eps_mult,
-            lower_index,
-            upper_index,
-            q_poly,
-            amplitudes,
-            state_work,
-            geometry,
-            points,
-            moments,
-            model_means,
-            model_fisher,
-            natural_scale,
-            log_probability,
-            obs_h,
-            obs_cov,
-            sum_h,
-            sum_second,
-            hbuf,
-            metric_work,
-            current_nll,
-            gradient,
-            hessian,
-            current_smallest,
-        )
-        if status != 0:
-            free(arena)
-            return 90
-        memcpy(current_fisher, model_fisher, n2 * sizeof(double))
-        memcpy(current_missing, obs_cov, n2 * sizeof(double))
-
-    for iteration in range(max_iterations):
-        scale = fabs(current_nll[0])
-        if scale < 1.0:
-            scale = 1.0
-        first_solve = 1
-        while True:
-            status = _preconditioned(
-                n, r, nb, sizes, aoff, qoff, qtot, na,
-                hessian, gradient, theta, b, a, ref, degrees,
-                blocks if first_solve else cold_blocks,
-                _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
-                endpoint, endpoint_blocks, endpoint_dual,
-                &candidate_model, &gap, &qp_iterations, &scaled_model,
-            )
-            if status != 0:
-                free(arena)
-                return status
-            sub_iterations += qp_iterations
-            solved_bound = (-candidate_model if candidate_model < 0.0 else 0.0) \
-                + (gap if gap > 0.0 else 0.0)
-            if first_solve or solved_bound < bound:
-                bound = solved_bound
-                model_value = candidate_model
-                memcpy(chosen, endpoint, n * sizeof(double))
-                memcpy(chosen_blocks, endpoint_blocks, qtot * sizeof(double))
-                memcpy(chosen_dual, endpoint_dual, r * sizeof(double))
-            directional = 0.0
-            any_step = 0
-            for i in range(n):
-                directional += gradient[i] * (chosen[i] - theta[i])
-                if chosen[i] != theta[i]:
-                    any_step = 1
-            if (
-                (_pn_finite(directional) and directional < 0.0 and any_step)
-                or (not first_solve)
-                or bound <= certified_tolerance * scale
-                or cold_starts >= 2
-            ):
-                break
-            cold_starts += 1
-            first_solve = 0
-
-        memcpy(dual, chosen_dual, r * sizeof(double))
-        if bound <= tolerance * scale and (
-            iteration >= min_steps or model_value >= 0.0
-        ):
-            iterations_out[0] = iteration
-            evaluations_out[0] = evaluations
-            subproblem_iterations_out[0] = sub_iterations
-            bound_out[0] = bound
-            free(arena)
-            return 1
-
-        if not (_pn_finite(directional) and directional < 0.0 and any_step):
-            if carried < bound:
-                bound = carried
-            iterations_out[0] = iteration
-            evaluations_out[0] = evaluations
-            subproblem_iterations_out[0] = sub_iterations
-            bound_out[0] = bound
-            free(arena)
-            if bound <= certified_tolerance * scale:
-                return 1
-            if bound <= accuracy_floor * scale:
-                return 2
-            return 3
-
-        alpha = 1.0
-        accepted = 0
-        for _line_it in range(max_line_search):
-            for i in range(n):
-                trial_theta[i] = theta[i] + alpha * (chosen[i] - theta[i])
-            for i in range(qtot):
-                trial_blocks[i] = (1.0 - alpha) * blocks[i] + alpha * chosen_blocks[i]
-            evaluations += 1
-            status = _in_evaluate(
-                n,
-                curvature_degree,
-                trial_theta,
-                Rf,
-                finite_intervals,
-                finite_weights,
-                point_lower_distance,
-                point_upper_distance,
-                Ra,
-                adaptive_intervals,
-                adaptive_weights,
-                whole_weight,
-                log_coordinate_scale,
-                support,
-                data_bounds,
-                kinds,
-                lengths,
-                coefficients,
-                width,
-                controls,
-                epsabs,
-                epsrel,
-                limit,
-                G,
-                gl_nodes,
-                gl_log_weights,
-                width_eps_mult,
-                lower_index,
-                upper_index,
-                q_poly,
-                amplitudes,
-                state_work,
-                geometry,
-                points,
-                moments,
-                model_means,
-                model_fisher,
-                natural_scale,
-                log_probability,
-                obs_h,
-                obs_cov,
-                sum_h,
-                sum_second,
-                hbuf,
-                metric_work,
-                &trial_nll,
-                trial_gradient,
-                trial_hessian,
-                &trial_smallest,
-            )
-            if status != 0:
-                # Use the standard line-search rule: a non-normalizable or
-                # numerically unresolved trial is a line-search rejection,
-                # not a reason to abandon the fused solve.
-                alpha *= backtrack
-                continue
-            if (
-                trial_nll <= current_nll[0] + armijo * alpha * directional
-                or (
-                    -model_value <= 1e-9 * scale
-                    and trial_nll <= current_nll[0] + 8.0 * _EPS * scale
-                )
-            ):
-                accepted = 1
-                break
-            alpha *= backtrack
-
-        if not accepted:
-            cert = bound if bound < carried else carried
-            if cert <= accuracy_floor * scale:
-                bound = cert
-                iterations_out[0] = iteration
-                evaluations_out[0] = evaluations
-                subproblem_iterations_out[0] = sub_iterations
-                bound_out[0] = bound
-                free(arena)
-                if cert <= certified_tolerance * scale:
-                    return 1
-                return 2
-            iterations_out[0] = iteration
-            evaluations_out[0] = evaluations
-            subproblem_iterations_out[0] = sub_iterations
-            bound_out[0] = bound
-            free(arena)
-            return 4
-
-        decrease = current_nll[0] - trial_nll
-        if bound <= accuracy_floor * scale and decrease <= bound:
-            carried = bound - (decrease if decrease > 0.0 else 0.0)
-            if carried < 0.0:
-                carried = 0.0
-        else:
-            carried = INFINITY
-        memcpy(theta, trial_theta, n * sizeof(double))
-        memcpy(blocks, trial_blocks, qtot * sizeof(double))
-        memcpy(gradient, trial_gradient, n * sizeof(double))
-        memcpy(hessian, trial_hessian, n2 * sizeof(double))
-        memcpy(current_fisher, model_fisher, n2 * sizeof(double))
-        memcpy(current_missing, obs_cov, n2 * sizeof(double))
-        current_smallest[0] = trial_smallest
-        current_nll[0] = trial_nll
-
-    scale = fabs(current_nll[0])
-    if scale < 1.0:
-        scale = 1.0
-    cert = bound if bound < carried else carried
-    if cert <= accuracy_floor * scale:
-        bound = cert
-        iterations_out[0] = max_iterations
-        evaluations_out[0] = evaluations
-        subproblem_iterations_out[0] = sub_iterations
-        bound_out[0] = bound
-        free(arena)
-        if cert <= certified_tolerance * scale:
-            return 1
-        return 2
-    iterations_out[0] = max_iterations
-    evaluations_out[0] = evaluations
-    subproblem_iterations_out[0] = sub_iterations
-    bound_out[0] = bound
-    free(arena)
-    return 5
-
-
 # ---------------------------------------------------------------------------
 # Generic fixed-face Newton loop over a compiled objective callback
 # ---------------------------------------------------------------------------
@@ -2805,6 +2070,7 @@ cdef int _face_newton_loop(
     int n, int r, int nb, const int* sizes, const Py_ssize_t* aoff,
     const Py_ssize_t* qoff, Py_ssize_t qtot, Py_ssize_t na,
     const double* b, const double* a, const double* ref, const Py_ssize_t* degrees,
+    const double* col_scale,
     FaceObjective* objective,
     double* theta, double* blocks, double* current_nll, double* gradient,
     double* hessian, double* current_smallest, double* dual,
@@ -2821,8 +2087,10 @@ cdef int _face_newton_loop(
     evaluated and accepted ``theta``; ``objective.accept`` commits each
     accepted trial's raw geometry inside the objective context.
 
-    Return codes 1--5 are the public solver statuses; negative codes come from
-    the conic subproblem kernel (-1 allocation failure).
+    Return codes 1--5 are the public solver statuses, 6 an objective's
+    ``FACE_STOP``; negative codes come from the conic subproblem kernel (-1
+    allocation failure).  ``col_scale`` (or NULL for Jacobi) fixes the
+    subproblem column scales (G3-034).
     """
     cdef Py_ssize_t n2 = n * n
     cdef Py_ssize_t total = n + qtot + r + n + qtot + r + n + qtot + n + n2 + qtot
@@ -2841,11 +2109,11 @@ cdef int _face_newton_loop(
     cdef double* cold_blocks
     cdef int iteration, _line_it, qp_iterations, status, bb, aa, kk, i
     cdef int evaluations = 0, sub_iterations = 0, cold_starts = 0
-    cdef int first_solve, accepted, any_step
+    cdef int first_solve, accepted, any_step, hinted
     cdef double bound = INFINITY, carried = INFINITY, scale, solved_bound
     cdef double model_value = 0.0, candidate_model = 0.0
     cdef double gap = INFINITY, scaled_model = 0.0
-    cdef double directional, alpha, trial_nll, trial_smallest, decrease, cert
+    cdef double directional, alpha, trial_nll, trial_smallest, decrease, cert, hint
 
     if arena == NULL:
         return -1
@@ -2879,19 +2147,41 @@ cdef int _face_newton_loop(
             cold_blocks[qoff[bb] + aa * kk + aa] = 1.0
 
     for iteration in range(max_iterations):
+        # Roundoff of the NLL value.  Tolerances on NLL decreases are absolute
+        # (nats per observation): a change of data units shifts the NLL by
+        # log(scale), so a tolerance relative to it moved the stopping point
+        # with the units (G3-050).
         scale = fabs(current_nll[0])
         if scale < 1.0:
             scale = 1.0
         first_solve = 1
         while True:
+            qp_iterations = 0
             status = _preconditioned(
                 n, r, nb, sizes, aoff, qoff, qtot, na,
                 hessian, gradient, theta, b, a, ref, degrees,
-                blocks if first_solve else cold_blocks,
+                blocks if first_solve else cold_blocks, col_scale,
                 _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
                 endpoint, endpoint_blocks, endpoint_dual,
                 &candidate_model, &gap, &qp_iterations, &scaled_model,
             )
+            # A resolved scalar projection may improve the conic endpoint.
+            # Both kernels use the same Newton traversal and original-model
+            # certificate; no basis-family dispatch is involved.
+            if objective.refine != NULL and nb == r and qtot == r:
+                if status != 0:
+                    candidate_model = 0.0
+                    gap = INFINITY
+                if objective.refine(objective.ctx, n, r, b, hessian, gradient,
+                                    theta, endpoint, endpoint_dual,
+                                    &candidate_model, &gap):
+                    status = 0
+                    for bb in range(nb):
+                        endpoint_blocks[bb] = 0.0
+                        for i in range(n):
+                            endpoint_blocks[bb] += b[bb*n+i] * endpoint[i]
+                        if endpoint_blocks[bb] <= 0.0:
+                            endpoint_blocks[bb] = 1.0
             if status != 0:
                 free(arena)
                 return status
@@ -2913,7 +2203,7 @@ cdef int _face_newton_loop(
             if (
                 (_pn_finite(directional) and directional < 0.0 and any_step)
                 or (not first_solve)
-                or bound <= certified_tolerance * scale
+                or bound <= certified_tolerance
                 or cold_starts >= 2
             ):
                 break
@@ -2921,7 +2211,7 @@ cdef int _face_newton_loop(
             first_solve = 0
 
         memcpy(dual, chosen_dual, r * sizeof(double))
-        if bound <= tolerance * scale and (
+        if bound <= tolerance and (
             iteration >= min_steps or model_value >= 0.0
         ):
             iterations_out[0] = iteration
@@ -2939,14 +2229,15 @@ cdef int _face_newton_loop(
             subproblem_iterations_out[0] = sub_iterations
             bound_out[0] = bound
             free(arena)
-            if bound <= certified_tolerance * scale:
+            if bound <= certified_tolerance:
                 return 1
-            if bound <= accuracy_floor * scale:
+            if bound <= accuracy_floor:
                 return 2
             return 3
 
         alpha = 1.0
         accepted = 0
+        hinted = 0
         for _line_it in range(max_line_search):
             for i in range(n):
                 trial_theta[i] = theta[i] + alpha * (chosen[i] - theta[i])
@@ -2957,15 +2248,39 @@ cdef int _face_newton_loop(
                 objective.ctx, trial_theta, &trial_nll, trial_gradient,
                 trial_hessian, &trial_smallest,
             )
+            if status == FACE_STOP:
+                # The objective ends the run at the accepted iterate (G3).
+                iterations_out[0] = iteration
+                evaluations_out[0] = evaluations
+                subproblem_iterations_out[0] = sub_iterations
+                bound_out[0] = bound
+                free(arena)
+                return 6
             if status != 0:
                 # A non-normalizable or numerically unresolved trial is a
                 # line-search rejection, not a reason to abandon the solve.
-                alpha *= backtrack
+                # A shape rejection by rows linear in theta may give the
+                # largest step that keeps them feasible: halving discarded
+                # half of a step that missed a moving curvature minimum by
+                # 1e-9, so the cut exchange converged at a rate of 0.6
+                # (G3-060).  The shortened trial is gated again.
+                hint = -1.0
+                if objective.step != NULL:
+                    hint = objective.step(
+                        objective.ctx, theta, trial_theta, alpha
+                    )
+                    if hinted and hint > _HINT_SHRINK * alpha:
+                        hint = _HINT_SHRINK * alpha
+                if hint > 0.0 and hint < alpha:
+                    alpha = hint
+                    hinted = 1
+                else:
+                    alpha *= backtrack
                 continue
             if (
                 trial_nll <= current_nll[0] + armijo * alpha * directional
                 or (
-                    -model_value <= 1e-9 * scale
+                    -model_value <= 1e-9
                     and trial_nll <= current_nll[0] + 8.0 * _EPS * scale
                 )
             ):
@@ -2975,14 +2290,14 @@ cdef int _face_newton_loop(
 
         if not accepted:
             cert = bound if bound < carried else carried
-            if cert <= accuracy_floor * scale:
+            if cert <= accuracy_floor:
                 bound = cert
                 iterations_out[0] = iteration
                 evaluations_out[0] = evaluations
                 subproblem_iterations_out[0] = sub_iterations
                 bound_out[0] = bound
                 free(arena)
-                if cert <= certified_tolerance * scale:
+                if cert <= certified_tolerance:
                     return 1
                 return 2
             iterations_out[0] = iteration
@@ -2993,7 +2308,7 @@ cdef int _face_newton_loop(
             return 4
 
         decrease = current_nll[0] - trial_nll
-        if bound <= accuracy_floor * scale and decrease <= bound:
+        if bound <= accuracy_floor and decrease <= bound:
             carried = bound - (decrease if decrease > 0.0 else 0.0)
             if carried < 0.0:
                 carried = 0.0
@@ -3007,18 +2322,15 @@ cdef int _face_newton_loop(
         current_smallest[0] = trial_smallest
         current_nll[0] = trial_nll
 
-    scale = fabs(current_nll[0])
-    if scale < 1.0:
-        scale = 1.0
     cert = bound if bound < carried else carried
-    if cert <= accuracy_floor * scale:
+    if cert <= accuracy_floor:
         bound = cert
         iterations_out[0] = max_iterations
         evaluations_out[0] = evaluations
         subproblem_iterations_out[0] = sub_iterations
         bound_out[0] = bound
         free(arena)
-        if cert <= certified_tolerance * scale:
+        if cert <= certified_tolerance:
             return 1
         return 2
     iterations_out[0] = max_iterations
@@ -3027,651 +2339,3 @@ cdef int _face_newton_loop(
     bound_out[0] = bound
     free(arena)
     return 5
-
-
-def solve_interval_newton(
-    params, blocks_packed, b_matrix, a_packed, sizes, a_offsets, q_offsets,
-    reference_dual, row_degrees, support, data_bounds,
-    kinds, lengths, coefficients, controls,
-    finite_intervals, finite_weights, point_lower_distance, point_upper_distance,
-    adaptive_intervals, adaptive_weights, double whole_weight,
-    double coordinate_scale,
-    gl_nodes, gl_log_weights, double width_eps_mult,
-    int curvature_degree, int lower_index, int upper_index,
-    double current_nll, current_gradient, current_hessian,
-    current_fisher, current_missing, double current_smallest,
-    double tolerance, double certified_tolerance, double accuracy_floor,
-    int max_iterations, double armijo, double backtrack, int max_line_search,
-    int min_steps, bint initialize,
-    double epsabs, double epsrel, int limit,
-):
-    """Run one natural interval Newton solve entirely in compiled code.
-
-    Ordinary finite rows use the fixed Gauss--Legendre reducer; support-boundary
-    and one-/two-sided censored rows use the adaptive Gauss--Kronrod reducer.
-    Whole-support rows are represented by their aggregate weight.
-
-    Parameters
-    ----------
-    params, blocks_packed : array_like
-        Initial natural parameters and packed positive-definite Gram blocks.
-    b_matrix, a_packed : array_like
-        Fixed-face parameter map and packed cone row operators.
-    sizes, a_offsets, q_offsets : array_like
-        Gram block sizes and offsets into packed row/Gram data.
-    reference_dual, row_degrees : array_like
-        Reference equality multipliers and polynomial row powers.
-    support, data_bounds : array_like, shape (2,)
-        Canonical support and observation bounds.
-    kinds, lengths, coefficients : array_like
-        Partial-statistic kinds, valid polynomial lengths and padded coefficient
-        rows, one descriptor per parameter.
-    controls : array_like, shape (11,)
-        Explicit core-state mode/window and scalar-solve controls.
-    finite_intervals, finite_weights : array_like
-        Prepared finite rows ``(Rf, 2)`` and their likelihood weights ``(Rf,)``.
-    point_lower_distance, point_upper_distance : array_like, shape (Rf,)
-        Preserved support-endpoint distances for exact-point reductions.
-    adaptive_intervals, adaptive_weights : array_like
-        Adaptive censoring rows ``(Ra, 2)`` and their weights ``(Ra,)``.
-    whole_weight : float
-        Aggregate whole-support observation weight.
-    coordinate_scale : float
-        Positive coordinate scale used for likelihood corrections.
-    gl_nodes, gl_log_weights : array_like
-        Shared Gauss-Legendre nodes and logarithmic quadrature weights.
-    width_eps_mult : float
-        Tiny-width threshold multiplier for interval/point reduction.
-    curvature_degree : int
-        Current curvature polynomial degree.
-    lower_index, upper_index : int
-        Natural amplitude indices, with -1 for an excluded side.
-    current_nll, current_smallest : float
-        Initial NLL and information-conditioning diagnostic.
-    current_gradient, current_hessian : array_like
-        Initial gradient and safeguarded Newton metric.
-    current_fisher, current_missing : array_like
-        Initial Fisher and missing-information matrices.
-    tolerance, certified_tolerance, accuracy_floor : float
-        Requested, certified and minimum attainable decrease thresholds.
-    max_iterations, max_line_search, min_steps : int
-        Newton/backtracking budgets and minimum accepted steps.
-    armijo, backtrack : float
-        Sufficient-decrease coefficient and line-search contraction factor.
-    initialize : bool
-        Recompute the start's evaluation before taking Newton steps.
-    epsabs, epsrel : float
-        Absolute and relative adaptive quadrature tolerances.
-    limit : int
-        Adaptive quadrature panel budget.
-    """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(
-        params, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] blocks = np.ascontiguousarray(
-        blocks_packed, dtype=np.float64
-    ).copy()
-    cdef const double[:, ::1] b = _as_c(b_matrix)
-    cdef const double[::1] a = _as_c(a_packed)
-    cdef const int[::1] k = _as_c(sizes, np.intc)
-    cdef const Py_ssize_t[::1] aoff = _as_c(a_offsets, np.intp)
-    cdef const Py_ssize_t[::1] qoff = _as_c(q_offsets, np.intp)
-    cdef const double[::1] ref = _as_c(reference_dual)
-    cdef const Py_ssize_t[::1] degrees = _as_c(row_degrees, np.intp)
-    cdef const double[::1] supp = _as_c(support)
-    cdef const double[::1] db = _as_c(data_bounds)
-    cdef const int[::1] pkinds = _as_c(kinds, np.intc)
-    cdef const int[::1] plengths = _as_c(lengths, np.intc)
-    cdef const double[:, ::1] pcoeff = _as_c(coefficients)
-    cdef const double[::1] ctl = _as_c(controls)
-    cdef const double[:, ::1] finite_rows = _as_c(finite_intervals)
-    cdef const double[::1] finite_row_weights = _as_c(finite_weights)
-    cdef const double[::1] lower_distance = _as_c(point_lower_distance)
-    cdef const double[::1] upper_distance = _as_c(point_upper_distance)
-    cdef const double[:, ::1] adaptive_rows = _as_c(adaptive_intervals)
-    cdef const double[::1] adaptive_row_weights = _as_c(adaptive_weights)
-    cdef const double[::1] gx = _as_c(gl_nodes)
-    cdef const double[::1] gw = _as_c(gl_log_weights)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient = np.ascontiguousarray(
-        current_gradient, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian = np.ascontiguousarray(
-        current_hessian, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] fisher = np.ascontiguousarray(
-        current_fisher, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] missing = np.ascontiguousarray(
-        current_missing, dtype=np.float64
-    ).copy()
-    cdef int n = theta.shape[0], r = b.shape[0], nb = k.shape[0]
-    cdef Py_ssize_t qtot = blocks.shape[0], na = a.shape[0]
-    cdef Py_ssize_t Rf = finite_rows.shape[0], Ra = adaptive_rows.shape[0]
-    cdef const double* finite_rows_ptr = NULL
-    cdef const double* finite_weights_ptr = NULL
-    cdef const double* lower_distance_ptr = NULL
-    cdef const double* upper_distance_ptr = NULL
-    cdef const double* adaptive_rows_ptr = NULL
-    cdef const double* adaptive_weights_ptr = NULL
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] dual = np.zeros(r, dtype=np.float64)
-    cdef int iterations = 0, evaluations = 0, sub_iterations = 0, code
-    cdef double bound = INFINITY, nll = current_nll, smallest = current_smallest
-    if (
-        n < 1 or b.shape[1] != n or gradient.shape[0] != n
-        or hessian.shape[0] != n or hessian.shape[1] != n
-        or fisher.shape[0] != n or fisher.shape[1] != n
-        or missing.shape[0] != n or missing.shape[1] != n
-        or supp.shape[0] != 2 or not (supp[0] < supp[1])
-        or db.shape[0] != 2 or ctl.shape[0] != 11
-        or pkinds.shape[0] != n or plengths.shape[0] != n
-        or pcoeff.shape[0] != n or curvature_degree + 3 != pcoeff.shape[1]
-        or finite_rows.shape[1] != 2 or finite_row_weights.shape[0] != Rf
-        or lower_distance.shape[0] != Rf or upper_distance.shape[0] != Rf
-        or adaptive_rows.shape[1] != 2 or adaptive_row_weights.shape[0] != Ra
-        or (Rf < 1 and Ra < 1 and not (whole_weight > 0.0))
-        or not (whole_weight >= 0.0 and isfinite(whole_weight))
-        or gx.shape[0] < 1 or gw.shape[0] != gx.shape[0]
-        or not (coordinate_scale > 0.0)
-        or lower_index < -1 or lower_index >= n or upper_index < -1 or upper_index >= n
-    ):
-        raise ValueError("invalid compiled interval Newton geometry")
-    if Rf > 0:
-        finite_rows_ptr = &finite_rows[0, 0]
-        finite_weights_ptr = &finite_row_weights[0]
-        lower_distance_ptr = &lower_distance[0]
-        upper_distance_ptr = &upper_distance[0]
-    if Ra > 0:
-        adaptive_rows_ptr = &adaptive_rows[0, 0]
-        adaptive_weights_ptr = &adaptive_row_weights[0]
-    cdef const int* k_ptr = &k[0] if nb > 0 else NULL
-    cdef const Py_ssize_t* aoff_ptr = &aoff[0] if nb > 0 else NULL
-    cdef const Py_ssize_t* qoff_ptr = &qoff[0] if nb > 0 else NULL
-    cdef const double* b_ptr = &b[0, 0] if r > 0 else NULL
-    cdef const double* a_ptr = &a[0] if na > 0 else NULL
-    cdef const double* ref_ptr = &ref[0] if r > 0 else NULL
-    cdef const Py_ssize_t* degrees_ptr = &degrees[0] if r > 0 else NULL
-    cdef const double* supp_ptr = &supp[0]
-    cdef const double* db_ptr = &db[0]
-    cdef const int* pkinds_ptr = &pkinds[0]
-    cdef const int* plengths_ptr = &plengths[0]
-    cdef const double* pcoeff_ptr = &pcoeff[0, 0]
-    cdef Py_ssize_t pcoeff_width = pcoeff.shape[1]
-    cdef const double* ctl_ptr = &ctl[0]
-    cdef Py_ssize_t gl_count = gx.shape[0]
-    cdef const double* gx_ptr = &gx[0]
-    cdef const double* gw_ptr = &gw[0]
-    cdef double* theta_ptr = &theta[0]
-    cdef double* blocks_ptr = &blocks[0] if qtot > 0 else NULL
-    cdef double* gradient_ptr = &gradient[0]
-    cdef double* hessian_ptr = &hessian[0, 0]
-    cdef double* fisher_ptr = &fisher[0, 0]
-    cdef double* missing_ptr = &missing[0, 0]
-    cdef double* dual_ptr = &dual[0] if r > 0 else NULL
-    with nogil:
-        code = _interval_newton_loop(
-            n,
-            r,
-            nb,
-            k_ptr,
-            aoff_ptr,
-            qoff_ptr,
-            qtot,
-            na,
-            b_ptr,
-            a_ptr,
-            ref_ptr,
-            degrees_ptr,
-            supp_ptr,
-            db_ptr,
-            pkinds_ptr,
-            plengths_ptr,
-            pcoeff_ptr,
-            pcoeff_width,
-            ctl_ptr,
-            epsabs,
-            epsrel,
-            limit,
-            Rf,
-            finite_rows_ptr,
-            finite_weights_ptr,
-            lower_distance_ptr,
-            upper_distance_ptr,
-            Ra,
-            adaptive_rows_ptr,
-            adaptive_weights_ptr,
-            whole_weight,
-            log(coordinate_scale),
-            gl_count,
-            gx_ptr,
-            gw_ptr,
-            width_eps_mult,
-            curvature_degree,
-            lower_index,
-            upper_index,
-            theta_ptr,
-            blocks_ptr,
-            &nll,
-            gradient_ptr,
-            hessian_ptr,
-            fisher_ptr,
-            missing_ptr,
-            &smallest,
-            dual_ptr,
-            tolerance,
-            certified_tolerance,
-            accuracy_floor,
-            max_iterations,
-            armijo,
-            backtrack,
-            max_line_search,
-            min_steps,
-            initialize,
-            &iterations,
-            &evaluations,
-            &sub_iterations,
-            &bound,
-        )
-    if code == -2:
-        raise np.linalg.LinAlgError("starting Gram block is not positive definite")
-    if code == -1:
-        raise MemoryError("compiled interval Newton workspace")
-    if code < 0:
-        raise np.linalg.LinAlgError(
-            "compiled interval Newton precomputation did not converge"
-        )
-    statuses = {
-        1: "converged",
-        2: "converged_approximately",
-        3: "non_descent",
-        4: "line_search_failed",
-        5: "iteration_limit",
-        90: "invalid_start",
-    }
-    return (
-        statuses[code], theta, blocks, dual, float(nll), gradient, hessian,
-        fisher, missing, float(smallest),
-        int(iterations), int(evaluations), int(sub_iterations), float(bound),
-    )
-
-
-def solve_point_newton(
-    params, blocks_packed, b_matrix, a_packed, sizes, a_offsets, q_offsets,
-    reference_dual, row_degrees, support, data_bounds, bint lower_basis,
-    bint upper_basis, kinds, lengths, coefficients, controls, empirical_means,
-    double coordinate_constant, int curvature_degree, int lower_index, int upper_index,
-    double current_nll, current_gradient, current_hessian, current_means,
-    double tolerance, double certified_tolerance, double accuracy_floor,
-    int max_iterations, double armijo, double backtrack, int max_line_search,
-    int min_steps, double epsabs, double epsrel, int limit,
-):
-    """Run one fixed-face natural point Newton solve in compiled code.
-
-    This is the fused counterpart of ``conic_newton._newton_on_representation``
-    for affine point objectives.  Numerically invalid trial points are rejected
-    by backtracking inside the compiled traversal rather than restarting the
-    solve in Python.
-
-    Parameters
-    ----------
-    params, blocks_packed : array_like
-        Initial natural parameters and packed positive-definite Gram blocks.
-    b_matrix, a_packed : array_like
-        Fixed-face parameter map and packed cone row operators.
-    sizes, a_offsets, q_offsets : array_like
-        Gram block sizes and offsets into packed row/Gram data.
-    reference_dual, row_degrees : array_like
-        Reference equality multipliers and polynomial row powers.
-    support, data_bounds : array_like, shape (2,)
-        Canonical support and observation bounds.
-    lower_basis, upper_basis : bool
-        Enabled canonical boundary-log bases.
-    kinds, lengths, coefficients : array_like
-        Partial-statistic kinds, valid polynomial lengths and padded coefficient
-        rows, one descriptor per parameter.
-    controls : array_like, shape (11,)
-        Explicit core-state mode/window and scalar-solve controls.
-    empirical_means : array_like
-        Weighted empirical partial-statistic means.
-    coordinate_constant : float
-        Additive coordinate correction to the NLL.
-    curvature_degree : int
-        Current curvature polynomial degree.
-    lower_index, upper_index : int
-        Natural amplitude indices, with -1 for an excluded side.
-    current_nll : float
-        Initial NLL.
-    current_gradient, current_hessian, current_means : array_like
-        Initial gradient, Newton metric and model partial-statistic means.
-    tolerance, certified_tolerance, accuracy_floor : float
-        Requested, certified and minimum attainable decrease thresholds.
-    max_iterations, max_line_search, min_steps : int
-        Newton/backtracking budgets and minimum accepted steps.
-    armijo, backtrack : float
-        Sufficient-decrease coefficient and line-search contraction factor.
-    epsabs, epsrel : float
-        Absolute and relative model quadrature tolerances.
-    limit : int
-        Adaptive quadrature panel budget.
-    """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(
-        params, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] blocks = np.ascontiguousarray(
-        blocks_packed, dtype=np.float64
-    ).copy()
-    cdef const double[:, ::1] b = _as_c(b_matrix)
-    cdef const double[::1] a = _as_c(a_packed)
-    cdef const int[::1] k = _as_c(sizes, np.intc)
-    cdef const Py_ssize_t[::1] aoff = _as_c(a_offsets, np.intp)
-    cdef const Py_ssize_t[::1] qoff = _as_c(q_offsets, np.intp)
-    cdef const double[::1] ref = _as_c(reference_dual)
-    cdef const Py_ssize_t[::1] degrees = _as_c(row_degrees, np.intp)
-    cdef const double[::1] supp = _as_c(support)
-    cdef const double[::1] db = _as_c(data_bounds)
-    cdef const int[::1] pkinds = _as_c(kinds, np.intc)
-    cdef const int[::1] plengths = _as_c(lengths, np.intc)
-    cdef const double[:, ::1] pcoeff = _as_c(coefficients)
-    cdef const double[::1] ctl = _as_c(controls)
-    cdef const double[::1] empirical = _as_c(empirical_means)
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient = np.ascontiguousarray(
-        current_gradient, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian = np.ascontiguousarray(
-        current_hessian, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] means = np.ascontiguousarray(
-        current_means, dtype=np.float64
-    ).copy()
-    cdef int n = theta.shape[0], r = b.shape[0], nb = k.shape[0]
-    cdef Py_ssize_t qtot = blocks.shape[0], na = a.shape[0]
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] dual = np.zeros(r, dtype=np.float64)
-    cdef int iterations = 0, evaluations = 0, sub_iterations = 0, code
-    cdef double bound = INFINITY, nll = current_nll
-    if (
-        n < 1 or b.shape[1] != n or empirical.shape[0] != n
-        or gradient.shape[0] != n or hessian.shape[0] != n or hessian.shape[1] != n
-        or means.shape[0] != n or supp.shape[0] != 2 or db.shape[0] != 2
-        or ctl.shape[0] != 11 or pkinds.shape[0] != n or plengths.shape[0] != n
-        or pcoeff.shape[0] != n or curvature_degree + 3 != pcoeff.shape[1]
-    ):
-        raise ValueError("invalid compiled point Newton geometry")
-    cdef const int* k_ptr = &k[0] if nb > 0 else NULL
-    cdef const Py_ssize_t* aoff_ptr = &aoff[0] if nb > 0 else NULL
-    cdef const Py_ssize_t* qoff_ptr = &qoff[0] if nb > 0 else NULL
-    cdef const double* b_ptr = &b[0, 0] if r > 0 else NULL
-    cdef const double* a_ptr = &a[0] if na > 0 else NULL
-    cdef const double* ref_ptr = &ref[0] if r > 0 else NULL
-    cdef const Py_ssize_t* degrees_ptr = &degrees[0] if r > 0 else NULL
-    cdef const double* supp_ptr = &supp[0]
-    cdef const double* db_ptr = &db[0]
-    cdef const int* pkinds_ptr = &pkinds[0]
-    cdef const int* plengths_ptr = &plengths[0]
-    cdef const double* pcoeff_ptr = &pcoeff[0, 0]
-    cdef Py_ssize_t pcoeff_width = pcoeff.shape[1]
-    cdef const double* ctl_ptr = &ctl[0]
-    cdef const double* empirical_ptr = &empirical[0]
-    cdef double* theta_ptr = &theta[0]
-    cdef double* blocks_ptr = &blocks[0] if qtot > 0 else NULL
-    cdef double* gradient_ptr = &gradient[0]
-    cdef double* hessian_ptr = &hessian[0, 0]
-    cdef double* means_ptr = &means[0]
-    cdef double* dual_ptr = &dual[0] if r > 0 else NULL
-    with nogil:
-        code = _point_newton_loop(
-            n, r, nb, k_ptr, aoff_ptr, qoff_ptr, qtot, na,
-            b_ptr, a_ptr, ref_ptr, degrees_ptr,
-            supp_ptr, db_ptr, lower_basis, upper_basis,
-            pkinds_ptr, plengths_ptr, pcoeff_ptr, pcoeff_width,
-            ctl_ptr, epsabs, epsrel, limit,
-            empirical_ptr, coordinate_constant, curvature_degree,
-            lower_index, upper_index,
-            theta_ptr, blocks_ptr, &nll, gradient_ptr, hessian_ptr,
-            means_ptr, dual_ptr,
-            tolerance, certified_tolerance, accuracy_floor,
-            max_iterations, armijo, backtrack, max_line_search, min_steps,
-            &iterations, &evaluations, &sub_iterations, &bound,
-        )
-    if code == -2:
-        raise np.linalg.LinAlgError("starting Gram block is not positive definite")
-    if code == -1:
-        raise MemoryError("compiled point Newton workspace")
-    if code < 0:
-        raise np.linalg.LinAlgError(
-            "compiled point Newton precomputation did not converge"
-        )
-    statuses = {
-        1: "converged",
-        2: "converged_approximately",
-        3: "non_descent",
-        4: "line_search_failed",
-        5: "iteration_limit",
-    }
-    return (
-        statuses[code], theta, blocks, dual, float(nll), gradient, hessian, means,
-        int(iterations), int(evaluations), int(sub_iterations), float(bound),
-    )
-
-
-def solve_callback_newton(
-    objective, params, blocks_packed, default_blocks_packed, b_matrix, a_packed, sizes,
-    a_offsets, q_offsets, reference_dual, row_degrees, evaluation,
-    double tolerance, double certified_tolerance, double accuracy_floor,
-    int max_iterations, double armijo, double backtrack, int max_line_search,
-    int min_steps,
-    double qp_gap_tolerance, int qp_max_iterations, double qp_step_fraction,
-):
-    """Run fixed-face Newton with a Python objective and compiled conic subproblems.
-
-    This traversal serves objectives whose likelihood evaluator remains
-    Python-level. Newton control,
-    certificate bookkeeping, line search, and every conic subproblem live here;
-    only objective evaluations cross back into Python.  The algorithm mirrors
-    the fully fused point/interval loops so there is no second Python solver.
-
-    Parameters
-    ----------
-    objective : callable
-        ``objective(params)`` returns an evaluation with NLL, gradient and Hessian.
-    params : array_like
-        Initial free-face parameter vector.
-    blocks_packed, default_blocks_packed : array_like
-        Initial and cold-restart Gram blocks in the solver's packed ordering.
-    b_matrix, a_packed : array_like
-        Fixed-face parameter map and packed cone row operators.
-    sizes, a_offsets, q_offsets : array_like
-        Gram block sizes and offsets into packed row/Gram data.
-    reference_dual, row_degrees : array_like
-        Reference equality multipliers and polynomial row powers.
-    evaluation : object
-        Objective evaluation at the supplied initial parameters.
-    tolerance, certified_tolerance, accuracy_floor : float
-        Requested, certified and minimum attainable decrease thresholds.
-    max_iterations, max_line_search, min_steps : int
-        Newton/backtracking budgets and minimum accepted steps.
-    armijo, backtrack : float
-        Sufficient-decrease coefficient and line-search contraction factor.
-    qp_gap_tolerance, qp_step_fraction : float
-        Explicit subproblem duality-gap target and feasible-step fraction.
-    qp_max_iterations : int
-        Explicit interior-point iteration budget per subproblem.
-
-    Returns
-    -------
-    tuple
-        ``(status, params, blocks, dual, evaluation, iterations, evaluations,
-        subproblem_iterations, decrease_bound)``.
-    """
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] theta = np.ascontiguousarray(
-        params, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] current_blocks = np.ascontiguousarray(
-        blocks_packed, dtype=np.float64
-    ).copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] default_blocks = np.ascontiguousarray(
-        default_blocks_packed, dtype=np.float64
-    )
-    cdef const double[:, ::1] cone_b = _as_c(b_matrix)
-    cdef const double[::1] cone_a = _as_c(a_packed)
-    cdef const int[::1] cone_sizes = _as_c(sizes, np.intc)
-    cdef const Py_ssize_t[::1] cone_aoff = _as_c(a_offsets, np.intp)
-    cdef const Py_ssize_t[::1] cone_qoff = _as_c(q_offsets, np.intp)
-    cdef const double[::1] cone_ref = _as_c(reference_dual)
-    cdef const Py_ssize_t[::1] cone_degrees = _as_c(row_degrees, np.intp)
-    cdef const double[:, ::1] hessian_view
-    cdef const double[::1] gradient_view, theta_view, start_view
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] dual = np.zeros(
-        cone_b.shape[0], dtype=np.float64
-    )
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] gradient
-    cdef cnp.ndarray[cnp.float64_t, ndim=2] hessian
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] endpoint
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] endpoint_blocks
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] candidate_dual
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] step = np.zeros(theta.shape[0])
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] chosen_blocks = current_blocks.copy()
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] trial_blocks
-    cdef cnp.ndarray[cnp.float64_t, ndim=1] trial_params
-    cdef object current = evaluation
-    cdef object trial
-    cdef double bound = INFINITY
-    cdef double carried = INFINITY
-    cdef double scale, solved_bound, model_value, gap, _scaled_model
-    cdef double directional, alpha, decrease, certificate
-    cdef double chosen_model = 0.0
-    cdef int iteration, _ls, qp_iterations
-    cdef int evaluations = 0
-    cdef int sub_iterations = 0
-    cdef int cold_starts = 0
-    cdef bint warm, descent, sufficient, roundoff
-    cdef object start_blocks
-    cdef str status
-
-    for iteration in range(max_iterations):
-        gradient = np.ascontiguousarray(current.gradient, dtype=np.float64)
-        hessian = np.ascontiguousarray(current.hessian, dtype=np.float64)
-        gradient_view = gradient
-        hessian_view = hessian
-        theta_view = theta
-        scale = max(1.0, abs(float(current.nll)))
-        start_blocks = current_blocks
-        warm = True
-        while True:
-            start_view = start_blocks
-            (
-                endpoint, endpoint_blocks, model_value, gap, qp_iterations,
-                candidate_dual, _scaled_model,
-            ) = _solve_preconditioned_buffers(
-                hessian_view, gradient_view, theta_view,
-                cone_b, cone_a, cone_sizes, cone_aoff, cone_qoff,
-                cone_ref, cone_degrees, start_view,
-                qp_gap_tolerance, qp_max_iterations, qp_step_fraction,
-            )
-            sub_iterations += qp_iterations
-            solved_bound = max(0.0, -model_value) + max(0.0, gap)
-            if warm or solved_bound < bound:
-                dual = candidate_dual
-                bound = solved_bound
-                step = endpoint - theta
-                chosen_blocks = endpoint_blocks
-                chosen_model = model_value
-            directional = float(np.dot(gradient, step))
-            descent = bool(
-                np.isfinite(directional) and directional < 0.0 and np.any(step)
-            )
-            if (
-                descent or (not warm) or bound <= certified_tolerance * scale
-                or cold_starts >= 2
-            ):
-                break
-            cold_starts += 1
-            start_blocks = default_blocks
-            warm = False
-
-        if bound <= tolerance * scale and (
-            iteration >= min_steps or chosen_model >= 0.0
-        ):
-            return (
-                "converged", theta, current_blocks, dual, current, iteration,
-                evaluations, sub_iterations, bound,
-            )
-
-        if not descent:
-            certificate = min(bound, carried)
-            bound = certificate
-            if certificate <= certified_tolerance * scale:
-                status = "converged"
-            elif certificate <= accuracy_floor * scale:
-                status = "converged_approximately"
-            else:
-                status = "non_descent"
-            return (
-                status, theta, current_blocks, dual, current, iteration,
-                evaluations, sub_iterations, bound,
-            )
-
-        alpha = 1.0
-        trial = None
-        for _ls in range(max_line_search):
-            trial_blocks = (1.0 - alpha) * current_blocks + alpha * chosen_blocks
-            trial_params = theta + alpha * step
-            evaluations += 1
-            try:
-                trial = objective(trial_params)
-            except (ArithmeticError, np.linalg.LinAlgError, RuntimeError) as exc:
-                _reraise_if_debug(exc, "joint Newton trial evaluation", routine=True)
-                alpha *= backtrack
-                trial = None
-                continue
-            sufficient = bool(
-                float(trial.nll) <= float(current.nll) + armijo * alpha * directional
-            )
-            roundoff = bool(
-                -chosen_model <= 1e-9 * scale
-                and float(trial.nll)
-                <= float(current.nll) + 8.0 * _EPS * scale
-            )
-            if sufficient or roundoff:
-                break
-            trial = None
-            alpha *= backtrack
-
-        if trial is None:
-            certificate = min(bound, carried)
-            if certificate <= accuracy_floor * scale:
-                bound = certificate
-                status = (
-                    "converged"
-                    if certificate <= certified_tolerance * scale
-                    else "converged_approximately"
-                )
-            else:
-                status = "line_search_failed"
-            return (
-                status, theta, current_blocks, dual, current, iteration,
-                evaluations, sub_iterations, bound,
-            )
-
-        decrease = float(current.nll) - float(trial.nll)
-        if bound <= accuracy_floor * scale and decrease <= bound:
-            carried = max(0.0, bound - max(0.0, decrease))
-        else:
-            carried = INFINITY
-        theta = trial_params
-        current_blocks = trial_blocks
-        current = trial
-
-    scale = max(1.0, abs(float(current.nll)))
-    certificate = min(bound, carried)
-    if certificate <= accuracy_floor * scale:
-        bound = certificate
-        status = (
-            "converged"
-            if certificate <= certified_tolerance * scale
-            else "converged_approximately"
-        )
-    else:
-        status = "iteration_limit"
-    return (
-        status, theta, current_blocks, dual, current, max_iterations, evaluations,
-        sub_iterations, bound,
-    )

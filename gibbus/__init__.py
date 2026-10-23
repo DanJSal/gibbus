@@ -62,6 +62,13 @@ Public API
 .. autosummary::
 
     Distribution
+    BasisSpec
+    Polynomial
+    SoftPower
+    Exponential
+    TanhSpec
+    GibbusBasisWarning
+    FitTimeoutError
     suppressed_failures
     clear_suppressed_failures
 
@@ -74,6 +81,15 @@ from importlib.metadata import version as _distribution_version
 
 from ._api.distribution import Distribution
 from ._defaults import clear_suppressed_failures, suppressed_failures
+from ._fit.budget import FitTimeoutError
+from ._model.basis_spec import (
+    BasisSpec,
+    Exponential,
+    GibbusBasisWarning,
+    Polynomial,
+    SoftPower,
+    TanhSpec,
+)
 
 try:
     __version__ = _distribution_version("gibbus")
@@ -81,8 +97,15 @@ except _PackageNotFoundError:  # source tree without installed metadata
     __version__ = "0+unknown"
 
 __all__ = [
+    "BasisSpec",
     "Distribution",
-    "suppressed_failures",
-    "clear_suppressed_failures",
+    "FitTimeoutError",
+    "Exponential",
+    "GibbusBasisWarning",
+    "Polynomial",
+    "SoftPower",
+    "TanhSpec",
     "__version__",
+    "clear_suppressed_failures",
+    "suppressed_failures",
 ]

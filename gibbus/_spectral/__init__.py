@@ -14,7 +14,8 @@
   integration, and differentiation used during post-fit construction.
 * ``_cdf_eval`` / ``_ppf_eval`` / ``_certify`` — compiled spectral query
   and Bernstein-certification kernels.
-* ``_tail_integrals`` — reusable compiled exact-tail QUADPACK callback.
+* ``_builders`` — compiled CDF/PPF construction over a data-described
+  density of G3 basis components.
 
 This subpackage depends only on :mod:`gibbus._defaults`, so it can be built
 and tested against any density callable.

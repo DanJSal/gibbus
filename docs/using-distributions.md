@@ -284,23 +284,23 @@ c4.load(state)
 
 **`Distribution.load(state)`**: Validate and install a saved model. The current instance changes only after the complete durable state has validated; an invalid state leaves the existing model unchanged.
 
-Serialization format v1 separates three concerns:
+The serialization format separates three concerns:
 
 - **`model`** is the frozen durable mathematical model and public presentation state.
 - **`provenance`** is optional historical fit/optimizer metadata.
 - **`cache`** is optional implementation-specific derived numerical state used only when it is compatible with the running Gibbus version and the durable model.
 
-A missing, stale, or invalid cache is rebuilt rather than making the model unreadable. This allows future Gibbus versions to change spectral CDF/PPF implementations without changing the mathematical meaning of serialization format v1.
+A missing, stale, or invalid cache is rebuilt rather than making the model unreadable. This allows future Gibbus versions to change spectral CDF/PPF implementations without changing the mathematical meaning of the durable format.
 
 ### State compatibility
 
-The durable format has its own `format_version`, independent of the Gibbus package version. Released serialization formats are never silently reinterpreted: a newer Gibbus version either reads a supported format correctly, explicitly migrates it, or rejects it with a clear compatibility error.
+The durable format has its own `format_version`, independent of the Gibbus package version. A Gibbus build reads only the format it writes (format 2); any other version is rejected with an error asking for a refit, never reinterpreted or migrated.
 
-Compatibility means preservation of the fitted mathematical distribution and documented public state within the numerical accuracy of the running implementation. It does not promise bit-for-bit identity of derived panels, cached moments, or floating-point query results across releases.
+Within the format, loading preserves the fitted mathematical distribution and documented public state within the numerical accuracy of the running implementation. It does not promise bit-for-bit identity of derived panels, cached moments, or floating-point query results across releases.
 
-Python pickle is supported for convenience, but pickle byte streams are not the durable cross-version contract. Persist models with `.data` and `np.save` / `np.load(..., allow_pickle=False)` when cross-version readability matters.
+Python pickle is supported for convenience, but pickle byte streams are not the durable contract. Persist models with `.data` and `np.save` / `np.load(..., allow_pickle=False)`.
 
-See [Serialization and compatibility](serialization.md) for the exact v1 schema, mathematical interpretation, cache/provenance rules, and format-evolution policy.
+See [Serialization](serialization.md) for the exact schema, mathematical interpretation, cache/provenance rules, and format-evolution policy.
 
 ---
 ## Copying

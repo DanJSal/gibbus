@@ -54,7 +54,7 @@ Weights are relative observation weights, not frequency counts. For point-data m
 
 ## Warm-Starting from a Previous Fit
 
-Use `init_from` to initialize a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the component count and support are inherited from the seed. Boundary flags inherit when left as `None` but may be explicitly overridden, and polynomial degree may be overridden globally or per component:
+Use `init_from` to initialize a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the component count and support are inherited from the seed. Boundary flags inherit when left as `None` but may be explicitly overridden, and the bulk degree may be overridden globally or per component:
 
 ```python
 # Single-component warm start
@@ -162,7 +162,7 @@ c = Distribution().fit(data, n_components=3, support=(-np.inf, np.inf), rng=42)
 **Limiting the auto search range:**
 
 ```python
-# Search only K=1..5 instead of the default K=1..10
+# Cap the automatically proposed component counts at 5.
 c = Distribution().fit(
     data, n_components="auto", support=(-np.inf, np.inf), rng=42, k_max=5
 )
@@ -211,7 +211,11 @@ np.save("mixture_model.npy", c_mix.data)
 c_mix_loaded = Distribution(np.load("mixture_model.npy", allow_pickle=False))
 ```
 
-The structured state is the current persistence representation, but cross-version compatibility guarantees have not yet been formalized. Treat long-term archival compatibility as version-dependent until that policy is defined.
+This build writes and reads durable format 2. Other format versions, including
+format 1 from the earlier polynomial engine, are rejected with a refit message.
+The fitted mathematical model is durable within the supported format; optional
+numerical caches can be rebuilt. See [Serialization](serialization.md) for the
+complete compatibility policy.
 
 ## Computing Moments
 

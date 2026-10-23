@@ -1,0 +1,28 @@
+...........F........x..........F..........                               [100%]
+=================================== FAILURES ===================================
+__________ test_degree3_two_linear_tails_use_exact_curvature_face[1] ___________
+tests/test_stage6_release_blockers.py:319: in test_degree3_two_linear_tails_use_exact_curvature_face
+    np.testing.assert_allclose(
+E   AssertionError: 
+E   Not equal to tolerance rtol=1e-06, atol=1e-06
+E   
+E   Mismatched elements: 5 / 25 (20%)
+E   Max absolute difference among violations: 6.18759089e-06
+E   Max relative difference among violations: 4.01215785e-06
+E    ACTUAL: array([-5.44613 , -4.99112 , -4.53657 , -4.083235, -3.632908, -3.189304,
+E          -2.758171, -2.342128, -1.932253, -1.542216, -1.230922, -1.0339  ,
+E          -0.959071, -1.007787, -1.180399, -1.475651, -1.869031, -2.297018,...
+E    DESIRED: array([-5.446129, -4.99112 , -4.53657 , -4.083236, -3.63291 , -3.189306,
+E          -2.758172, -2.342127, -1.932248, -1.54221 , -1.230918, -1.033899,
+E          -0.959073, -1.00779 , -1.180402, -1.475653, -1.869032, -2.297019,...
+________ test_stacked_m_step_without_shared_columns_is_independent_fits ________
+tests/test_basis_mixture.py:170: in test_stacked_m_step_without_shared_columns_is_independent_fits
+    assert stacked.status == "converged"
+E   AssertionError: assert 'iteration_limit' == 'converged'
+E     
+E     - converged
+E     + iteration_limit
+=========================== short test summary info ============================
+FAILED tests/test_stage6_release_blockers.py::test_degree3_two_linear_tails_use_exact_curvature_face[1]
+FAILED tests/test_basis_mixture.py::test_stacked_m_step_without_shared_columns_is_independent_fits
+2 failed, 39 passed, 1 xfailed in 23.89s

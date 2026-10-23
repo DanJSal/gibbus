@@ -22,3 +22,6 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Generated C++ sources (authored .hpp headers remain tracked)
+gibbus/**/*.cpp

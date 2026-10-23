@@ -113,25 +113,8 @@ class _MixtureAnalyticsMixin:
             if weight <= 0.0:
                 continue
             view = comp.exp
-            view._ensure_q_cache()
-            (
-                base_support,
-                q_poly,
-                boundary_amplitudes,
-                window,
-                mu_eff,
-                sigma_eff,
-                _terms,
-            ) = view._q_cache
-            total += float(weight) * _pf._relative_centered_moment_exp(
-                base_support,
-                q_poly,
-                boundary_amplitudes,
-                window,
-                mu_eff,
-                sigma_eff,
-                float(log_mean),
-                int(k),
+            total += float(weight) * view._relative_centered_moment(
+                float(log_mean), int(k)
             )
         return float(total)
 
@@ -402,16 +385,9 @@ class _MixtureAnalyticsMixin:
         parts = []
         for w, comp in zip(weights, components, strict=True):
             mu_eff, sigma_eff = comp._mu_sigma_eff()
-            z_support, kernel_amps = comp._internal_model_geometry()
             lo, hi = map(float, comp.base.support)
             parts.append(
-                (
-                    comp._data["q_poly"],
-                    float(z_support[0]),
-                    float(z_support[1]),
-                    float(kernel_amps[0]),
-                    float(kernel_amps[1]),
-                    0.0,
+                comp._density_part(
                     float(mu_eff),
                     float(sigma_eff),
                     abs(float(sigma_eff)),
