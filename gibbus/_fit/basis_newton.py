@@ -1764,8 +1764,13 @@ def _convex_start(problem, structural, /):
     return _interior_start(problem.objective, structural, direction=direction)
 
 
-def _better(candidate, incumbent, tolerance, /):
-    """Face acceptance: converged and no worse than the incumbent.
+def _better(candidate, incumbent, tolerance, /, *, strictly=False):
+    """Face acceptance: a verified optimum no worse than the incumbent.
+
+    A face solve can end converged on its relaxation while its shape is still
+    violated (a violation its exchange could not cut); such a point is not
+    an optimum of the shape-constrained problem and never displaces the
+    incumbent, however low its NLL.
 
     Parameters
     ----------
@@ -1773,9 +1778,15 @@ def _better(candidate, incumbent, tolerance, /):
         ``_solve_face`` results ``(status, theta, evaluation, bound, separation)``.
     tolerance : float
         NLL tolerance (nats per observation).
+    strictly : bool, default False
+        Require an NLL decrease of more than ``tolerance`` (leaving a face)
+        instead of allowing an increase up to it (entering one).
     """
-    if candidate[0] not in _CONVERGED:
+    separation = candidate[4]
+    if candidate[0] not in _CONVERGED or separation is None or not separation.feasible:
         return False
+    if strictly:
+        return float(candidate[2].nll) < float(incumbent[2].nll) - tolerance
     return float(candidate[2].nll) <= float(incumbent[2].nll) + tolerance
 
 
@@ -1967,10 +1978,7 @@ def _solve_coordinate_basis(
                 continue
             released_face, start_theta = release
             candidate = _solve_face(problem, released_face, start_theta)
-            if (
-                candidate[0] in _CONVERGED
-                and float(candidate[2].nll) < float(run[2].nll) - options.tolerance
-            ):
+            if _better(candidate, run, options.tolerance, strictly=True):
                 run, face, changed = candidate, released_face, True
                 break
         if changed:
@@ -1997,10 +2005,7 @@ def _solve_coordinate_basis(
             start_theta = theta.copy()
             start_theta[col] = _RELEASE_START
             candidate = _solve_face(problem, released_face, start_theta)
-            if (
-                candidate[0] in _CONVERGED
-                and float(candidate[2].nll) < float(run[2].nll) - options.tolerance
-            ):
+            if _better(candidate, run, options.tolerance, strictly=True):
                 run, face, changed = candidate, released_face, True
                 break
         if not changed:

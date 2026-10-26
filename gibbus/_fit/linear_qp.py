@@ -17,6 +17,11 @@ from scipy.optimize import nnls
 
 from .._defaults import CONIC_QP_GAP_TOL, NUMERIC_FAILURES, _reraise_if_debug
 
+_WIDE = np.longdouble
+"""Accumulation type of the certificate: extended precision on x86 Linux, but
+plain binary64 on Windows and macOS arm64, so the certificate must hold in
+both."""
+
 
 @dataclass(frozen=True)
 class _LinearQPResult:
@@ -113,20 +118,21 @@ def _linear_subproblem(hessian, gradient, params, rows, /):
     p = solve_triangular(factor.T, x, lower=False)
 
     # A floating projection can miss active inequalities. Restore the QP
-    # endpoint itself; its new objective and residual are certified below.
+    # endpoint itself to a slack margin above the rounding of re-forming its
+    # slacks from the returned endpoint (without extended precision, an
+    # active row restored only to zero slack re-forms slightly negative);
+    # its new objective and residual are certified below.
     slack = bs @ p
-    if np.min(slack) < 0.0:
-        direction = _strict_direction(bs)
-        if direction is None:
-            return None
+    floor = 16.0 * np.finfo(float).eps * np.maximum(1.0, np.abs(bs) @ np.abs(p))
+    direction = _strict_direction(bs) if np.min(slack - floor) < 0.0 else None
+    if direction is not None and np.min(bs @ direction) > 0.0:
         margin = bs @ direction
-        if np.min(margin) <= 0.0:
-            return None
-        floor = 16.0 * np.finfo(float).eps * np.maximum(1.0, np.abs(bs) @ np.abs(p))
         p = p + max(0.0, float(np.max((floor - slack) / margin))) * direction
+    elif np.min(slack) < 0.0:
+        return None
 
     endpoint = d * p
-    wide = np.longdouble
+    wide = _WIDE
     dw = np.asarray(d, dtype=wide)
     hw = np.asarray(h, dtype=wide)
     hw = 0.5 * (hw + hw.T) * dw[:, None] * dw[None, :]

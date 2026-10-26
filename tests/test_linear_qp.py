@@ -5,6 +5,7 @@ import itertools
 import numpy as np
 import pytest
 
+from gibbus._fit import linear_qp
 from gibbus._fit.linear_qp import _linear_subproblem
 
 
@@ -46,8 +47,13 @@ def _problem(seed):
     return h, g, theta, b
 
 
+@pytest.mark.parametrize("wide", [np.longdouble, np.float64])
 @pytest.mark.parametrize("seed", range(8))
-def test_projection_gap_bounds_independent_active_face_solution(seed):
+def test_projection_gap_bounds_independent_active_face_solution(
+    seed, wide, monkeypatch
+):
+    # Binary64 accumulation is what Windows and macOS arm64 provide.
+    monkeypatch.setattr(linear_qp, "_WIDE", wide)
     h, g, theta, b = _problem(seed)
     result = _linear_subproblem(h, g, theta, b)
     assert np.min(b @ result.params) >= -1e-12

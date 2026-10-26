@@ -74,6 +74,10 @@ class _LawOracle:
         """Unnormalized potential (or its derivative) at ``x``."""
         return self.oracle.potential(self.theta, x, order, dps=_DPS)[0]
 
+    def q_magnitude(self, x):
+        """Sum of the absolute term contributions to the potential at ``x``."""
+        return self.oracle.potential(self.theta, x, 0, dps=_DPS)[1]
+
     def _density(self, x):
         return mp.exp(-self.q(x))
 
@@ -236,7 +240,12 @@ def test_log_density(fitted):
     _, dist, oracle, _ = fitted
     x = _probe(oracle, dist)
     expected = np.array([oracle.logpdf(v) for v in x])
-    np.testing.assert_allclose(dist.logpdf(x), expected, rtol=0, atol=2e-11)
+    # binary64 evaluation rounds each term of q: the far-from-endpoint fit
+    # sums terms of order 1e7 to values near 20, so its floor is far above
+    # the others' and depends on the platform's libm.
+    magnitude = np.array([float(oracle.q_magnitude(v)) for v in x])
+    tolerance = 2e-11 + 4.0 * np.finfo(float).eps * magnitude
+    assert np.all(np.abs(dist.logpdf(x) - expected) <= tolerance)
 
 
 def test_distribution_function_and_survival(fitted):

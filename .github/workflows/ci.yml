@@ -91,14 +91,36 @@ jobs:
         run: |
           # One annotation lists every failure (a step shows at most ten);
           # the first failures also get their own annotation with detail.
+          import platform
+          import re
           import xml.etree.ElementTree as ET
           from pathlib import Path
+
+          import numpy
+          import scipy
 
           def escape(text):
               return text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
 
           def prop(text):
               return escape(text).replace(":", "%3A").replace(",", "%2C")
+
+          def condense(text):
+              # The call chain and the failing lines: frame locations,
+              # the marked source line and pytest's error lines.
+              keep = [
+                  line
+                  for line in text.splitlines()
+                  if line.startswith(("E ", ">"))
+                  or re.search(r"\.py:\d+(: in |:\s)", line)
+              ]
+              return "\n".join(keep)[:6000]
+
+          versions = (
+              f"{platform.platform()} {platform.machine()} Python "
+              f"{platform.python_version()} NumPy {numpy.__version__} "
+              f"SciPy {scipy.__version__}"
+          )
 
           path = Path("junit.xml")
           failures = []
@@ -114,9 +136,12 @@ jobs:
               print("::error title=No test results::junit.xml has no failures to report")
           else:
               listing = "\n".join(f"{kind}: {name}" for kind, name, _ in failures)
-              print(f"::error title={len(failures)} failing tests::{escape(listing)}")
+              print(
+                  f"::error title={len(failures)} failing tests::"
+                  f"{escape(versions + chr(10) + listing)}"
+              )
               for kind, name, detail in failures[:8]:
-                  print(f"::error title={prop(name)}::{escape(detail[-3000:])}")
+                  print(f"::error title={prop(name)}::{escape(condense(detail))}")
 
   selection-battery:
     name: Selection battery / Ubuntu / Python 3.14

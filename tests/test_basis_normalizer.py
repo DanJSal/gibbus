@@ -26,6 +26,7 @@ from gibbus._model.basis_normalizer import (
     _NormalizerOptions,
     _QuadratureFailure,
 )
+from gibbus._model.gauss_kronrod import WG10, WK21, XK21
 
 RNG = np.random.default_rng(1016)
 NORMAL = RNG.normal(1.5, 2.0, size=400)
@@ -359,8 +360,6 @@ def test_nearly_improper_growth_fails_loudly_not_with_overflow():
 
 
 def test_gauss_kronrod_rule_is_exact_to_its_degree():
-    from gibbus._model.gauss_kronrod import WG10, WK21, XK21
-
     xk = np.concatenate([-XK21[:-1], XK21])
     wk = np.concatenate([WK21[:-1], WK21])
     xg = np.concatenate([-XK21[1::2], XK21[1::2]])
@@ -371,7 +370,11 @@ def test_gauss_kronrod_rule_is_exact_to_its_degree():
         assert (abs(kron - exact) <= 1e-15) == (k <= 31)
         assert (abs(gauss - exact) <= 1e-15) == (k <= 19)
     nodes, _ = np.polynomial.legendre.leggauss(10)
-    assert np.array_equal(np.sort(np.abs(nodes))[::2][::-1], XK21[1::2])
+    # leggauss solves an eigenproblem, so its nodes may differ by an ulp
+    # between linear-algebra libraries.
+    np.testing.assert_allclose(
+        np.sort(np.abs(nodes))[::2][::-1], XK21[1::2], rtol=4 * np.finfo(float).eps
+    )
 
 
 # ---------------------------------------------------------------------------

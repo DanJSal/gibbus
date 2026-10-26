@@ -222,9 +222,6 @@ class _ConicRepresentation:
         return theta
 
 
-_REPRESENTATIONS: dict = {}
-
-
 def _range_complement(matrix, /):
     """Return the orthogonal projector onto the complement of ``range(matrix)``.
 

@@ -295,5 +295,12 @@ def test_an_expansion_that_cannot_lower_the_nll_is_not_kept(monkeypatch):
     )
     step = fit.history[-1]
     assert step.kind == "expansion" and step.diagnostic.should_expand
-    assert step.chosen is None and step.lr_p_value > 0.05
-    assert fit.model.n_coefficients == 2
+    assert step.chosen is None and fit.model.n_coefficients == 2
+    # The extension sits on the edge of the shape cone (an exactly linear
+    # potential), where rounding can leave its shape unverified on some
+    # platforms; either way it is not kept, and when it converges the
+    # likelihood ratio is what rejects it.
+    if not step.failure:
+        assert step.lr_p_value > 0.05
+    else:
+        assert "did not converge" in step.failure
