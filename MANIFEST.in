@@ -4,7 +4,7 @@ include CONTRIBUTING.md
 include CITATION.cff
 include SECURITY.md
 include LICENSE
-recursive-include docs *.md *.json *.log *.patch *.xml
+recursive-include docs *.md *.png *.py
 recursive-include gibbus *.py
 recursive-include gibbus *.pyx
 recursive-include gibbus *.pxd

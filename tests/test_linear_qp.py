@@ -98,3 +98,20 @@ def test_unresolved_projection_defers_to_the_common_conic_kernel():
     assert (
         _projection_candidate(h, np.array([1.0, -1.0]), np.ones(2), np.eye(2)) is None
     )
+
+
+@pytest.mark.parametrize("gradient", [np.array([np.nan, 1.0]), np.array([np.inf, 0.0])])
+def test_non_finite_model_defers_without_a_contract_error(gradient):
+    from gibbus._fit.linear_qp import _projection_candidate
+
+    h = np.eye(2)
+    assert _linear_subproblem(h, gradient, np.ones(2), np.eye(2)) is None
+    assert _projection_candidate(h, gradient, np.ones(2), np.eye(2)) is None
+
+
+def test_projection_contract_errors_propagate():
+    from gibbus._fit.linear_qp import _projection_candidate
+
+    # A row of the wrong width is a caller defect, not a deferral.
+    with pytest.raises(ValueError):
+        _projection_candidate(np.eye(2), np.ones(2), np.ones(2), np.ones((1, 3)))

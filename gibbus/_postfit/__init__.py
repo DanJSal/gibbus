@@ -1,12 +1,13 @@
-"""Post-fit analytics, evaluation closures, and fitted-state packing.
+"""Post-fit analytics, the exp-space potential, and fitted-state packing.
 
 Everything here runs *after* the optimizer has converged:
 
 * :mod:`.analytics` — moments, summary statistics, affine updates, and mode
   finding without re-running the optimizer.
-* :mod:`.evaluators` — cached closures for exact PDF and potential evaluation.
-* :mod:`.basis_state` — the durable G3 record, the fitted potential (on its
-  leader face), exact masses and the packed state with its spectral fields.
+* :mod:`.evaluators` — the exp-space potential of a base-space potential.
+* :mod:`.basis_state` — the durable basis record, the fitted potential (on its
+  leader face, evaluated in recurrence coordinates placed at the law), exact
+  masses and the packed state with its spectral fields.
 * :mod:`.fitted_state` — shared component geometry, model metadata and
   fitted-state validation.
 * :mod:`.logsumexp` — batched derivative recurrence for mixture potentials.

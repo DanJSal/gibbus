@@ -7,7 +7,7 @@ Bug reports, documentation improvements, tests, and focused code contributions a
 Clone the repository and install an editable build with test dependencies:
 
 ```bash
-git clone https://github.com/DanJSal/gibbus.git
+git clone --branch develop https://github.com/DanJSal/gibbus.git
 cd gibbus
 python -m pip install -e ".[test]"
 ```
@@ -30,7 +30,7 @@ The detailed build, lint, numerical-testing, Cython, serialization, and document
 
 Keep public signatures, documentation, tests, and release notes synchronized. A change that intentionally alters documented behavior should update `CHANGELOG.md` and the relevant documentation in the same contribution.
 
-Durable serialization is a compatibility surface. Do not reinterpret an existing serialization format in place; follow the versioning and fixture rules in [docs/serialization.md](docs/serialization.md) and [docs/development.md](docs/development.md#serialization-maintenance).
+Durable serialization is a public contract. Do not reinterpret the serialization format in place; follow the rules in [docs/development.md](docs/development.md#serialization-maintenance) and the format in [docs/serialization.md](docs/serialization.md).
 
 ## Numerical changes
 

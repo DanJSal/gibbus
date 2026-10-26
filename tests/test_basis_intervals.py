@@ -1,4 +1,4 @@
-"""G3 Stage 5 Phase A: interval-row masses and conditional moments (G3-043).
+"""Interval-row masses and conditional moments.
 
 Defining properties: ``log P(B)``, ``E[Phi | B]`` and ``Cov(Phi | B)`` of a
 row equal closed forms (truncated Gaussian, incomplete gamma at a log
@@ -131,10 +131,10 @@ def test_gaussian_rows_match_the_truncated_normal():
     g = model.geometry
     mu, s = 1.0, 1.7
     zm, zs = (mu - g.center) / g.scale, s / g.scale
-    theta, labels = _theta(model, {"x": -zm / zs**2, "x^2": 0.5 / zs**2})
+    theta, labels = _theta(model, {"z": -zm / zs**2, "z^2": 0.5 / zs**2})
     lower, upper = zip(*GAUSS_ROWS, strict=True)
     res = _rows(model, theta, lower, upper)
-    ix = labels.index("x")
+    ix = labels.index("z")
     vz = zs * zs
     for i, (a, b) in enumerate(GAUSS_ROWS):
         lp, mean, var = _truncated_normal(a, b, mu, s)
@@ -150,7 +150,7 @@ def test_gaussian_rows_match_the_truncated_normal():
 @pytest.mark.parametrize("gamma,beta", [(0.0, 1.0), (0.5, 2.0), (3.0, 0.7)])
 def test_gamma_rows_at_a_log_endpoint_match_the_incomplete_gamma(gamma, beta):
     model = _model(BasisSpec(support=(0.0, INF), bulk_degree=1, log_lower=True))
-    theta, labels = _theta(model, {"logL": gamma, "x": beta})
+    theta, labels = _theta(model, {"logL": gamma, "z": beta})
     g = model.geometry
     # q = -gamma log x + beta (x - c)/h: x ~ Gamma(gamma + 1, scale h / beta).
     rows = [(0.0, 0.1), (0.0, 2.0), (0.5, 3.0), (2.0, INF), (40.0, INF), (7.0, 7.25)]
@@ -167,7 +167,7 @@ def test_gamma_rows_at_a_log_endpoint_match_the_incomplete_gamma(gamma, beta):
             lp = float(mp.log(p))
         assert res.row_log_p[i] == pytest.approx(lp, abs=1e-12 * max(1.0, abs(lp)))
         ez = (float(ex) - g.center) / g.scale
-        assert res.row_mean[i, labels.index("x")] == pytest.approx(
+        assert res.row_mean[i, labels.index("z")] == pytest.approx(
             ez, abs=1e-11 * max(1.0, abs(ez))
         )
 
@@ -220,7 +220,9 @@ def test_rows_partitioning_the_support_recover_the_model(spec):
     res = _interval_state(ctx, theta, lower, upper, np.ones(lower.size), per_row=True)
     p = np.exp(res.row_log_p)
     assert p.sum() == pytest.approx(1.0, abs=1e-11)
-    scale = np.sqrt(np.abs(np.diag(state.cov))) + np.abs(state.mean) + 1e-300
+    # Moments are resolved relative to each column's spread and its natural
+    # magnitude where the data live (see the normalizer's column scale).
+    scale = np.sqrt(np.abs(np.diag(state.cov))) + np.abs(state.mean) + ctx.column_scale
     assert np.all(np.abs(p @ res.row_mean - state.mean) <= 1e-10 * scale)
     # Law of total covariance.
     between = (res.row_mean - state.mean).T @ (p[:, None] * (res.row_mean - state.mean))
@@ -230,7 +232,7 @@ def test_rows_partitioning_the_support_recover_the_model(spec):
 
 def test_whole_support_and_point_rows():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 1.0, "x^2": -4.0, "x": 0.5})
+    theta, _ = _theta(model, {"z^4": 1.0, "z^2": -4.0, "z": 0.5})
     ctx = _NormalizerContext(model)
     state = _basis_state(ctx, theta)
     x = np.array([-1.3, 0.2, 2.9])
@@ -258,7 +260,7 @@ def test_whole_support_and_point_rows():
 
 def test_log_probability_gradient_is_the_mean_difference():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 1.0, "x^2": -4.0, "x": 0.5})
+    theta, _ = _theta(model, {"z^4": 1.0, "z^2": -4.0, "z": 0.5})
     ctx = _NormalizerContext(model)
     rows = ([-INF, -1.0, 2.0], [-2.0, 1.5, INF])
     base = _interval_state(ctx, theta, *rows, np.ones(3), per_row=True)
@@ -364,9 +366,10 @@ def test_rows_match_independent_quadrature(spec):
 
 
 def test_flat_bulk_with_exponential_columns_resolves_its_far_moments():
-    # q = b z^2 with zero exponential amplitudes: E[e^{l x}] lives near
-    # z = l / 2b, far beyond the mass; the truncation now follows the moment
-    # tails (G3-043), E[exp column] ~ 6e7 here.
+    # q = b z^2 with zero exponential amplitudes: E[e^{lambda |z|}] lives near
+    # z = lambda / 2b, far beyond the mass, and E[Phi^2] near twice that; the
+    # truncation follows the moment tails.  With lambda = 2.5 and b = 0.1,
+    # E[exp column] ~ 2e6 and its second moment ~ e^62.
     model = _model(
         BasisSpec(
             bulk_degree=2,
@@ -375,10 +378,10 @@ def test_flat_bulk_with_exponential_columns_resolves_its_far_moments():
             expansion="minimal",
         )
     )
-    theta, _ = _theta(model, {"x^2": 0.01})
+    theta, _ = _theta(model, {"z^2": 0.1})
     state = _basis_state(_NormalizerContext(model), theta)
     g = model.geometry
-    panels = np.linspace(g.center - 900.0 * g.scale, g.center + 900.0 * g.scale, 9001)
+    panels = np.linspace(g.center - 200.0 * g.scale, g.center + 200.0 * g.scale, 8001)
     ref = _gl_panels(model, theta, panels)
     assert state.log_z == pytest.approx(ref[0], abs=1e-12)
     np.testing.assert_allclose(state.mean, ref[1], rtol=1e-10, atol=1e-12)
@@ -388,7 +391,7 @@ def test_an_unresolvable_row_fails_loudly_and_is_named():
     # A point row at a log endpoint has no finite density; the whole-support
     # normalization succeeds and the failure names the offending row.
     model = _model(BasisSpec(support=(0.0, INF), bulk_degree=1, log_lower=True))
-    theta, _ = _theta(model, {"logL": 2.0, "x": 1.0})
+    theta, _ = _theta(model, {"logL": 2.0, "z": 1.0})
     ctx = _NormalizerContext(model)
     with pytest.raises(_QuadratureFailure, match="point observation") as info:
         _interval_state(ctx, theta, [1.0, 0.0], [2.0, 0.0], [0.5, 0.5])
@@ -402,10 +405,10 @@ def test_many_rows_cost():
     ctx = _NormalizerContext(model)
     g = model.geometry
     rng = np.random.default_rng(0)
-    centre = g.center + g.scale * rng.normal(size=1000)
+    center = g.center + g.scale * rng.normal(size=1000)
     width = g.scale * rng.exponential(0.2, size=1000)
-    lower = np.where(rng.random(1000) < 0.1, -INF, centre - width)
-    upper = np.where(rng.random(1000) < 0.1, INF, centre + width)
+    lower = np.where(rng.random(1000) < 0.1, -INF, center - width)
+    upper = np.where(rng.random(1000) < 0.1, INF, center + width)
     _interval_state(ctx, theta, lower, upper, np.full(1000, 1e-3))
     t0 = time.perf_counter()
     res = _interval_state(ctx, theta, lower, upper, np.full(1000, 1e-3))

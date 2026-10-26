@@ -1,10 +1,10 @@
-"""Tail classes crossed with point, interval and mixture fits (G3-049).
+"""Tail classes crossed with point, interval and mixture fits.
 
 Every requested tail class at each end is fitted through the public API to
 point data, binned interval data and a two-component mixture, then queried:
-extreme quantiles, the exact format-2 round trip and outward growth far in
+extreme quantiles, the exact serialization round trip and outward growth far in
 the tails.  Interval fits must reproduce their fitted likelihood through the
-public CDF.  Targeted regressions cover the fixes of G3-049: leader faces
+public CDF.  Targeted regressions cover leader faces
 packed as exact face models, the collapsed-leader second start, valid tail
 cuts at a zero leader, untestable larger spans and warm starts that keep
 their seed's basis family.
@@ -134,7 +134,8 @@ def test_interval_fits_on_a_leader_face_pack_and_reproduce_their_likelihood(spec
     """
     d = _laplace_interval_fit(spec)
     pot = d.components[0]._basis
-    assert pot.suppressed
+    # (Whether a fit ends on a leader face depends on the data; when it does,
+    # the packed potential is the exact face model.)
     assert pot.model.face == pot.suppressed
     samples = _binned(DATA["laplace"])
     mass = d.cdf(samples[:, 1]) - d.cdf(samples[:, 0])

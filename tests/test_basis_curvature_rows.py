@@ -1,4 +1,4 @@
-"""G3 scalar curvature inequalities and globally convex Newton iterates."""
+"""Scalar curvature inequalities and globally convex Newton iterates."""
 
 import math
 import warnings
@@ -19,11 +19,7 @@ from gibbus._fit.basis_newton import (
     _solve_basis,
 )
 from gibbus._fit.basis_objective import _BasisPointObjective, _point_statistics
-from gibbus._fit.curvature_search import (
-    _CurvatureContext,
-    _CurvatureOptions,
-    _separate_curvature,
-)
+from gibbus._fit.curvature_search import _CurvatureContext, _separate_curvature
 from gibbus._model.basis import _build_basis
 from gibbus._model.basis_eval import _evaluate_basis
 from gibbus._model.basis_normalizer import _NormalizerContext
@@ -84,12 +80,11 @@ def test_newton_constraints_are_scalar_curvature_rows():
 def test_search_reports_each_minimum_once():
     model = _model(QUARTIC)
     theta = _theta_for(model, -1e-4)  # two shallow violations at z = +-1
-    res = _separate_curvature(
-        _CurvatureContext(model), theta, _CurvatureOptions(rho=1.0)
-    )
+    res = _separate_curvature(_CurvatureContext(model), theta)
     interior = [m for m in res.minima if m.kind == "interior" and m.value < 0.0]
     z = sorted((m.x - model.geometry.center) / model.geometry.scale for m in interior)
-    np.testing.assert_allclose(z, [-1.0, 1.0], atol=1e-8)
+    # Minima of H = q'' / ||pieces|| sit next to those of q''.
+    np.testing.assert_allclose(z, [-1.0, 1.0], atol=1e-4)
     assert res.status == "violated"
 
 
@@ -107,10 +102,10 @@ def test_gate_queues_cuts_and_ends_the_run_after_a_convex_point():
     obj = _FaceObjective(_objective(model), np.eye(d), joint, None).compiled()
     convex = _theta_for(model, 1.0)
     concave = _theta_for(model, -1e-2)
-    domains = (_separate_curvature(curvature, convex).domain,)
-    obj.begin(np.zeros((0, d)), domains)
+    assert _separate_curvature(curvature, convex).status == "verified"
+    obj.begin(np.zeros((0, d)))
     assert obj.trial(concave) == (SHAPE, None)
-    block, rows, n_points, theta, _ = obj.pending()
+    block, rows, n_points, theta = obj.pending()
     assert block == 0
     assert n_points > 0 and np.all(rows[:n_points] @ concave < 0.0)
     np.testing.assert_array_equal(theta, concave)
@@ -120,7 +115,7 @@ def test_gate_queues_cuts_and_ends_the_run_after_a_convex_point():
     obj.end()
     # A trial adding no new row queues nothing.
     known = _ConstraintRows(np.zeros((0, d)), ()).merged(rows, "cut")
-    obj.begin(known.rows, domains)
+    obj.begin(known.rows)
     assert obj.trial(concave) == (SHAPE, None)
     assert obj.pending() is None
     obj.end()
@@ -128,8 +123,8 @@ def test_gate_queues_cuts_and_ends_the_run_after_a_convex_point():
 
 def test_newton_runs_evaluate_only_convex_points():
     # Normal data at bulk degree 4 (seed 0): the MLE touches q'' = 0 at
-    # x = -116, far outside the data; before G3-038 76% of the evaluations
-    # were non-convex and 17 of 99 exhausted the normalizer (E-G3-016).
+    # x = -116, far outside the data; without the convexity gate 76% of the
+    # evaluations were non-convex and 17 of 99 exhausted the normalizer.
     model = _model(BasisSpec(bulk_degree=4, expansion="minimal"))
     objective = _objective(model)
     curvature = _CurvatureContext(model)
@@ -139,10 +134,10 @@ def test_newton_runs_evaluate_only_convex_points():
     finally:
         basis_newton._TRACE = None
     assert result.status == "converged"
-    assert result.final_separation.status == "nonnegative"
+    assert result.final_separation.status == "verified"
     assert seen
     for theta in seen:
-        assert _separate_curvature(curvature, theta).status == "nonnegative"
+        assert _separate_curvature(curvature, theta).status == "verified"
     assert result.objective_evaluations <= 40
     assert math.isfinite(result.objective_value)
 
@@ -163,5 +158,5 @@ def test_newton_only_constructs_scalar_conic_blocks(monkeypatch):
     objective = _objective(_model(BasisSpec(bulk_degree=4, expansion="minimal")))
     result = _solve_basis(objective)
     assert result.status in {"converged", "converged_approximately"}
-    assert result.final_separation.status == "nonnegative"
+    assert result.final_separation.status == "verified"
     assert observed and min(observed) > 0

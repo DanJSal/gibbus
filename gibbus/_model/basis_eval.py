@@ -1,9 +1,4 @@
-"""Numerical evaluation of a compiled G3 basis and its ``x`` derivatives.
-
-G1 owner replaced: ``_model/vec.py`` and the potential-partial evaluation of
-``_model/spec.py``/``_model/_state_kernels.pyx``.  Retained from G1: endpoint
-distances in user units at finite boundaries (no reconstruction from two
-fitting coordinates).
+"""Numerical evaluation of a compiled basis and its ``x`` derivatives.
 
 Every retained column is ``sum_j f_j(x) G_j(x)`` with an exact gate
 ``G = alpha_0 + alpha_1 t_L + alpha_2 t_U``.  Derivatives (up to order four)
@@ -11,31 +6,32 @@ are taken with respect to the user coordinate ``x`` from the *same* columns,
 so ``q`` and all its derivatives share one coefficient vector by
 construction.
 
-Gates are evaluated without cancellation toward suppressed ends.  Writing
-``p = 1 + t`` and ``m = 1 - t`` (each ``2 expit(+-2u)``, accurate down to
-underflow), a gate has the exact rearrangements
+Gates are evaluated without cancellation toward suppressed ends through the
+exact partition ``W_L + W_C + W_U = 1`` of the Gaussian gates:
 
-* lower form: ``(alpha_0 - alpha_1 + alpha_2) + alpha_1 p_L - alpha_2 m_U``,
-* upper form: ``(alpha_0 + alpha_1 - alpha_2) - alpha_1 m_L + alpha_2 p_U``,
+``G = g_L W_L + kappa W_C + g_U W_U``
 
-whose constants are the exact gate limits at ``-inf`` / ``+inf``.  The lower
-form is used below the gate midpoint and the upper form above it, so an
-exactly suppressed limit contributes an exact zero constant and the residual
-is a product of accurately computed small factors.  Gate derivatives are
-polynomials in ``t`` times ``1 - t**2 = p m``, also free of cancellation.
+with the gate's limits ``g_L = alpha_0 - alpha_1 + alpha_2``,
+``kappa = alpha_0 + alpha_1 + alpha_2`` and ``g_U = alpha_0 + alpha_1 -
+alpha_2`` as exact constants and the nonnegative weights
+``W_L = Phi(-s (z + 1))``, ``W_U = Phi(s (z - 1))`` (``erfc``, accurate down to
+underflow) and ``W_C`` (a gate minus the far weight on each side).  An exactly
+suppressed limit contributes an exact zero, and every derivative of a weight
+is a Hermite polynomial times the Gaussian density.
 
-Internal functions follow the fitting coordinate ``z = (x - c) / h``:
-monomials are ``z**n`` and soft powers ``(z**2 + delta / h**2)**(p/2)``;
-logarithms and exponentials use physical distances directly.  Finite
-endpoints with an enabled logarithm are singular: the log column is ``+inf``
-there.  Points must lie in the closed support; the evaluator performs no
-input validation beyond that numerical invariant.
+Internal functions follow the canonical coordinate ``z = (x - c) / h``:
+monomials are ``z**n``, soft powers ``A(z)**p`` (truncated Taylor arithmetic,
+finite to fourth order at the origin) and exponentials are centered at their
+own gate; logarithms use physical distances directly.  Finite endpoints with an
+enabled logarithm are singular: the log column is ``+inf`` there.  Points must
+lie in the closed support; the evaluator performs no input validation beyond
+that numerical invariant.  Values beyond binary64 range overflow to the
+correctly signed infinity.
 
 The arithmetic runs in the compiled ``_basis_kernels`` (``eval_point``,
-``potential_point``) on the model's column table ``model.kernel``; the
-tanh derivatives are ``t' = c w``, ``t'' = -2 c^2 t w``,
-``t''' = -2 c^3 w (1 - 3 t^2)``, ``t'''' = 8 c^4 t w (2 - 3 t^2)`` with
-``w = p m`` and ``c = du/dx``.
+``potential_point``) on the model's column table ``model.kernel``.  The scaled
+curvature for shape checks far outside binary64 range is the structured
+kernel ``_basis_kernels.curvature``.
 """
 
 from dataclasses import dataclass

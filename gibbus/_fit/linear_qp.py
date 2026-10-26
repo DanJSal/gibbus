@@ -15,6 +15,8 @@ import numpy as np
 from scipy.linalg import solve_triangular
 from scipy.optimize import nnls
 
+from .._defaults import CONIC_QP_GAP_TOL, NUMERIC_FAILURES, _reraise_if_debug
+
 
 @dataclass(frozen=True)
 class _LinearQPResult:
@@ -30,6 +32,16 @@ def _strict_direction(rows):
     Project ``(0, 1)`` onto ``rows @ v >= t >= 0``. A positive ``t``
     supplies a strict direction without a separate linear-program solver or
     process-global scheduler state.
+
+    Parameters
+    ----------
+    rows : numpy.ndarray
+        Normalized constraint rows, shape ``(m, n)``.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        A strict direction, or ``None`` when the margin is not resolved.
     """
     n, m = rows.shape[1], rows.shape[0]
     augmented = np.vstack([np.c_[rows, -np.ones(m)], np.eye(n + 1)[-1]])
@@ -38,7 +50,7 @@ def _strict_direction(rows):
     point = target + augmented.T @ dual
     direction, margin = point[:-1], point[-1]
     if margin <= 0.0 or np.min(rows @ direction) < 0.5 * margin:
-        raise np.linalg.LinAlgError("unresolved quadratic interior")
+        return None
     return direction
 
 
@@ -50,14 +62,32 @@ def _linear_subproblem(hessian, gradient, params, rows, /):
     allowance. When it is not positive the bound is infinite, even if NNLS
     finds a useful direction. Residuals and model values are accumulated in
     extended precision where available, with an arithmetic error allowance.
+
+    Parameters
+    ----------
+    hessian : numpy.ndarray
+        Model metric, shape ``(n, n)``.
+    gradient, params : numpy.ndarray
+        Model gradient and current point, shape ``(n,)``.
+    rows : numpy.ndarray
+        Homogeneous constraint rows, shape ``(m, n)``.
+
+    Returns
+    -------
+    _LinearQPResult or None
+        The endpoint, or ``None`` when the projection is unresolved (a
+        non-finite model, a non-positive metric diagonal, a null or
+        non-finite row, an unresolved interior or endpoint): the caller
+        defers to the interior-point kernel.
     """
     h = np.asarray(hessian, dtype=float)
     g = np.asarray(gradient, dtype=float)
     theta = np.asarray(params, dtype=float)
     b = np.asarray(rows, dtype=float)
     diagonal = np.diag(h)
-    if np.any(diagonal <= 0.0) or not np.all(np.isfinite(h)):
-        raise np.linalg.LinAlgError("unresolved quadratic metric")
+    finite = all(np.all(np.isfinite(v)) for v in (h, g, theta, b))
+    if not finite or np.any(diagonal <= 0.0):
+        return None
     d = 1.0 / np.sqrt(diagonal)
     hs = d[:, None] * (0.5 * (h + h.T)) * d[None, :]
     gs = d * g
@@ -65,7 +95,7 @@ def _linear_subproblem(hessian, gradient, params, rows, /):
     bs = b * d
     magnitude = np.linalg.norm(bs, axis=1)
     if np.any(magnitude <= 0.0) or not np.all(np.isfinite(magnitude)):
-        raise np.linalg.LinAlgError("unresolved quadratic constraints")
+        return None
     bs = bs / magnitude[:, None]
     factor = np.linalg.cholesky(hs)
     a = solve_triangular(factor, bs.T, lower=True)
@@ -87,9 +117,11 @@ def _linear_subproblem(hessian, gradient, params, rows, /):
     slack = bs @ p
     if np.min(slack) < 0.0:
         direction = _strict_direction(bs)
+        if direction is None:
+            return None
         margin = bs @ direction
         if np.min(margin) <= 0.0:
-            raise np.linalg.LinAlgError("unresolved quadratic interior")
+            return None
         floor = 16.0 * np.finfo(float).eps * np.maximum(1.0, np.abs(bs) @ np.abs(p))
         p = p + max(0.0, float(np.max((floor - slack) / margin))) * direction
 
@@ -139,7 +171,7 @@ def _linear_subproblem(hessian, gradient, params, rows, /):
             + np.finfo(float).eps * abs(model)
         )
     if not np.all(np.isfinite(endpoint)) or not np.isfinite(model):
-        raise np.linalg.LinAlgError("unresolved quadratic endpoint")
+        return None
     return _LinearQPResult(endpoint, -z / magnitude, model, gap)
 
 
@@ -147,12 +179,33 @@ def _projection_candidate(hessian, gradient, params, rows, /):
     """Return a resolved scalar QP endpoint, or defer to the conic kernel.
 
     Kernel eligibility uses the common quadratic gap target in the original
-    model. A finite but poorly resolved projection must not displace a usable
-    interior-point solve. This decision has no knowledge of basis families.
-    """
-    from .._defaults import CONIC_QP_GAP_TOL
+    model. An unresolved projection defers to the interior-point solver.
+    This decision has no knowledge of basis families.
 
-    result = _linear_subproblem(hessian, gradient, params, rows)
+    Parameters
+    ----------
+    hessian : numpy.ndarray
+        Model metric, shape ``(n, n)``.
+    gradient, params : numpy.ndarray
+        Model gradient and current point, shape ``(n,)``.
+    rows : numpy.ndarray
+        Homogeneous constraint rows, shape ``(m, n)``.
+
+    Returns
+    -------
+    _LinearQPResult or None
+        A resolved endpoint, or ``None`` to defer to the interior-point kernel.
+    """
+    try:
+        result = _linear_subproblem(hessian, gradient, params, rows)
+    except NUMERIC_FAILURES as exc:
+        # Routine: NumPy/SciPy could not factor or solve this model (an
+        # indefinite metric, an NNLS iteration limit); the interior-point
+        # kernel solves the same subproblem.
+        _reraise_if_debug(exc, "scalar QP projection", routine=True)
+        return None
+    if result is None:
+        return None
     limit = CONIC_QP_GAP_TOL * max(1.0, abs(result.model_value))
     if not np.isfinite(result.gap) or result.gap > limit:
         return None

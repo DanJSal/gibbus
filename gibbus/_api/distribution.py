@@ -509,7 +509,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             ``None``; ``component_options`` may still set per-component
             degrees.  With ``init_from`` it replaces the seed's basis family
             (its support must equal the seed's); without it a warm start
-            inherits the seed's family (tails, span policy, tanh geometry).
+            inherits the seed's family (tails and span policy).
 
         max_fit_seconds : float or None, optional
             Positive wall-time budget shared by selection, component fits,
@@ -659,15 +659,13 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._ensure_fitted()
         if self._K == 1:
             return self._components[0].cdf(x)
-        pot, spectral_cdf, support = self._base_probability_parts()
+        _, spectral_cdf, support = self._base_probability_parts()
         if self._default == "base":
             return cdf_hybrid(
-                pot,
                 spectral_cdf,
                 x,
                 float(support[0]),
                 upper_endpoint=float(support[1]),
-                log_tail_mass=self._base_log_tail_mass,
                 log_tail_masses=self._base_log_tail_masses,
             )
         arr = np.asarray(x, dtype=np.float64)
@@ -676,12 +674,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             lx = np.log(arr)
             out = np.asarray(
                 cdf_hybrid(
-                    pot,
                     spectral_cdf,
                     lx,
                     float(support[0]),
                     upper_endpoint=float(support[1]),
-                    log_tail_mass=self._base_log_tail_mass,
                     log_tail_masses=self._base_log_tail_masses,
                 )
             )
@@ -762,9 +758,6 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         else:
             potential = self._mix_base_potential
             raw_ppf = self._mix_base_ppf
-        tail_mass = (
-            first._exact_tail_log_mass if self._K == 1 else self._mix_base_log_tail_mass
-        )
         return refine_tail_quantiles(
             potential,
             raw_ppf,
@@ -772,7 +765,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             float(supp[1]),
             p,
             base_out,
-            log_tail_mass=tail_mass,
+            log_tail_masses=self._base_log_tail_masses,
         )
 
     def _base_ppf_for_extensions(self, p):
@@ -809,26 +802,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             np.asarray(self._components[0].base.support, dtype=np.float64),
         )
 
-    def _base_log_tail_mass(self, x, endpoint, /, *, upper):
-        """Return an exact base-space tail mass without mixture-potential quadrature.
-
-        Parameters
-        ----------
-        x : float
-            Tail anchor in base coordinates.
-        endpoint : float
-            Support endpoint in the requested tail direction.
-        upper : bool
-            Select the upper tail instead of the lower tail.
-        """
-        if self._K == 1:
-            return self._components[0].base._exact_tail_log_mass(
-                x, endpoint, upper=upper
-            )
-        return self._mix_base_log_tail_mass(x, endpoint, upper=upper)
-
     def _base_log_tail_masses(self, x, endpoint, /, *, upper):
-        """Batched ``_base_log_tail_mass`` over an array of anchors.
+        """Exact base-space tail masses without mixture-potential quadrature.
 
         Parameters
         ----------
@@ -840,9 +815,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Select the upper tail instead of the lower tail.
         """
         if self._K == 1:
-            return self._components[0].base._exact_tail_log_masses(
-                x, endpoint, upper=upper
-            )
+            return self._components[0].base._tail_log_masses(x, endpoint, upper=upper)
         return self._mix_base_log_tail_masses(x, endpoint, upper=upper)
 
     def logpdf(self, x) -> float | np.ndarray:
@@ -873,15 +846,13 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._ensure_fitted()
         if self._K == 1:
             return self._components[0].logcdf(x)
-        pot, cdf, support = self._base_probability_parts()
+        _, cdf, support = self._base_probability_parts()
         if self._default == "base":
             return log_cdf_hybrid(
-                pot,
                 cdf,
                 x,
                 float(support[0]),
                 upper_endpoint=float(support[1]),
-                log_tail_mass=self._base_log_tail_mass,
                 log_tail_masses=self._base_log_tail_masses,
             )
         arr = np.asarray(x, dtype=np.float64)
@@ -890,12 +861,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             lx = np.log(arr)
             out = np.asarray(
                 log_cdf_hybrid(
-                    pot,
                     cdf,
                     lx,
                     float(support[0]),
                     upper_endpoint=float(support[1]),
-                    log_tail_mass=self._base_log_tail_mass,
                     log_tail_masses=self._base_log_tail_masses,
                 )
             )
@@ -927,15 +896,13 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         self._ensure_fitted()
         if self._K == 1:
             return self._components[0].logsf(x)
-        pot, cdf, support = self._base_probability_parts()
+        _, cdf, support = self._base_probability_parts()
         if self._default == "base":
             return log_sf_hybrid(
-                pot,
                 cdf,
                 x,
                 float(support[1]),
                 lower_endpoint=float(support[0]),
-                log_tail_mass=self._base_log_tail_mass,
                 log_tail_masses=self._base_log_tail_masses,
             )
         arr = np.asarray(x, dtype=np.float64)
@@ -944,12 +911,10 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             lx = np.log(arr)
             out = np.asarray(
                 log_sf_hybrid(
-                    pot,
                     cdf,
                     lx,
                     float(support[1]),
                     lower_endpoint=float(support[0]),
-                    log_tail_mass=self._base_log_tail_mass,
                     log_tail_masses=self._base_log_tail_masses,
                 )
             )
@@ -973,7 +938,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             self._base_ppf_for_extensions,
             support,
             _validate_probabilities(p, "isf"),
-            log_tail_mass=self._base_log_tail_mass,
+            log_tail_masses=self._base_log_tail_masses,
         )
         if self._default == "base":
             return base
@@ -999,7 +964,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             self._base_ppf_for_extensions,
             support,
             _validate_log_probabilities(log_p, "logppf"),
-            log_tail_mass=self._base_log_tail_mass,
+            log_tail_masses=self._base_log_tail_masses,
         )
         if self._default == "base":
             return base
@@ -1025,7 +990,7 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             self._base_ppf_for_extensions,
             support,
             _validate_log_probabilities(log_p, "logisf"),
-            log_tail_mass=self._base_log_tail_mass,
+            log_tail_masses=self._base_log_tail_masses,
         )
         if self._default == "base":
             return base
@@ -1347,7 +1312,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Defaults to the selected component count/degrees, endpoint logs and
             resolved tail family/parameters. Data-adaptive geometry and
             automatic span expansion are recomputed. Pass a new ``basis``
-            or legacy structural overrides to change that policy; use
+            or the structural arguments (``poly_degree``, ``support``,
+            ``log_boundary_*``) to change that policy; use
             ``{"n_components": "auto"}`` to reselect the count. Simulation
             and refitting use base coordinates in both active views.
 
@@ -1471,8 +1437,8 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
             Overrides for each refit. Defaults to the selected component
             count/degrees, endpoint logs and resolved tail family/parameters.
             Automatic geometry and span expansion are recomputed. A new
-            ``basis`` replaces inherited structure; legacy structural
-            overrides update it. Use ``{"n_components": "auto"}`` to
+            ``basis`` replaces inherited structure; the structural arguments
+            (``poly_degree``, ``support``, ``log_boundary_*``) update it. Use ``{"n_components": "auto"}`` to
             reselect the count. If ``sample_weight`` is supplied here, it
             must match the original rows and is resampled with those rows.
 
@@ -2117,12 +2083,12 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
 
     @property
     def data(self):
-        """Return a deep copy of the versioned durable serialized state.
+        """Return a deep copy of the durable serialized state.
 
         The non-object NumPy structured scalar can be persisted with
         :func:`numpy.save` and loaded with ``allow_pickle=False``.  Its
-        durable ``model`` section is versioned independently of optional
-        provenance and same-version runtime cache data.
+        durable ``model`` section is separate from the optional provenance
+        and runtime cache sections.
 
         Returns
         -------
@@ -2145,22 +2111,27 @@ class Distribution(_MixtureAnalyticsMixin, _DiagnosticsMixin):
         )
 
     def load(self, state) -> "Distribution":
-        """Load a previously saved versioned durable state.
+        """Load a previously saved durable state.
 
-        The format/version and frozen mathematical model are validated before
+        The envelope and the mathematical model are validated before
         installation. Optional stale or invalid runtime cache data is rebuilt.
         The current instance changes only after the durable state has validated.
 
         Parameters
         ----------
         state : numpy.void
-            Versioned serialized state previously obtained from :attr:`data`
+            Serialized state previously obtained from :attr:`data`
             or loaded from a NumPy file with ``allow_pickle=False``.
 
         Returns
         -------
         Distribution
             ``self``.
+
+        Raises
+        ------
+        ValueError
+            If the envelope or the durable model is invalid.
         """
         loaded = load_distribution_state(state)
         target = Distribution()

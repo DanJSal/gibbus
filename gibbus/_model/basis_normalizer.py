@@ -1,18 +1,15 @@
-"""Normalized candidate state of a G3 basis density ``p = exp(-q) / Z``.
+"""Normalized candidate state of a basis density ``p = exp(-q) / Z``.
 
-G1 owner replaced: ``_model/natural_state.py`` (``_NaturalCoreState``),
-``_model/numerics.py``, ``_model/moments.py`` and the normalization/Fisher
-traversal of ``_model/_state_kernels.pyx``.  As in G1, one state object binds
-a coefficient vector to its normalization and model moments and is what the
-objectives, solver and (Stage 5) postfit consume.  Replaced: G1's
-mode-bracketed QUADPACK windows, which assume a convex polynomial potential;
-G3 trial potentials need not be convex and are not polynomial.
+One state object binds a coefficient vector to its normalization and model
+moments and is what the objectives, solver and post-fit code consume.  Trial
+potentials need not be convex and are not polynomial, so the integration is
+driven by interval enclosures rather than mode-bracketed windows.
 
 For a coefficient vector ``theta`` this module returns ``log Z``,
 ``E[Phi]`` and ``Cov[Phi]`` (the point-likelihood gradient and exact Fisher
 matrix) from one shared set of quadrature nodes, with an error estimate.
 There is no fallback path: a configuration the algorithm cannot resolve to
-the requested accuracy raises :class:`_QuadratureFailure` (G3-030).
+the requested accuracy raises :class:`_QuadratureFailure`.
 
 1. **Properness** (``basis_tails``): at each infinite end the leading term of
    ``dq/dzeta`` must be positive and non-decaying.  If not, ``Z = inf``
@@ -31,7 +28,7 @@ the requested accuracy raises :class:`_QuadratureFailure` (G3-030).
    error budget); cells where ``q`` may vary by more than ``V`` are split, so
    no region carrying mass can be missed, however narrow or multimodal.
 4. **Integration**, all kept cells batched; each cell's rule is fixed by the
-   integrand's analytic structure on it (G3-050).  On a cell where
+   integrand's analytic structure on it.  On a cell where
    ``e^{-q}`` is analytic, the Gauss--Kronrod 10/21 rule: the Kronrod value,
    settled when its contributions to ``Z``, ``E[Phi]`` and ``E[Phi^2]``
    differ from the embedded Gauss rule's by less than the cell's share of
@@ -41,13 +38,13 @@ the requested accuracy raises :class:`_QuadratureFailure` (G3-030).
    same share.  Cells that do not settle are split.
 
 Values are shifted by a reference potential before exponentiation, and the
-covariance is computed in a second, centred pass.  Truncation also requires
+covariance is computed in a second, centered pass.  Truncation also requires
 the moment tails to be negligible against the column scales (the moments of
 an exponential column under a flat potential live far beyond the mass), and
 where ``e^{-(q - q_ref)}`` is subnormal the moment products are formed in
-logs (G3-043).
+logs.
 
-**Interval rows** (``_interval_state``, G3-043).  The mass ``P(B)`` and
+**Interval rows** (``_interval_state``).  The mass ``P(B)`` and
 conditional moments ``E[Phi | B]``, ``Cov(Phi | B)`` of each observation row
 ``B`` are resolved to ``rel_tol`` relative to ``P(B)`` itself, so small
 masses far in a tail keep their relative accuracy.  A row containing settled
@@ -120,7 +117,7 @@ from .basis_tails import _build_tail_model, _growth_verdict, _tail_on_face
 class _ImproperPotential(RuntimeError):
     """Typed signal that a candidate has ``Z = inf`` (exactly decided).
 
-    G1 objectives raise ``RuntimeError`` for non-normalizable candidates;
+    Objectives raise ``RuntimeError`` for non-normalizable candidates;
     this subclass lets solvers reject the step without matching messages.
     """
 
@@ -144,7 +141,7 @@ class _QuadratureFailure(RuntimeError):
 
 @dataclass(frozen=True)
 class _NormalizerOptions:
-    """Normalizer settings (G3-030 defaults).
+    """Normalizer settings.
 
     Parameters
     ----------
@@ -177,8 +174,6 @@ class _NormalizerOptions:
 @dataclass(frozen=True)
 class _BasisState:
     """Normalized candidate state for one coefficient vector.
-
-    The G3 counterpart of G1's ``_NaturalCoreState``.
 
     Parameters
     ----------
@@ -265,17 +260,23 @@ class _NormalizerContext:
 
 
 def _column_growth(model, tail, /):
-    """Per column, atoms ``(C, b, r)`` with ``|Phi_c| <= sum C zeta^b e^{r zeta}``.
+    """Per column, atoms ``(C, b, r, c)``: ``|Phi_c| <= sum C zeta^b e^{r zeta + c}``.
 
-    Valid for ``zeta >= tail.zeta_min`` (raised to keep log arguments >= 1).
-    Uses ``|G| <= |alpha_0| + |alpha_1| + |alpha_2|``.
+    Valid for ``zeta >= tail.zeta_min`` (which keeps log arguments ``>= 1``).
+    Uses ``|alpha_0 + alpha_1 t_L + alpha_2 t_U| <= |alpha_0| + |alpha_1| +
+    |alpha_2|`` (``|t| <= 1``) and, along ``zeta = sign z``: ``|z^n| =
+    zeta^n``, ``A^p <= zeta^p`` (``A = (1 + z^4)^(1/4) - 1 <= |z|``), the
+    gate-centered exponentials ``e^{lambda (zeta - 1)}`` toward their own end
+    and ``e^{-lambda (zeta + 1)}`` toward the other (the constant kept in log
+    form), and ``|log(h (zeta + c0))| <= |log h| + |c0| + zeta`` for an
+    opposite-endpoint log.
 
     Parameters
     ----------
     model : _BasisModel
         Compiled basis.
-    tail : _TailGeometry
-        One infinite side's tail geometry.
+    tail : _TailModel
+        One infinite side's tail atoms.
     """
     geometry, request = model.geometry, model.request
     h, c = geometry.scale, geometry.center
@@ -287,27 +288,21 @@ def _column_growth(model, tail, /):
             fn = model.functions[j]
             gmag = float(abs(gate[0]) + abs(gate[1]) + abs(gate[2]))
             if fn.kind == "monomial":
-                atoms.append((gmag, float(fn.degree), 0.0))
+                atoms.append((gmag, float(fn.degree), 0.0, 0.0))
             elif fn.kind == "soft_power":
-                eps = fn.delta / h**2 / tail.zeta_min**2
-                atoms.append((gmag * (1.0 + eps) ** (0.5 * fn.power), fn.power, 0.0))
+                atoms.append((gmag, float(fn.power), 0.0, 0.0))
             elif fn.kind == "exponential":
-                lam = fn.rate * h
-                zloc = (fn.location - c) / h
-                if fn.side == "upper":
-                    r_f, log_k = sgn * lam, -lam * zloc
-                else:
-                    r_f, log_k = -sgn * lam, lam * zloc
-                atoms.append((gmag * math.exp(log_k), 0.0, r_f))
+                lam = float(fn.rate)
+                rate = lam if (fn.side == "upper") == (sgn > 0) else -lam
+                atoms.append((gmag, 0.0, rate, -lam))
             else:  # log of the opposite endpoint: |log(h (zeta + c0))|
                 c0 = (
                     -(request.lower - c) / h
                     if fn.side == _LOWER
                     else (request.upper - c) / h
                 )
-                # log(zeta + c0) <= zeta + |c0| for zeta + c0 >= 1.
-                atoms.append((gmag * (abs(math.log(h)) + abs(c0)), 0.0, 0.0))
-                atoms.append((gmag, 1.0, 0.0))
+                atoms.append((gmag * (abs(math.log(h)) + abs(c0)), 0.0, 0.0, 0.0))
+                atoms.append((gmag, 1.0, 0.0, 0.0))
         out.append(atoms)
     return out
 
@@ -462,11 +457,11 @@ def _basis_state(context, theta, /, options=None):
 class _IntervalState:
     """Normalized state plus the weighted conditional moments of interval rows.
 
-    The interval rows are G1's canonical observation rows (clipped to the
+    The interval rows are the canonical observation rows (clipped to the
     support, duplicates merged, normalized weights; ``_observations``).  A
     zero-width row is a point observation, a row covering the support the
     whole model, any other row ``B`` an integral over ``B`` resolved to the
-    normalizer's ``rel_tol`` relative to its own mass (G3-043).
+    normalizer's ``rel_tol`` relative to its own mass.
 
     Parameters
     ----------

@@ -262,7 +262,7 @@ One accumulated affine map belongs to the whole `Distribution` and applies unifo
 ---
 ## Serialization — Save & Load
 
-`Distribution.data` returns the versioned durable persistence representation for a fitted model. It is a NumPy structured scalar with no object dtype, so it can be saved and loaded without pickle:
+`Distribution.data` returns the durable persistence representation for a fitted model. It is a NumPy structured scalar with no object dtype, so it can be saved and loaded without pickle:
 
 ```python
 # Save
@@ -280,7 +280,7 @@ c4 = Distribution()
 c4.load(state)
 ```
 
-**`Distribution.data`** (property): Returns a deep copy of the current versioned serialization envelope.
+**`Distribution.data`** (property): Returns a deep copy of the current serialization envelope.
 
 **`Distribution.load(state)`**: Validate and install a saved model. The current instance changes only after the complete durable state has validated; an invalid state leaves the existing model unchanged.
 
@@ -290,11 +290,11 @@ The serialization format separates three concerns:
 - **`provenance`** is optional historical fit/optimizer metadata.
 - **`cache`** is optional implementation-specific derived numerical state used only when it is compatible with the running Gibbus version and the durable model.
 
-A missing, stale, or invalid cache is rebuilt rather than making the model unreadable. This allows future Gibbus versions to change spectral CDF/PPF implementations without changing the mathematical meaning of the durable format.
+A missing, stale, or invalid cache is rebuilt rather than making the model unreadable, so the numerical representations can change without changing the mathematical meaning of the durable format.
 
 ### State compatibility
 
-The durable format has its own `format_version`, independent of the Gibbus package version. A Gibbus build reads only the format it writes (format 2); any other version is rejected with an error asking for a refit, never reinterpreted or migrated.
+The durable format has its own `format_version` (`1`), independent of the Gibbus package version; a state with any other value is an invalid envelope.
 
 Within the format, loading preserves the fitted mathematical distribution and documented public state within the numerical accuracy of the running implementation. It does not promise bit-for-bit identity of derived panels, cached moments, or floating-point query results across releases.
 

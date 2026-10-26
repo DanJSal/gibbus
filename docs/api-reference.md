@@ -4,7 +4,7 @@ The public top-level API is intentionally small:
 
 ```python
 from gibbus import Distribution, suppressed_failures, clear_suppressed_failures
-from gibbus import BasisSpec, Polynomial, SoftPower, Exponential, TanhSpec, GibbusBasisWarning, FitTimeoutError
+from gibbus import BasisSpec, Polynomial, SoftPower, Exponential, GibbusBasisWarning, FitTimeoutError
 ```
 
 This page is an index of the supported public surface. Detailed parameter semantics and usage guidance are kept in the topical guides, while the source uses NumPy-style docstrings for callable-level reference material.
@@ -75,7 +75,7 @@ See [Fitting](fitting.md), [Using fitted distributions](using-distributions.md#s
 | `quantile_residuals(x, rng=None)` | Quantile residuals for observations. |
 | `fit_diagnostics` | Optimization and fitted-geometry diagnostics. |
 | `selection_diagnostics` | Automatic component-selection audit trail, or `None`. |
-| `tail_parameter_diagnostics` | Empirical tail proposals and backup-use record; preserved by copy/pickle, omitted from portable numeric state. |
+| `tail_parameter_diagnostics` | Empirical tail estimates per automatic end (family, estimated parameter, tail sample size); preserved by copy/pickle, omitted from portable numeric state. |
 | `spectral_diagnostics` | CDF/PPF representation health. |
 
 See [Diagnostics and model checking](diagnostics.md).
@@ -113,11 +113,10 @@ See [Diagnostics and model checking](diagnostics.md#module-level-helpers) for us
 
 | Name | Purpose |
 |---|---|
-| `BasisSpec` | Full potential-basis request for `fit(..., basis=...)`: support, bulk degree, endpoint logs, tail classes, span expansion, tanh geometry. Provisional. |
+| `BasisSpec` | Full potential-basis request for `fit(..., basis=...)`: support, bulk degree, endpoint logs, tail classes and span expansion. |
 | `Polynomial(power="auto")` | Integer polynomial tail class at an infinite end. |
-| `SoftPower(power="auto", delta="auto")` | Noninteger soft-power tail class. |
+| `SoftPower(power="auto")` | Noninteger soft-power tail class (`power > 1`). |
 | `Exponential(rate="auto")` | Directional exponential tail class. |
-| `TanhSpec` | Locations and steepnesses of the tanh gates. |
 | `GibbusBasisWarning` | Warning for a basis request that was reinterpreted (an integer `SoftPower` becomes `Polynomial`). |
 
 See [Fitting](fitting.md#basis-requests).
@@ -132,4 +131,4 @@ Timeouts preserve an existing fitted model. See [Fitting](fitting.md).
 
 For basis constructor defaults and automatic-parameter limits, see
 [Basis requests](fitting.md#basis-requests) and
-[Automatic tail parameters](AUTOMATIC_TAIL_PARAMETERS.md).
+[Automatic tail parameters](automatic-tail-parameters.md).

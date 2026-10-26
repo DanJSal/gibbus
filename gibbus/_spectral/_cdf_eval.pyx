@@ -8,10 +8,12 @@ physical x -> compact coordinate -> panel lookup -> local Chebyshev CDF.
 
 import numpy as np
 cimport numpy as cnp
-from libc.math cimport fabs, hypot, isinf, isnan
+from libc.math cimport fabs, isinf, isnan
 from libc.stdint cimport int32_t
 from libc.float cimport DBL_EPSILON
 from libc.stdlib cimport malloc, free
+
+from ._maps cimport Map, map_set, map_z
 
 cnp.import_array()
 
@@ -215,8 +217,7 @@ cdef inline void _cheb_value_derivative(
 cdef class SpectralEvaluator:
     """Compiled bulk evaluator for a packed spectral CDF."""
 
-    cdef int kind
-    cdef double L, U, center, scale
+    cdef Map mp
     cdef Py_ssize_t npanels, stride
 
     cdef cnp.ndarray _breaks_arr
@@ -250,15 +251,12 @@ cdef class SpectralEvaluator:
         Parameters
         ----------
         kind : int
-            Support type: 0 finite, 1 lower-bounded, 2 upper-bounded,
-            3 unbounded, 4 lower-bounded centered near the density, 5
-            upper-bounded centered near the density. Selects the
-            physical-to-compact map.
+            Map family (``_maps.pxd``): 0 affine, 1 anchored at the lower
+            end, 2 anchored at the upper end, 3 centered on the density.
         L, U : float
-            Support endpoints in physical coordinates.  The unused side
-            is ignored for half-lines.
+            Support endpoints in physical coordinates.
         center, scale : float
-            Affine parameters of the physical-to-compact map.
+            Map location (the anchoring end for kinds 1 and 2) and scale.
         breaks : array_like, shape (npanels + 1,)
             Panel boundaries in compact coordinates, ascending.
         offsets : array_like, shape (npanels,)
@@ -272,18 +270,14 @@ cdef class SpectralEvaluator:
         ------
         ValueError
             If *coeffs* is not 2-D, if there are no panels, or if the
-            panel arrays disagree on length; if *kind* is outside 0..5;
+            panel arrays disagree on length; if *kind* is outside 0..3;
             or if any live coefficient count is outside 1..stride.
         """
         cdef Py_ssize_t j
 
-        if kind < 0 or kind > 5:
-            raise ValueError("kind must be an integer in 0..5")
-        self.kind = kind
-        self.L = L
-        self.U = U
-        self.center = center
-        self.scale = scale
+        if kind < 0 or kind > 3:
+            raise ValueError("kind must be an integer in 0..3")
+        map_set(&self.mp, kind, L, U, center, scale)
 
         self._breaks_arr = np.ascontiguousarray(breaks, dtype=np.float64)
         self._offset_arr = np.ascontiguousarray(offsets, dtype=np.float64)
@@ -314,30 +308,7 @@ cdef class SpectralEvaluator:
 
     cdef inline double _z_from_x(self, double x) noexcept nogil:
         """Map a physical coordinate into the compact domain ``[-1, 1]``."""
-        cdef double y, t, y_edge, t_edge
-        if self.kind == 0:  # finite
-            return (x - self.center) / self.scale
-        if self.kind == 1:  # lower bounded
-            y = (x - self.L) / self.scale
-            return (y - 1.0) / (y + 1.0)
-        if self.kind == 2:  # upper bounded
-            y = (self.U - x) / self.scale
-            return (1.0 - y) / (1.0 + y)
-        if self.kind == 4:  # lower bounded, centered near the density
-            y = (x - self.center) / self.scale
-            t = y / (1.0 + hypot(1.0, y))
-            y_edge = (self.L - self.center) / self.scale
-            t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-            return 2.0 * (t - t_edge) / (1.0 - t_edge) - 1.0
-        if self.kind == 5:  # upper bounded, centered near the density
-            y = (x - self.center) / self.scale
-            t = y / (1.0 + hypot(1.0, y))
-            y_edge = (self.U - self.center) / self.scale
-            t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-            return 2.0 * (t + 1.0) / (t_edge + 1.0) - 1.0
-        # real line
-        y = (x - self.center) / self.scale
-        return y / (1.0 + hypot(1.0, y))
+        return map_z(&self.mp, x)
 
     cdef inline Py_ssize_t _panel_index(self, double z) noexcept nogil:
         """Return the index of the panel containing compact coordinate *z*."""
@@ -489,24 +460,10 @@ cdef class SpectralEvaluator:
         if isnan(x):
             return x
 
-        if self.kind == 0:
-            if x <= self.L:
-                return 0.0
-            if x >= self.U:
-                return 1.0
-        elif self.kind == 1 or self.kind == 4:
-            if x <= self.L:
-                return 0.0
-            if isinf(x) and x > 0.0:
-                return 1.0
-        elif self.kind == 2 or self.kind == 5:
-            if x >= self.U:
-                return 1.0
-            if isinf(x) and x < 0.0:
-                return 0.0
-        else:
-            if isinf(x):
-                return 1.0 if x > 0.0 else 0.0
+        if x <= self.mp.L:
+            return 0.0
+        if x >= self.mp.U:
+            return 1.0
 
         z = self._z_from_x(x)
         return self._eval_z_one(z)
@@ -579,38 +536,14 @@ cdef class SpectralEvaluator:
                 out[i] = xx
                 i += 1
                 continue
-            if self.kind == 0:
-                if xx <= self.L:
-                    out[i] = 0.0
-                    i += 1
-                    continue
-                if xx >= self.U:
-                    out[i] = 1.0
-                    i += 1
-                    continue
-            elif self.kind == 1 or self.kind == 4:
-                if xx <= self.L:
-                    out[i] = 0.0
-                    i += 1
-                    continue
-                if isinf(xx) and xx > 0.0:
-                    out[i] = 1.0
-                    i += 1
-                    continue
-            elif self.kind == 2 or self.kind == 5:
-                if xx >= self.U:
-                    out[i] = 1.0
-                    i += 1
-                    continue
-                if isinf(xx) and xx < 0.0:
-                    out[i] = 0.0
-                    i += 1
-                    continue
-            else:
-                if isinf(xx):
-                    out[i] = 1.0 if xx > 0.0 else 0.0
-                    i += 1
-                    continue
+            if xx <= self.mp.L:
+                out[i] = 0.0
+                i += 1
+                continue
+            if xx >= self.mp.U:
+                out[i] = 1.0
+                i += 1
+                continue
 
             z = self._z_from_x(xx)
             if z <= -1.0:
@@ -631,18 +564,8 @@ cdef class SpectralEvaluator:
                 xx = x[i]
                 if isnan(xx):
                     break
-                if self.kind == 0:
-                    if xx <= self.L or xx >= self.U:
-                        break
-                elif self.kind == 1 or self.kind == 4:
-                    if xx <= self.L or (isinf(xx) and xx > 0.0):
-                        break
-                elif self.kind == 2 or self.kind == 5:
-                    if xx >= self.U or (isinf(xx) and xx < 0.0):
-                        break
-                else:
-                    if isinf(xx):
-                        break
+                if xx <= self.mp.L or xx >= self.mp.U:
+                    break
                 z = self._z_from_x(xx)
                 if z <= -1.0 or z >= 1.0:
                     break
@@ -752,31 +675,12 @@ cdef class SpectralEvaluator:
                 if isnan(xx):
                     out[base + i] = xx
                     continue
-                if self.kind == 0:
-                    if xx <= self.L:
-                        out[base + i] = 0.0
-                        continue
-                    if xx >= self.U:
-                        out[base + i] = 1.0
-                        continue
-                elif self.kind == 1 or self.kind == 4:
-                    if xx <= self.L:
-                        out[base + i] = 0.0
-                        continue
-                    if isinf(xx) and xx > 0.0:
-                        out[base + i] = 1.0
-                        continue
-                elif self.kind == 2 or self.kind == 5:
-                    if xx >= self.U:
-                        out[base + i] = 1.0
-                        continue
-                    if isinf(xx) and xx < 0.0:
-                        out[base + i] = 0.0
-                        continue
-                else:
-                    if isinf(xx):
-                        out[base + i] = 1.0 if xx > 0.0 else 0.0
-                        continue
+                if xx <= self.mp.L:
+                    out[base + i] = 0.0
+                    continue
+                if xx >= self.mp.U:
+                    out[base + i] = 1.0
+                    continue
 
                 z = self._z_from_x(xx)
                 if z <= -1.0:

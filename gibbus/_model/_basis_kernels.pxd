@@ -36,15 +36,14 @@ cdef struct BasisTable:
     const int* side
     const int* degree
     const double* power
-    const double* delta
     const double* rate
-    const double* location
     const int* col_start
     const int* term_fn
     const double* term_g0
     const double* term_g1
     const double* term_g2
     const double* term_glow
+    const double* term_gmid
     const double* term_gup
     const double* cmap
     const double* cmap_low
@@ -60,8 +59,10 @@ cdef struct BasisTable:
     const double* orth_recurrence
     const double* orth_map
     const double* lim_low
+    const double* lim_mid
     const double* lim_up
     const double* lim_low_abs
+    const double* lim_mid_abs
     const double* lim_up_abs
     const int* nonneg
     const int* fn_used
@@ -69,15 +70,19 @@ cdef struct BasisTable:
     double h
     double lower
     double upper
+    double zlower
+    double zupper
     int has_l
     int has_u
-    double xl
-    double al
-    double xu
-    double au
-    double mid
+    double gate_s
+    int root
     int log_col_lower
     int log_col_upper
+    int natom
+    const int* atom_fn
+    const int* atom_gate
+    const double* atom_par
+    const double* atom_row
 
 
 cdef class BasisKernel:
@@ -96,6 +101,8 @@ cdef struct TailTable:
     const int* akind
     const double* apower
     const double* arate
+    const double* akappa
+    const double* aconst
     const double* aoffset
     const double* arow
     const double* acut
@@ -103,6 +110,8 @@ cdef struct TailTable:
     const double* ecoef
     const double* epower
     const double* erate
+    const double* ekappa
+    const double* econst
 
 
 cdef class TailKernel:
@@ -117,6 +126,8 @@ cdef struct TailResult:
     double lead_value
     double lead_power
     double lead_rate
+    double lead_kappa
+    double lead_const
     double margin
     bint has_lead
     bint has_margin
@@ -131,9 +142,16 @@ cdef struct PotentialPrep:
     Iv* slot
     int* slot_zero
     Iv* k_low
+    Iv* k_mid
     Iv* k_up
     int* skip
     int* gated
+    # Runtime recurrence coordinates: the q polynomial's coefficients in the
+    # recurrence basis per gate-limit combination (low, mid, up), the
+    # ungated flag, and whether the block is used.
+    Iv* orth_beta
+    int orth_on
+    int orth_gated
 
 
 cdef Py_ssize_t prep_size(const BasisTable* t) noexcept nogil
@@ -144,10 +162,22 @@ cdef double scaled_z(const BasisTable* t, double x) noexcept nogil
 cdef void eval_point(
     const BasisTable* t, double x, int order, double* fwork, double* out
 ) noexcept nogil
+cdef void eval_point_z(
+    const BasisTable* t, double z, int order, double* fwork, double* out
+) noexcept nogil
 cdef void potential_point(
     const BasisTable* t,
     const double* theta,
     double x,
+    int order,
+    double* fwork,
+    double* colwork,
+    double* q,
+) noexcept nogil
+cdef void potential_point_z(
+    const BasisTable* t,
+    const double* theta,
+    double z,
     int order,
     double* fwork,
     double* colwork,
@@ -191,6 +221,31 @@ cdef TailResult tail_verdict(
 ) noexcept nogil
 cdef int growth_status(const TailResult* res) noexcept nogil
 cdef double tail_bound(const TailResult* res, double zeta) noexcept nogil
+cdef int curvature_scaled(
+    const BasisTable* t,
+    const double* acoef,
+    Py_ssize_t npts,
+    const double* z,
+    bint use_fast,
+    double* H,
+    double* err_h,
+    double* log_m,
+    int* refk,
+    double* ref_a1,
+    double* ref_rem,
+    double* half_log_norm,
+) noexcept nogil
+cdef int curvature_rows(
+    const BasisTable* t,
+    Py_ssize_t npts,
+    const double* z,
+    bint use_fast,
+    double* R,
+    double* N,
+    int* refk,
+    double* ref_a1,
+    double* ref_rem,
+) noexcept nogil
 cdef double expit(double x) noexcept nogil
 cdef double logaddexp(double x, double y) noexcept nogil
 cdef double npmax(double a, double b) noexcept nogil

@@ -1,46 +1,44 @@
-"""Expansion selection for G3 point fits: G1's omitted-statistic score test.
+"""Expansion selection for basis fits: the omitted-statistic score test.
 
-G1 owner adapted: ``_fit/degree.py`` (``_omitted_statistic_diagnostic``, the
-degree ladder's "grow only when the omitted statistics are resolvable" rule).
-Retained from G1 unchanged: ``_DegreeSelectionConfig`` (``alpha = 0.05``,
-participation floor 8, variance inflation cap ``1e6``, ``covariance_rtol =
-1e-10``), the efficient score with the fitted statistics as nuisance
-coordinates, the Schur-complement conditional covariance, the conservative
-empirical/model variance inflation, the participation reliability guard, the
-chi-square calibration (a calibration device, not exact boundary asymptotics)
-and lifted warm starts.  Adapted: the probes are the columns of a larger span
-of the same basis instead of the next power moments; participation of a probe
-is measured per eigen-direction of the standardized conditional covariance,
-on the efficient (nuisance-residualized) statistic itself, and so is the
-variance inflation.  G1 inflates per probe statistic (``S C S``); with
-nearly singular ``C`` that moves its near-null space and divides the residual
-by spurious near-zero eigenvalues (a joint score of 1.2e4 for 10 directions
-of Gaussian data whose uninflated score is 8.9).  Per direction the guards
-are invariant to the probe representation.  A direction is resolvable only
-when its conditional variance exceeds ``covariance_rtol`` of the
-unconditional variance of a standardized probe (G1 cuts relative to the
-largest conditional eigenvalue, which is meaningless when every new direction
-is nearly redundant; the normalizer's ``1e-12`` moment accuracy leaves a
-hundredfold margin).
+A larger model is adopted only when its omitted statistics are resolvable.
+The policy is ``_DegreeSelectionConfig`` (``alpha = 0.05``, participation
+floor 8, variance inflation cap ``1e6``, ``covariance_rtol = 1e-10``); the
+test is the efficient score with the fitted statistics as nuisance
+coordinates, the Schur-complement conditional covariance, a conservative
+empirical/model variance inflation, the participation reliability guard,
+the chi-square calibration (a calibration device, not exact boundary
+asymptotics) and lifted warm starts.  The probes are the columns of a larger
+span of the same basis; participation of a probe is measured per
+eigen-direction of the standardized conditional covariance, on the efficient
+(nuisance-residualized) statistic itself, and so is the variance inflation.
+Inflating per probe statistic (``S C S``) instead would, with nearly
+singular ``C``, move its near-null space and divide the residual by spurious
+near-zero eigenvalues (a joint score of 1.2e4 for 10 directions of Gaussian
+data whose uninflated score is 8.9).  Per direction the guards are
+invariant to the probe representation.  A direction is resolvable only when
+its conditional variance exceeds ``covariance_rtol`` of the unconditional
+variance of a standardized probe (a cut relative to the largest conditional
+eigenvalue would be meaningless when every new direction is nearly
+redundant; the normalizer's ``1e-12`` moment accuracy leaves a hundredfold
+margin).
 
-**Policy (G3-035).**  ``expansion="auto"`` (default) fits the minimal span,
+**Policy.**  ``expansion="auto"`` (default) fits the minimal span,
 then repeats: a joint score test of every omitted full-span direction at
 ``alpha``; only if it rejects, the one-slot extension (``_grow_basis``) with
 the smallest p-value is fitted from the lifted current fit and kept only if
-its likelihood ratio also rejects at ``alpha`` (G3-044: a score pointing out
+its likelihood ratio also rejects at ``alpha`` (a score pointing out
 of the shape cone at an active curvature row gains nothing).  The joint gate
 holds the probability of a first spurious addition at ``alpha``.  A selected
 extension that does not converge fails loudly.
 
-**Interval data (G3-044).**  The score is ``sum w E[Phi | B] - E[Phi]`` and
-the information G1's missing-information identity ``Cov[Phi] - sum w
-Cov(Phi | B)``; as G1's ``_interval_omitted_statistic_diagnostic`` there is
-no variance inflation or participation guard.  ``expansion="full"`` fits the
+**Interval data.**  The score is ``sum w E[Phi | B] - E[Phi]`` and the
+information the missing-information identity ``Cov[Phi] - sum w
+Cov(Phi | B)``; there is no variance inflation or participation guard.  ``expansion="full"`` fits the
 full span and fails loudly when that fit fails or does not converge; the
 error reports the span the score test supports.  (Full-span directions with
 conditional information ~1e-9 of their variance are numerically resolvable
 but statistically undetermined at ordinary sample sizes; their MLE sits at
-|theta| ~ 1e3-1e5 and is fitted noise, G3-035.)
+|theta| ~ 1e3-1e5 and is fitted noise.)
 """
 
 import dataclasses
@@ -56,7 +54,12 @@ from .._defaults import (
     BOUNDARY_ALPHA,
     _reraise_if_debug,
 )
-from .._model.basis import _build_basis, _full_basis, _grow_basis
+from .._model.basis import (
+    _build_basis,
+    _full_basis,
+    _grow_basis,
+    _StructurallyImproper,
+)
 from .._model.basis_eval import _evaluate_basis
 from .._model.basis_normalizer import (
     _basis_state,
@@ -65,7 +68,10 @@ from .._model.basis_normalizer import (
     _QuadratureFailure,
 )
 from .._model.basis_spec import _AUTO, _AUTO_EXPANSION, _FULL, _MINIMAL
-from .._model.coords import _build_fit_coordinate, _build_interval_fit_coordinate
+from .._model.coords import (
+    _build_fit_coordinate,
+    _build_interval_fit_coordinate,
+)
 from .basis_newton import _Blocks, _matching_face, _solve_basis
 from .basis_objective import (
     _BasisIntervalObjective,
@@ -76,16 +82,20 @@ from .basis_objective import (
 )
 from .boundary import _select_boundary_terms
 from .budget import _check_fit_time
-from .conic_newton import _CONVERGED, _UNCERTIFIED, _NewtonOptions
+from .conic_newton import _CONVERGED, _UNVERIFIED, _NewtonOptions
 from .degree import _DegreeSelectionConfig, _project_psd, _psd_pinv
-from .inputs import _admissible_degrees, _normalize_basis_inputs
+from .inputs import (
+    _admissible_degrees,
+    _is_poly_degree_admissible,
+    _normalize_basis_inputs,
+)
 
 _LIFT_RTOL = 1e-12
 
 
 @dataclass(frozen=True)
 class _SpanDiagnostic:
-    """Score test of a larger span at the current fit (G1 ``_DegreeDiagnostic`` role).
+    """Score test of a larger span at the current fit.
 
     Parameters
     ----------
@@ -126,7 +136,7 @@ class _SpanDiagnostic:
 
 @dataclass(frozen=True)
 class _BasisFit:
-    """A fitted G3 point basis and how it was chosen.
+    """A fitted point basis and how it was chosen.
 
     Parameters
     ----------
@@ -137,7 +147,7 @@ class _BasisFit:
     history : tuple of _SelectionStep
         Degree steps, then expansion rounds.
     boundary_p_values : tuple of float
-        G1 one-sided likelihood-ratio p-values per side (``nan`` when the
+        One-sided likelihood-ratio p-values per side (``nan`` when the
         side was not decided automatically or needed no test).
     """
 
@@ -148,7 +158,7 @@ class _BasisFit:
 
 
 class _BasisConvergenceError(RuntimeError):
-    """An explicit G3 fit whose solver did not establish convergence.
+    """An explicit fit whose solver did not establish convergence.
 
     ``diagnostics`` records the last attempted model, optimization counters,
     predicted-decrease bound and numerical shape verdict.  The bound is a
@@ -173,7 +183,7 @@ class _BasisConvergenceError(RuntimeError):
         }
         self.diagnostics = diagnostics
         super().__init__(
-            f"the G3 fit at bulk_degree={degree} did not converge "
+            f"the fit at bulk_degree={degree} did not converge "
             f"({result.status}); no converged fit of the requested family; "
             f"exchanges={diagnostics['curvature_exchanges']}, "
             f"Newton iterations={diagnostics['newton_iterations']}, "
@@ -190,7 +200,7 @@ def _function_key(fn, /):
     fn : _BasisFunction
         A compiled basis function.
     """
-    return (fn.kind, fn.side, fn.degree, fn.power, fn.delta, fn.rate, fn.location)
+    return (fn.kind, fn.side, fn.degree, fn.power, fn.rate, fn.tail_sides)
 
 
 def _lift_matrix(current, larger, /):
@@ -198,7 +208,7 @@ def _lift_matrix(current, larger, /):
 
     Slots are matched by function identity, so bases of different bulk
     degree (different function lists) compare in the larger slot space; the
-    geometry must be the same, since the gates and centres define the
+    geometry must be the same, since the gates and centers define the
     functions.
 
     Parameters
@@ -249,7 +259,7 @@ class _PointData:
         Kish effective sample size.
     """
 
-    # G1's point policy: empirical variance inflation and participation.
+    # The point policy: empirical variance inflation and participation.
     guards = True
 
     def __init__(self, x, weights, effective_n, /):
@@ -257,6 +267,8 @@ class _PointData:
         self.x = np.asarray(x, dtype=np.float64)
         self.weights = weights
         self.effective_n = float(effective_n)
+        # Pooled coordinate per support: the fallback of component coordinates.
+        self._pooled = {}
 
     def build(self, spec, /):
         """Compile ``spec`` in the coordinate and geometry of these data.
@@ -271,8 +283,10 @@ class _PointData:
     def build_weighted(self, spec, responsibilities, /):
         """Compile ``spec`` in the coordinate of the data weighted by ``r``.
 
-        A mixture component's own coordinate and geometry (G1: each
-        component is fitted in its responsibility-weighted coordinate).
+        A mixture component's own coordinate and geometry (each component
+        is fitted in its responsibility-weighted coordinate).  A component
+        whose weighted landmarks do not identify a coordinate (most of its
+        weight on one tied value) uses the pooled data's coordinate.
 
         Parameters
         ----------
@@ -285,8 +299,14 @@ class _PointData:
         cw = w * np.asarray(responsibilities, dtype=np.float64)
         if np.all(cw == cw[0]):
             # Equal weights: the unweighted coordinate, exactly.
-            return _build_basis(spec, self.x, None, adaptive_geometry=False)
-        return _build_basis(spec, self.x, cw / cw.sum(), adaptive_geometry=False)
+            return _build_basis(spec, self.x, None)
+        support = tuple(map(float, spec.support))
+        if support not in self._pooled:
+            self._pooled[support] = _build_fit_coordinate(support, self.x, self.weights)
+        coordinate = _build_fit_coordinate(
+            support, self.x, cw / cw.sum(), fallback=self._pooled[support]
+        )
+        return _build_basis(spec, self.x, cw / cw.sum(), coordinate)
 
     def objective(self, model, /):
         """The point objective of ``model``.
@@ -308,7 +328,7 @@ class _PointData:
         model : _BasisModel
             Compiled basis.
         options : _NewtonOptions
-            G1 Newton policy.
+            Newton policy.
         """
         del model, options
 
@@ -335,13 +355,12 @@ class _PointData:
 
 
 class _IntervalData:
-    """Interval rows of a fit, with G1's interval fitting coordinate.
+    """Interval rows of a fit and their canonical coordinate.
 
-    The coordinate is G1's: midpoints and widths when every row is finite
-    (``_build_fit_coordinate``), else the censoring-landmark coordinate
-    (``_build_interval_fit_coordinate``); the basis geometry is placed by
-    the same landmarks (midpoints of finite rows, cutpoints of one-sided
-    rows; whole-support rows carry none).
+    The coordinate comes from the quantiles of the censored empirical
+    distribution of the rows (``_build_interval_fit_coordinate``).  The
+    representative points (midpoints of finite rows, cutpoints of one-sided
+    rows; whole-support rows carry none) serve the runtime coordinates.
 
     Parameters
     ----------
@@ -355,7 +374,7 @@ class _IntervalData:
         Kish effective sample size.
     """
 
-    # G1's interval policy (``_interval_omitted_statistic_diagnostic``): the
+    # The interval policy: the
     # observed information alone, no variance inflation or participation
     # guard (rows are merged, so participation would count distinct rows,
     # not observations: binned data have only their bins).
@@ -368,9 +387,11 @@ class _IntervalData:
         self.rows = _interval_rows(support, x, weights)
         self.effective_n = float(effective_n)
         self._support, self._x, self._w = support, x, w
-        self.coordinate, self.points, self.point_weights = self._geometry(w, weights)
+        self.coordinate, self.points, self.point_weights = self._geometry(
+            w, weights, None
+        )
 
-    def _geometry(self, w, weights, /):
+    def _geometry(self, w, weights, fallback, /):
         """``(coordinate, points, point_weights)`` of the rows weighted by ``w``.
 
         ``weights`` is what the coordinate builders see (``None``: unweighted).
@@ -381,16 +402,19 @@ class _IntervalData:
             Row weights of the coordinate, shape ``(R,)``.
         weights : numpy.ndarray or None
             Weights passed to the coordinate builders (``None``: unweighted).
+        fallback : _FitCoordinate or None
+            Coordinate used when the weighted rows do not identify one
+            (``None``: raise).
         """
         support, x = self._support, self._x
         lo, hi = x[:, 0], x[:, 1]
         finite = np.isfinite(lo) & np.isfinite(hi)
+        coordinate = _build_interval_fit_coordinate(
+            support, x, weights, fallback=fallback
+        )
         if np.all(finite):
-            mid = 0.5 * lo + 0.5 * hi
-            coordinate = _build_fit_coordinate(support, mid, weights, hi - lo)
-            points, pw = mid, w
+            points, pw = 0.5 * lo + 0.5 * hi, w
         else:
-            coordinate = _build_interval_fit_coordinate(support, x, weights)
             one_sided = np.isfinite(lo) ^ np.isfinite(hi)
             cut = np.where(np.isfinite(lo), lo, hi)
             keep = finite | one_sided
@@ -401,6 +425,10 @@ class _IntervalData:
     def build_weighted(self, spec, responsibilities, /):
         """Compile ``spec`` in the coordinate of the rows weighted by ``r``.
 
+        A component whose weighted rows do not identify a coordinate (most
+        of its weight on one censoring cutpoint) uses the pooled rows'
+        coordinate.
+
         Parameters
         ----------
         spec : BasisSpec
@@ -410,8 +438,10 @@ class _IntervalData:
         """
         cw = self._w * np.asarray(responsibilities, dtype=np.float64)
         uniform = np.all(cw == cw[0])
-        coordinate, points, pw = self._geometry(cw, None if uniform else cw / cw.sum())
-        return _build_basis(spec, points, pw, None, coordinate)
+        coordinate, points, pw = self._geometry(
+            cw, None if uniform else cw / cw.sum(), self.coordinate
+        )
+        return _build_basis(spec, points, pw, coordinate)
 
     def build(self, spec, /):
         """Compile ``spec`` in the interval coordinate and landmark geometry.
@@ -421,9 +451,7 @@ class _IntervalData:
         spec : BasisSpec
             Basis request.
         """
-        return _build_basis(
-            spec, self.points, self.point_weights, None, self.coordinate
-        )
+        return _build_basis(spec, self.points, self.point_weights, self.coordinate)
 
     def objective(self, model, /):
         """The interval objective of ``model``.
@@ -436,10 +464,10 @@ class _IntervalData:
         return _BasisIntervalObjective(_NormalizerContext(model), self.rows)
 
     def start(self, model, options, /):
-        """G1's interval start: the point fit to uniform-within-row statistics.
+        """Interval start: the point fit to uniform-within-row statistics.
 
-        Only with all rows finite (G1 ``_natural_interval_start``); otherwise
-        ``None``, the convex cold start (G1's generic interior start).
+        Only with all rows finite; otherwise ``None``, the convex cold start
+        (the generic interior start).
         Returns ``None`` or ``(theta, face)``.
 
         Parameters
@@ -447,7 +475,7 @@ class _IntervalData:
         model : _BasisModel
             Compiled basis.
         options : _NewtonOptions
-            G1 Newton policy.
+            Newton policy.
         """
         if self.rows.has_infinite_rows:
             return None
@@ -462,7 +490,7 @@ class _IntervalData:
     def score_statistics(self, context, theta, /):
         """``(state, information, row_statistics, row_weights)`` at ``theta``.
 
-        The information is G1's missing-information identity ``Cov[Phi] -
+        The information is the missing-information identity ``Cov[Phi] -
         sum w Cov(Phi | B)`` (broad and censored rows inform less) and each
         row's statistic ``E[Phi | B_r]``.
 
@@ -503,7 +531,7 @@ def _tested(diagnostic, /, *args, **kwargs):
     A larger span can hold columns without finite moments under the fitted
     density (an exponential of rate 2 against a fitted rate-1 tail, after the
     fit's own leader collapsed): its score test is undefined, and an
-    automatic search stops at the fitted span, recorded (G3-049).
+    automatic search stops at the fitted span, recorded.
 
     Parameters
     ----------
@@ -538,9 +566,9 @@ def _span_diagnostic(current, theta, larger, data, config, label, /, face=None):
         Span containing ``current``.
     data : _PointData or _IntervalData
         Observations (interval information by the missing-information
-        identity, G1 ``_interval_omitted_statistic_diagnostic``).
+        identity).
     config : _DegreeSelectionConfig
-        G1 policy.
+        Selection policy.
     label : str
         Diagnostic label.
     face : tuple or None
@@ -579,12 +607,12 @@ def _span_diagnostic(current, theta, larger, data, config, label, /, face=None):
 def _score_test(
     residual, sigma, phi, w, nuisance, probe, effective_n, guards, config, label, added
 ):
-    """G1's efficient score test of probe statistics given nuisance statistics.
+    """Efficient score test of probe statistics given nuisance statistics.
 
     The statistics are coordinates of one space with score ``residual``,
     information ``sigma`` and per-row values ``phi`` (weights ``w``); the
     probes are the columns of ``probe`` (``None``: every coordinate) and the
-    nuisance the columns of ``nuisance`` (G1: the fitted statistics).  A
+    nuisance the columns of ``nuisance`` (the fitted statistics).  A
     single fit's statistics are the larger span's columns with the lifted
     current span as nuisance; a mixture's are its joint coordinates with
     every other coordinate and the probed component's lifted span as
@@ -607,9 +635,9 @@ def _score_test(
     effective_n : float
         Kish effective sample size.
     guards : bool
-        Apply G1's point-data participation and variance-inflation guards.
+        Apply the point-data participation and variance-inflation guards.
     config : _DegreeSelectionConfig
-        G1 selection policy.
+        Selection policy.
     label : str
         Name of the tested extension.
     added : tuple
@@ -633,7 +661,7 @@ def _score_test(
     inv_sd = np.divide(1.0, sd, out=np.zeros_like(sd), where=sd > 0.0)
 
     # Efficient residual and conditional covariance, fitted statistics
-    # (t = L^T Phi) as nuisance coordinates (G1).
+    # (t = L^T Phi) as nuisance coordinates.
     sigma_tt = lift.T @ sigma @ lift
     sigma_ft = inv_sd[:, None] * sigma_pt
     tt_pinv, _ = _psd_pinv(sigma_tt, config.covariance_rtol)
@@ -650,20 +678,20 @@ def _score_test(
     resolvable = int(np.count_nonzero(keep))
     values, vectors = values[keep], vectors[:, keep]
 
-    # G1's guards per tested direction: the efficient statistic of direction
+    # The guards per tested direction: the efficient statistic of direction
     # k is s_k(x) = u_k . (D Phi(x) - P L^T Phi(x)), with model variance
     # values[k].  Its empirical variance (conservative inflation) and the
-    # participation of its centred contributions are measured on the data.
+    # participation of its centered contributions are measured on the data.
     efficient_stats = (phi_p * inv_sd[None, :] - (phi @ lift) @ projection.T) @ vectors
-    centred_stats = efficient_stats - w @ efficient_stats
-    emp_var = w @ (centred_stats * centred_stats)
+    centered_stats = efficient_stats - w @ efficient_stats
+    emp_var = w @ (centered_stats * centered_stats)
     tiny = np.finfo(np.float64).tiny
     inflation = np.clip(
         np.maximum(1.0, emp_var / np.maximum(values, tiny)),
         1.0,
         float(config.max_variance_inflation),
     )
-    contribution = w[:, None] * np.abs(centred_stats)
+    contribution = w[:, None] * np.abs(centered_stats)
     total = contribution.sum(axis=0)
     square = np.sum(contribution * contribution, axis=0)
     participation = np.divide(
@@ -698,7 +726,7 @@ def _score_test(
 
 @dataclass(frozen=True)
 class _SelectionStep:
-    """One automatic decision of a G3 fit.
+    """One automatic decision of a fit.
 
     Parameters
     ----------
@@ -717,7 +745,7 @@ class _SelectionStep:
         confirmation's p-value (``nan`` otherwise).
     failure : str
         Why the selected degree was not adopted (it converged from neither
-        start, G3-047), else empty.
+        start), else empty.
     """
 
     kind: str
@@ -752,9 +780,9 @@ def _face_of(model, result, /):
 
 
 def _warm_fit(model, data, options, previous, /):
-    """Fit ``model``, warm-started from a smaller nested fit when given (G1 lift).
+    """Fit ``model``, warm-started from a smaller nested fit when given (a lift).
 
-    A cold fit starts where the data say (``data.start``: G1's interval
+    A cold fit starts where the data say (``data.start``: the interval
     start, else the convex cold start).
 
     Parameters
@@ -764,60 +792,36 @@ def _warm_fit(model, data, options, previous, /):
     data : _PointData or _IntervalData
         Observations.
     options : _NewtonOptions
-        G1 Newton policy.
+        Newton policy.
     previous : _Stage or None
         Smaller nested fit to lift, or ``None`` for a cold fit.
+
+    Returns
+    -------
+    _BasisNewtonResult
+        The fit (:func:`_fit_rung` compares it with ``previous``).
     """
     objective = data.objective(model)
     if previous is None:
         start = data.start(model, options)
         if start is None:
-            return _solve_basis(objective, options=options, leader_restart=True)
+            return _solve_basis(objective, options=options)
         return _solve_basis(
             objective,
             options=options,
             start=start[0],
             start_face=start[1],
-            leader_restart=True,
         )
-    start = _lift_matrix(previous.model, model) @ previous.result.params
-    face = _face_of(previous.model, previous.result)
-    interior_first = (
-        isinstance(data, _PointData)
-        and model.request.bulk_degree >= 10
-        and model.request.lower_infinite != model.request.upper_infinite
-        and model.request.lower_tail is None
-        and model.request.upper_tail is None
-    )
-    result = _solve_basis(
+    # A lifted fit has zero amplitudes on the larger basis's new directions;
+    # it is moved into the face interior along a verified convex direction
+    # (``interior_lift``) rather than replaced by the face's cold start.
+    return _solve_basis(
         objective,
         options=options,
-        start=start,
-        start_face=face,
-        interior_lift=interior_first,
-        leader_restart=True,
+        start=_lift_matrix(previous.model, model) @ previous.result.params,
+        start_face=_face_of(previous.model, previous.result),
+        interior_lift=True,
     )
-    if result.status not in _CONVERGED:
-        # Try the alternative treatment of a zero new leader: a bounded
-        # interior lift or the face's own cold start. Only a converged
-        # second start replaces the first.
-        lifted = _solve_basis(
-            objective,
-            options=options,
-            start=start,
-            start_face=face,
-            interior_lift=not interior_first,
-            leader_restart=True,
-        )
-        if lifted.status in _CONVERGED:
-            result = lifted
-    if result.status in _CONVERGED and _worse_than_nested(
-        result, previous.result, options
-    ):
-        raise RuntimeError(
-            "internal error: a converged larger span is worse than its lifted start"
-        )
-    return result
 
 
 def _worse_than_nested(result, smaller, options, /):
@@ -850,7 +854,7 @@ def _worse_than_nested(result, smaller, options, /):
 
 
 def _bulk_degrees(spec, /):
-    """G1 admissible automatic degrees (2-12; even only on the full line).
+    """Admissible automatic degrees (2-12; even only on the full line).
 
     Parameters
     ----------
@@ -865,27 +869,161 @@ def _bulk_degrees(spec, /):
     return degrees or [int(AUTO_POLY_DEGREE_MIN)]
 
 
+def _fit_rung(model, data, options, nested, /):
+    """Fit one basis from its starts: cold, then the lifted ``nested`` fit.
+
+    The cold start comes first: a lifted smaller fit has a zero leading
+    amplitude, i.e. it lies on the larger basis's improper boundary, where a
+    first Newton step can pair a 1e-14 leader with an O(0.1) next term.  With
+    a nested fit, a cold result that does not converge, or converges above
+    the nested fit, is retried from the lift (the cold start can stall on a
+    badly scaled rung, a cluster 40 scale units out, or stop at a point the
+    nested fit beats), and the better converged answer is kept.  A larger
+    family cannot converge above a fit it contains, so such an answer is a
+    stall and is reported as ``"non_descent"``.
+
+    Parameters
+    ----------
+    model : _BasisModel
+        Basis to fit.
+    data : _PointData or _IntervalData
+        Observations.
+    options : _NewtonOptions
+        Newton policy.
+    nested : _Stage or None
+        Converged fit of a basis nested in ``model``.
+
+    Returns
+    -------
+    _BasisNewtonResult
+    """
+    result = _warm_fit(model, data, options, None)
+    if nested is None:
+        return result
+    if result.status not in _CONVERGED or _worse_than_nested(
+        result, nested.result, options
+    ):
+        warm = _warm_fit(model, data, options, nested)
+        if warm.status in _CONVERGED and (
+            result.status not in _CONVERGED
+            or warm.objective_value < result.objective_value
+        ):
+            result = warm
+    return _against_nested(result, nested, options)
+
+
+def _against_nested(result, nested, options, /):
+    """``result``, reported ``"non_descent"`` if it converged above ``nested``.
+
+    A larger family cannot converge above a fit it contains: such an answer
+    is a stall (an ill-conditioned rung that kept the lifted fit's zero
+    leader).
+
+    Parameters
+    ----------
+    result : _BasisNewtonResult
+        Fit of the larger family.
+    nested : _Stage
+        Fit of a family it contains.
+    options : _NewtonOptions
+        The fit's tolerances.
+    """
+    if result.status in _CONVERGED and _worse_than_nested(
+        result, nested.result, options
+    ):
+        return dataclasses.replace(result, status="non_descent")
+    return result
+
+
+def _rung_model(data, base, degree, /):
+    """The degree-``degree`` minimal basis, or ``None`` when it is improper.
+
+    Parameters
+    ----------
+    data : _PointData or _IntervalData
+        Observations.
+    base : BasisSpec
+        Concrete minimal request.
+    degree : int
+        Bulk degree.
+    """
+    try:
+        return data.build(dataclasses.replace(base, bulk_degree=degree))
+    except _StructurallyImproper:
+        # A property of the request at this degree, not a numerical failure:
+        # the degree is not admissible.
+        return None
+
+
+_SEED_CLIMB_PATIENCE = 2
+"""Consecutive non-converged rungs that end an explicit degree's seed climb."""
+
+
+def _seed_rungs(spec, base, data, config, options, /):
+    """Converged rungs below an explicit degree, the seeds of its lifts.
+
+    The climb fits the admissible degrees below the request upward as rungs
+    (:func:`_fit_rung`), each nested on the largest converged one, and ends
+    after ``_SEED_CLIMB_PATIENCE`` consecutive rungs that do not converge:
+    one failed rung (an odd degree on a half-line) can sit below rungs that
+    converge, while a run of failures continues to the target at many
+    seconds per rung.  A lift from one seed can fail where another's
+    succeeds, so every converged rung is a seed.
+
+    Parameters
+    ----------
+    spec : BasisSpec
+        Request with an explicit ``bulk_degree``.
+    base : BasisSpec
+        Its concrete minimal request.
+    data : _PointData or _IntervalData
+        Observations.
+    config : _DegreeSelectionConfig
+        Selection policy.
+    options : _NewtonOptions
+        Newton policy.
+
+    Returns
+    -------
+    list of _Stage
+        Converged rungs, ascending in degree.
+    """
+    support = tuple(spec.support)
+    seeds, misses = [], 0
+    for degree in range(int(AUTO_POLY_DEGREE_MIN), int(spec.bulk_degree)):
+        if not _is_poly_degree_admissible(degree, support):
+            continue
+        rung = _rung_model(data, base, degree)
+        if rung is None:
+            continue
+        fit = _fit_rung(rung, data, options, seeds[-1] if seeds else None)
+        if fit.status in _CONVERGED:
+            seeds.append(_Stage(rung, fit, ()))
+            misses = 0
+            continue
+        misses += 1
+        if misses >= _SEED_CLIMB_PATIENCE:
+            break
+    return seeds
+
+
 def _fit_degree(spec, lower, upper, data, config, options, /):
     """Minimal-span fit at the requested or automatically selected bulk degree.
 
-    G1 owner adapted: ``natural_objective._fit_natural_conic_points_auto``.
-    The ladder fits each admissible degree, probes the next
-    ``probe_block_size`` bulk powers (the degree-``d + 2`` basis, nested in
-    the same geometry) with the omitted-statistic score test and moves to the
-    next admissible degree only when the test rejects.  Retained from G1:
-    admissible degrees, probe blocks, the stopping rule, cold fits per rung
-    (a lifted smaller fit has a zero leading amplitude: it lies on the larger
-    basis's improper boundary, where a first Newton step can pair a 1e-14
-    leader with an O(0.1) next term).  Changed: a rung whose cold start does
-    not converge is restarted from the lifted smaller fit; a rung the test
-    selected that converges from neither start ends the ladder at the smaller
-    degree with the failure recorded (the search's answer is the largest
-    converged degree, G3-047), and a converged rung must be no worse than the
-    nested smaller degree.  An explicit degree whose cold start does not
-    converge is refitted from the lifted fit of the next smaller admissible
-    degree (fitted by the same rule); an explicit degree, or a ladder whose
-    first rung does not converge, returns the unconverged fit and
-    ``_fit_data`` raises.
+    Every degree is fitted as a rung (:func:`_fit_rung`) nested on the
+    largest converged smaller degree.  The automatic ladder fits each
+    admissible degree, probes the next ``probe_block_size`` bulk powers (the
+    degree-``d + 2`` basis, nested in the same geometry) with the
+    omitted-statistic score test and moves to the next admissible degree only
+    when the test rejects; a selected rung that does not converge ends the
+    ladder at the smaller degree with the failure recorded (the search's
+    answer is the largest converged degree).  An explicit degree is fitted
+    cold; if that does not converge, it is lifted from the converged rungs
+    below it (:func:`_seed_rungs`), largest first, until a lift converges
+    no worse than the largest.
+    An explicit degree, or a
+    ladder whose first rung does not converge, returns the unconverged fit
+    and ``_fit_data`` raises.
 
     Parameters
     ----------
@@ -896,9 +1034,9 @@ def _fit_degree(spec, lower, upper, data, config, options, /):
     data : _PointData or _IntervalData
         Observations.
     config : _DegreeSelectionConfig
-        G1 selection policy.
+        Selection policy.
     options : _NewtonOptions
-        G1 Newton policy.
+        Newton policy.
 
     Returns
     -------
@@ -910,92 +1048,33 @@ def _fit_degree(spec, lower, upper, data, config, options, /):
     )
     if spec.bulk_degree != _AUTO:
         model = data.build(base)
-        seed = None
-        if (
-            isinstance(data, _PointData)
-            and int(spec.bulk_degree) >= 10
-            and math.isinf(float(spec.support[0])) != math.isinf(float(spec.support[1]))
-            and spec.lower_tail is None
-            and spec.upper_tail is None
-        ):
-            # Keep a well-resolved nested seed even when intermediate high
-            # degrees cannot be fitted. A failed rung must not prevent a
-            # larger requested family from using that valid starting density.
-            seed = _fit_degree(
-                dataclasses.replace(spec, bulk_degree=6),
-                lower,
-                upper,
-                data,
-                config,
-                options,
-            )
-            if seed.result.status in _CONVERGED:
-                result = _warm_fit(model, data, options, seed)
-                if result.status in _CONVERGED:
-                    return _Stage(model, result, ())
         result = _warm_fit(model, data, options, None)
-        smaller = [
-            d
-            for d in _admissible_degrees(tuple(spec.support), int(spec.bulk_degree) - 1)
-            if int(d) >= int(AUTO_POLY_DEGREE_MIN)
-        ]
-        if (
-            result.status not in _CONVERGED
-            and smaller
-            and (seed is None or seed.result.status not in _CONVERGED)
-        ):
-            # Second start (G3-047): the lifted fit of the next smaller
-            # admissible degree, itself fitted by this rule.  A cold degree-8
-            # fit of 600 normal draws stalled at NLL 1.39480, above the
-            # converged degree 6 (1.39479).  Only a converged answer replaces
-            # the cold one.
-            nested = _fit_degree(
-                dataclasses.replace(spec, bulk_degree=int(smaller[-1])),
-                lower,
-                upper,
-                data,
-                config,
-                options,
-            )
-            if nested.result.status in _CONVERGED:
-                lifted = _warm_fit(model, data, options, nested)
+        if result.status not in _CONVERGED:
+            seeds = _seed_rungs(spec, base, data, config, options)
+            # Every lift answers to the best nested fit, the largest converged
+            # rung (a degree-3 lift into degree 12 "converged" above the
+            # degree-10 fit); lifts are tried from the largest seed down.
+            best = seeds[-1] if seeds else None
+            for seed in reversed(seeds):
+                lifted = _against_nested(
+                    _warm_fit(model, data, options, seed), best, options
+                )
                 if lifted.status in _CONVERGED:
                     result = lifted
+                    break
         return _Stage(model, result, ())
     degrees = _bulk_degrees(spec)
     history, current = [], None
     for index, degree in enumerate(degrees):
-        try:
-            model = data.build(dataclasses.replace(base, bulk_degree=degree))
-        except ValueError as exc:
-            # Structurally improper at this degree (G3-025): not admissible.
-            _reraise_if_debug(exc, "G3 automatic degree rung", routine=True)
+        model = _rung_model(data, base, degree)
+        if model is None:
             continue
-        # Cold, as G1: the lifted smaller fit has a zero leading amplitude,
-        # i.e. it lies on this basis's improper boundary (the new leader is
-        # not one of the smaller fit's suppressed ends, so no face carries it;
-        # released leader faces, G3-042, need a proper start on a face).
-        result = _warm_fit(model, data, options, None)
-        if result.status not in _CONVERGED and current is not None:
-            # A second start of the same problem (G3-047): the lifted smaller
-            # fit.  The cold start can stall on a badly scaled rung (degree 6
-            # with a cluster 40 scale units out: non_descent at NLL 2.97, the
-            # warm start converges to 2.47); either answer is certified.
-            result = _warm_fit(model, data, options, current)
-        if (
-            current is not None
-            and result.status in _CONVERGED
-            and _worse_than_nested(result, current.result, options)
-        ):
-            raise RuntimeError(
-                f"automatic degree: bulk_degree={degree} converged worse than "
-                "the nested smaller degree"
-            )
+        result = _fit_rung(model, data, options, current)
         if result.status not in _CONVERGED:
             if current is None:
                 return _Stage(model, result, tuple(history))
-            # The search's answer is the largest converged degree (G3-047;
-            # G1 skipped a failing candidate); the record says why it stopped.
+            # The search's answer is the largest converged degree; the record
+            # says why it stopped.
             last = history.pop()
             history.append(
                 dataclasses.replace(
@@ -1062,10 +1141,10 @@ def _log_amplitude(stage, side, /):
 
 
 def _fit_basis(spec, samples, weights=None, /, *, config=None, options=None):
-    """Fit a G3 basis to point or interval data, resolving every ``"auto"`` field.
+    """Fit a basis to point or interval data, resolving every ``"auto"`` field.
 
-    Order (G1): the bulk degree ladder at the minimal span with every
-    automatic endpoint log enabled; G1's backward elimination of automatic
+    Order: the bulk degree ladder at the minimal span with every
+    automatic endpoint log enabled; backward elimination of automatic
     log terms (``_fit/boundary.py`` ``_select_boundary_terms``: one-sided
     likelihood-ratio test at the same degree, then the degree ladder rerun
     with the final terms); finally the span by ``spec.expansion``.
@@ -1076,13 +1155,13 @@ def _fit_basis(spec, samples, weights=None, /, *, config=None, options=None):
         Basis request.
     samples : array_like
         Point observations, shape ``(R,)``, or interval rows, shape
-        ``(R, 2)`` (infinite ends are censoring; G1 layouts and rules).
+        ``(R, 2)`` (infinite ends are censoring).
     weights : array_like or None
         Observation weights.
     config : _DegreeSelectionConfig or None
-        G1 selection policy.
+        Selection policy.
     options : _NewtonOptions or None
-        G1 Newton policy.
+        Newton policy.
 
     Returns
     -------
@@ -1122,9 +1201,9 @@ def _fit_data(spec, data, log_policy, config, options, /):
     log_policy : tuple
         Resolved endpoint-log policies ``(lower, upper)``.
     config : _DegreeSelectionConfig
-        G1 selection policy.
+        Selection policy.
     options : _NewtonOptions
-        G1 Newton policy.
+        Newton policy.
 
     Returns
     -------
@@ -1134,11 +1213,11 @@ def _fit_data(spec, data, log_policy, config, options, /):
     ------
     RuntimeError
         If the returned fit's optimizer did not converge (an explicit degree,
-        or an automatic search with no converged member, G3-047).
+        or an automatic search with no converged member).
     """
     fit = _search_data(spec, data, log_policy, config, options)
     status = fit.result.status
-    if status not in _CONVERGED and status != _UNCERTIFIED:
+    if status not in _CONVERGED and status != _UNVERIFIED:
         raise _BasisConvergenceError(fit)
     return fit
 
@@ -1155,9 +1234,9 @@ def _search_data(spec, data, log_policy, config, options, /):
     log_policy : tuple
         Resolved endpoint-log policies ``(lower, upper)``.
     config : _DegreeSelectionConfig
-        G1 selection policy.
+        Selection policy.
     options : _NewtonOptions
-        G1 Newton policy.
+        Newton policy.
     """
     lower, upper = log_policy
     # An endpoint log at a distance >1e8 times the full observed span is
@@ -1286,9 +1365,12 @@ def _search_data(spec, data, log_policy, config, options, /):
             break
         larger, chosen = min(ranked, key=lambda c: c[1].p_value)
         history.append(_SelectionStep("expansion", gate, tests, chosen.label))
-        grown = _warm_fit(larger, data, options, _Stage(model, result, ()))
+        nested = _Stage(model, result, ())
+        grown = _against_nested(
+            _warm_fit(larger, data, options, nested), nested, options
+        )
         if grown.status not in _CONVERGED:
-            # The search's answer is the largest converged span (G3-047).
+            # The search's answer is the largest converged span.
             history[-1] = dataclasses.replace(
                 history[-1],
                 chosen=None,
@@ -1298,7 +1380,7 @@ def _search_data(spec, data, log_policy, config, options, /):
                 ),
             )
             break
-        # Likelihood-ratio confirmation (G3-044): at a fit on an active
+        # Likelihood-ratio confirmation: at a fit on an active
         # curvature row the score can point out of the shape cone, where the
         # larger span cannot follow (a censored exponential: score p = 0.006,
         # no change in the NLL).  The chi-square reference with the score's
@@ -1328,9 +1410,9 @@ def _raise_full_failure(spec, data, config, options, full, reason, cause, /):
     data : _PointData or _IntervalData
         Observations.
     config : _DegreeSelectionConfig
-        G1 selection policy.
+        Selection policy.
     options : _NewtonOptions
-        G1 Newton policy.
+        Newton policy.
     full : _BasisModel
         The full span.
     reason : str

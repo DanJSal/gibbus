@@ -1,9 +1,6 @@
-"""Shared Newton policy, run record and subproblem of the G3 face loop.
+"""Shared Newton policy, run record and subproblem of the face loop.
 
-G1 owner extended: ``_fit/conic_newton.py``.  G1's natural-coordinate conic
-Newton solver (its Markov-Lukacs cone, exact-face steps and Bernstein
-certificate) is replaced by ``basis_newton`` (G3-032..042); this module keeps
-the G1 contracts the G3 solver relies on: the convergence status vocabulary,
+The contracts ``basis_newton`` relies on: the convergence status vocabulary,
 the immutable Newton policy (``_NewtonOptions``), the run record
 (``_NewtonRun``), the preconditioned compiled subproblem and the overlay of
 an observation-level global certificate.
@@ -26,8 +23,8 @@ from .conic_qp import (
 )
 
 _CONVERGED = ("converged", "converged_approximately")
-# A converged point whose shape verdict is not conclusive (G3-035).
-_UNCERTIFIED = "uncertified"
+# A converged point whose shape is not verified within the threshold.
+_UNVERIFIED = "unverified"
 
 
 @dataclass(frozen=True)
@@ -41,8 +38,8 @@ class _NewtonOptions:
 
     NLL tolerances are absolute, in nats per observation: a change of data
     units shifts the NLL by ``log(scale)`` and leaves its differences
-    unchanged, so G1's tolerances relative to ``max(1, |NLL|)`` stopped a fit
-    at a point that depended on the units (G3-050).
+    unchanged, so tolerances relative to ``max(1, |NLL|)`` would stop a fit
+    at a point that depended on the units.
 
     Parameters
     ----------
@@ -64,10 +61,16 @@ class _NewtonOptions:
     max_line_search : int, optional
         Line-search trial limit per Newton step.
     lift_nll_slack : float, optional
-        G3 second start of a lifted fit (``interior_lift``, G3-047): the
-        NLL the move into the face interior may give up.
+        Interior lift of a lifted start (``interior_lift``): the NLL the
+        move into the face interior may give up.
     lift_halvings : int, optional
         Step halvings allowed to meet ``lift_nll_slack``.
+    cut_retention_exchanges : int, optional
+        Retain point cuts through this many consecutive inactive exchange
+        iterates. Zero disables retirement. Structural and tail rows persist.
+    cut_activity_margin : float, optional
+        Slack margin relative to the row's absolute coefficient contributions,
+        with a unit floor, below which a point cut remains active.
     """
 
     tolerance: float = 1e-12
@@ -80,6 +83,8 @@ class _NewtonOptions:
     max_line_search: int = 40
     lift_nll_slack: float = 1e-3
     lift_halvings: int = 60
+    cut_retention_exchanges: int = 4
+    cut_activity_margin: float = 1e-5
 
 
 @dataclass(frozen=True)
@@ -120,13 +125,13 @@ def _preconditioned_subproblem(
     gradient : numpy.ndarray, shape (n,)
         Objective gradient at ``params``.
     params : numpy.ndarray, shape (n,)
-        Current natural parameters.
+        Current parameters.
     representation : _ConicRepresentation
-        Cone description in natural coordinates.
+        Cone description in unscaled coordinates.
     blocks : sequence of numpy.ndarray
         Current Gram blocks (the starting point of the interior solve).
     column_scale : numpy.ndarray or None, optional
-        Positive column scales replacing Jacobi ``D`` (G3 row-flattening
+        Positive column scales replacing Jacobi ``D`` (row-flattening
         scales); ``None`` keeps Jacobi.
 
     Returns
@@ -134,7 +139,7 @@ def _preconditioned_subproblem(
     result : _ConicQPResult
         Subproblem result in scaled coordinates (for its gap and iterations).
     endpoint : numpy.ndarray, shape (n,)
-        Subproblem endpoint in natural coordinates.
+        Subproblem endpoint in unscaled coordinates.
     endpoint_blocks : tuple of numpy.ndarray
         Gram certificate of ``endpoint`` in the original basis.
     model_value : float

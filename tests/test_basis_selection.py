@@ -1,4 +1,4 @@
-"""G3 Stage 4c: automatic expansion by G1's omitted-statistic score test (G3-035).
+"""Automatic expansion by the omitted-statistic score test.
 
 Defining properties: one-slot growth strictly enlarges the span and the lift
 is exact; the joint gate does not add slots to data from the minimal family
@@ -54,7 +54,9 @@ def test_growth_strictly_enlarges_the_span_with_an_exact_lift():
     model = _model(BasisSpec(**EXP), x)
     full = _full_basis(model)
     candidates = _grow_basis(model)
-    assert len(candidates) == 10
+    # One t_L and one t_U direction for each of 1, z and z^2 (the shared
+    # exponential is structurally gated and never grows).
+    assert len(candidates) == 6
     for _, larger in candidates:
         assert model.n_coefficients < larger.n_coefficients <= full.n_coefficients
         lift = _lift_matrix(model, larger)
@@ -74,11 +76,11 @@ def test_minimal_family_data_keep_the_minimal_span(seed):
     assert fit.model.n_coefficients == 3
     step = fit.history[0]
     assert step.kind == "expansion" and step.chosen is None
-    assert step.diagnostic.added == 10 and not step.diagnostic.should_expand
+    assert step.diagnostic.added == 6 and not step.diagnostic.should_expand
 
 
 def test_joint_gate_is_calibrated_on_minimal_family_data():
-    # 40 Gaussian samples: the gate should reject rarely (level 0.05, G1's
+    # 40 Gaussian samples: the gate should reject rarely (level 0.05, the
     # conservative variance inflation makes it at most nominal).
     cfg = _DegreeSelectionConfig()
     spec = BasisSpec(**EXP, expansion="minimal")
@@ -108,7 +110,7 @@ def test_skewed_data_gain_converged_convex_extensions(seed):
     fit = _fit_basis(BasisSpec(**EXP), x)
     assert fit.model.n_coefficients > 3
     assert fit.result.status == "converged"
-    assert fit.result.final_separation.status == "nonnegative"
+    assert fit.result.final_separation.status == "verified"
     assert fit.result.objective_value <= minimal.result.objective_value + 1e-12
     assert all(h.chosen is not None for h in fit.history[:-1])
     assert fit.history[-1].chosen is None
@@ -126,19 +128,20 @@ def test_warm_started_extensions_are_no_worse_than_their_start():
             start_face=(result.face.suppressed, ()),
         )
         assert grown.status == "converged", label
-        assert grown.final_separation.status == "nonnegative", label
+        assert grown.final_separation.status == "verified", label
         assert grown.objective_value <= result.objective_value + 1e-12, label
 
 
 def test_explicit_full_is_returned_when_it_converges():
-    # With globally convex Newton iterates (G3-038) the 13-column full MLE
-    # (the near-unidentified noise fit of G3-035) is reached and certified.
+    # The 9-column full MLE (three gate slots for each of 1, z and z^2, plus
+    # the shared gated exponential), a near-unidentified noise fit, is reached
+    # and verified.
     x = _normal(0)
     full = _fit_basis(BasisSpec(**EXP, expansion="full"), x)
     minimal = _fit_basis(BasisSpec(**EXP, expansion="minimal"), x)
-    assert full.model.n_coefficients == 13
+    assert full.model.n_coefficients == 9
     assert full.result.status == "converged"
-    assert full.result.final_separation.status == "nonnegative"
+    assert full.result.final_separation.status == "verified"
     assert full.result.objective_value <= minimal.result.objective_value
 
 
@@ -216,8 +219,8 @@ def test_growth_verdict_uses_a_robust_lead_beyond_a_tiny_one():
     model = _model(BasisSpec(bulk_degree=2, expansion="minimal"), x)
     labels = [c.label for c in model.columns]
     theta = np.zeros(model.n_coefficients)
-    theta[labels.index("x^2")] = 1e-17
-    theta[labels.index("x")] = -0.3
+    theta[labels.index("z^2")] = 1e-17
+    theta[labels.index("z")] = -0.3
     tail = _build_tail_model(model, "lower", order=1)
     res = _growth_verdict(tail, model, theta)
     assert res.status == "proper"
@@ -233,7 +236,7 @@ def test_explicit_minimal_and_polynomial_tails_are_untouched():
     assert fit.model.slot_choice == _model(spec, x).slot_choice
 
 
-# --- degree ladder, automatic endpoint logs, inputs (G3-035) ----------------
+# --- degree ladder, automatic endpoint logs, inputs ----------------
 
 
 _RNG = np.random.default_rng(5)
@@ -262,7 +265,7 @@ def test_auto_fields_are_resolved_by_the_fitter_only():
         BasisSpec(bulk_degree="two")
 
 
-def test_inputs_resolve_log_policy_with_g1_endpoint_rules():
+def test_inputs_resolve_log_policy_with_endpoint_rules():
     x = np.random.default_rng(0).gamma(2.0, 1.0, 50)
     half = (0.0, math.inf)
     auto = BasisSpec(support=half, log_lower="auto")
@@ -294,7 +297,7 @@ def test_automatic_degree_and_logs_converge_convex(name):
     )
     fit = _fit_basis(spec, x)
     assert fit.result.status == "converged"
-    assert fit.result.final_separation.status == "nonnegative"
+    assert fit.result.final_separation.status == "verified"
 
 
 def test_boundary_terms_are_kept_or_dropped_by_the_lr_test():
@@ -315,6 +318,6 @@ def test_fully_automatic_tail_fit_is_converged_and_convex():
     )
     fit = _fit_basis(spec, x)
     assert fit.result.status == "converged"
-    assert fit.result.final_separation.status == "nonnegative"
+    assert fit.result.final_separation.status == "verified"
     kinds = [h.kind for h in fit.history]
     assert kinds[0] == "degree" and kinds[-1] == "expansion"

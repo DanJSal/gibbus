@@ -1,5 +1,7 @@
 """Span, derivative and likelihood invariants of runtime fitting coordinates."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -88,7 +90,7 @@ def test_point_and_interval_likelihoods_have_the_same_coordinate_contract(
     else:
         objective = _BasisPointObjective(context, _point_statistics(model, data))
     theta = np.zeros(model.n_coefficients)
-    theta[[c.label for c in model.columns].index("x^2")] = 0.5
+    theta[[c.label for c in model.columns].index("z^2")] = 0.5
     binding = _prepare_coordinates(objective, None, theta)
     first, second = objective(theta), binding.objective(binding.start)
     assert second.nll == pytest.approx(first.nll, abs=2e-11)
@@ -121,7 +123,7 @@ def test_coupled_point_statistics_are_recomputed_and_shared_logs_stay_shared():
     theta = np.zeros(blocks.n)
     for k, model in enumerate(models):
         labels = [c.label for c in model.columns]
-        theta[blocks.index[k][labels.index("x^2")]] = 0.5
+        theta[blocks.index[k][labels.index("z^2")]] = 0.5
         theta[blocks.index[k][labels.index("logL")]] = 0.2
     binding = _prepare_coordinates(objective, blocks, theta)
     counts = np.bincount(np.concatenate(blocks.index), minlength=blocks.n)
@@ -141,19 +143,26 @@ def test_coupled_point_statistics_are_recomputed_and_shared_logs_stay_shared():
 def test_common_controller_preserves_the_gaussian_mle_with_either_qp_kernel(
     monkeypatch, projection
 ):
-    from gibbus._fit import linear_qp
+    from gibbus._fit import _basis_newton_kernels, linear_qp
     from gibbus._fit.basis_newton import _solve_basis
 
-    if not projection:
-        monkeypatch.setattr(linear_qp, "_projection_candidate", lambda *args: None)
+    calls = []
+
+    def candidate(*args):
+        calls.append(None)
+        return linear_qp._projection_candidate(*args) if projection else None
+
+    # The compiled loop resolves the projection through its module global.
+    monkeypatch.setattr(_basis_newton_kernels, "_projection_candidate", candidate)
     data = np.random.default_rng(136).normal(2.0, 1.7, 200)
     model = _build_basis(BasisSpec(bulk_degree=2), data)
     objective = _BasisPointObjective(
         _NormalizerContext(model), _point_statistics(model, data)
     )
     result = _solve_basis(objective)
+    assert calls, "the projection kernel was never consulted"
     assert result.status == "converged"
-    assert result.final_separation.status == "nonnegative"
+    assert result.final_separation.status == "verified"
     expected = 0.5 * (np.log(2 * np.pi * np.var(data)) + 1)
     assert result.objective_value == pytest.approx(expected, abs=2e-10)
 
@@ -177,7 +186,7 @@ def test_failed_coordinate_accounting_retries_the_same_gaussian_family(monkeypat
     )
     result = _solve_basis(objective)
     assert result.status == "converged"
-    assert result.final_separation.status == "nonnegative"
+    assert result.final_separation.status == "verified"
     expected = 0.5 * (np.log(2 * np.pi * np.var(data)) + 1)
     assert result.objective_value == pytest.approx(expected, abs=2e-10)
 
@@ -197,3 +206,95 @@ def test_face_activity_uses_likelihood_scale_for_tiny_coefficients(coefficient, 
         rows, gradient * scale, theta / scale, hessian * scale[:, None] * scale[None, :]
     )
     assert bool(changed[1] > 0.0) == active
+
+
+@pytest.mark.parametrize("support", [(-2.0, 3.0), (0.0, np.inf), (-np.inf, 3.0)])
+def test_reused_coordinate_plans_match_fresh_plans_after_observation_changes(support):
+    """Changing data, weights or log amplitudes preserves fresh-plan results.
+
+    Parameters
+    ----------
+    support : tuple
+        Finite-ended support for recurrence selection.
+    """
+    lo, hi = support
+    base = np.linspace(max(lo, -1) + 0.1, min(hi, 2) - 0.1, 60)
+    model = _build_basis(
+        BasisSpec(
+            support=support,
+            bulk_degree=4,
+            log_lower=bool(np.isfinite(lo)),
+            log_upper=bool(np.isfinite(hi)),
+        ),
+        base,
+    )
+    concentrated = np.mean(base) + 0.01 * (base - np.mean(base))
+    beta = np.linspace(-0.2, 0.3, model.n_coefficients)
+    for points in (base, concentrated, base[::-1], base):
+        for amplitude in (0.0, 0.7):
+            weights = np.linspace(0.2, 1.0 + amplitude, len(points))
+            start = np.full(model.n_coefficients, amplitude)
+            for movable in (None, np.arange(1, model.n_coefficients)):
+                cached = _polynomial_coordinates(model, points, weights, start, movable)
+                cached = _polynomial_coordinates(model, points, weights, start, movable)
+                fresh = _polynomial_coordinates(
+                    replace(model), points, weights, start, movable
+                )
+                assert cached.coefficient_map_exact == fresh.coefficient_map_exact
+                np.testing.assert_array_equal(
+                    _evaluate_basis(cached, base, max_order=4).phi @ beta,
+                    _evaluate_basis(fresh, base, max_order=4).phi @ beta,
+                )
+
+
+def test_coefficient_cancellation_does_not_fail_likelihood_accounting():
+    # Responsibility-weighted Chebyshev components of a rounded beta sum fit
+    # coefficients ~4e3 at an NLL of order one: the likelihoods round their
+    # contraction theta . E[Phi] at ~1e-13, above 32 eps |NLL|.  The check
+    # includes that floor, so correct runtime-coordinate solves are kept
+    # instead of every M-step being retried in canonical coordinates.
+    import gibbus
+    from gibbus import Distribution
+    from tests.casegen import case_from_dict, materialize
+    from tests.casegen.runner import _seed_for
+
+    spec = case_from_dict(
+        {
+            "schema": 1,
+            "distribution": {
+                "op": "sum",
+                "left": {
+                    "op": "named",
+                    "family": "beta",
+                    "parameters": {"a": 2.0, "b": 4.0},
+                },
+                "right": {
+                    "op": "named",
+                    "family": "beta",
+                    "parameters": {"a": 4.0, "b": 2.0},
+                },
+            },
+            "observation": {"mode": "rounded", "fraction": 0.3, "width": 0.2},
+            "fit": {
+                "log_lower": False,
+                "log_upper": False,
+                "degree": 4,
+                "tail": "none",
+                "expansion": "minimal",
+                "n_components": "auto",
+            },
+            "n": 100,
+            "replicate": 0,
+        }
+    )
+    generated = materialize(spec, seed=42)
+    kwargs = dict(generated.fit_kwargs, rng=_seed_for(spec, 42, "fit") % (2**32))
+    gibbus.clear_suppressed_failures()
+    model = Distribution().fit(generated.observations, **kwargs)
+    assert model.fit_diagnostics["converged"]
+    retries = [
+        f
+        for f in gibbus.suppressed_failures()
+        if f["context"] == "runtime-coordinate solve"
+    ]
+    assert retries == []

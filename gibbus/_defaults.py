@@ -9,13 +9,13 @@ Groups
 * **Floating-point sentinels and mode/root numerics** —
   ``PROB_EPS``, ``TINY_FLOAT``, ``LOG_THRESH`` and bracketing constants
 * **Quadrature and moments** — ``INTERVAL_GL_ORDER``, ``MAX_CACHED_MOMENTS``
-* **G3 basis, curvature separation and normalizer** — ``BASIS_*`` and the
-  Stage 2/3 policy constants
+* **Basis, curvature separation and normalizer** — ``BASIS_*``,
+  ``CURVATURE_*`` and ``NORMALIZER_*``
 * **EM and component-count selection** — ``EM_*``, ``AUTO_K_*``,
   ``AUTO_KDE_*``, ``AUTO_LC_*`` and selection-subsampling constants
 * **Automatic polynomial degree** — ``AUTO_POLY_DEGREE_MIN``,
   ``AUTO_POLY_DEGREE_MAX``
-* **Robust coordinate scaling, mixture modes, spectral state, and tail inversion**
+* **Canonical coordinate, mixture modes, spectral state, and tail inversion**
 
 Failure handling
 ----------------
@@ -32,6 +32,7 @@ from __future__ import annotations
 import os
 import warnings
 from contextlib import contextmanager
+from dataclasses import dataclass
 from threading import local
 from typing import Final
 
@@ -386,17 +387,6 @@ vectorized.
 """
 
 # ---------------------------------------------------------------------------
-# Variance tolerance
-# ---------------------------------------------------------------------------
-
-STATS_VAR_NEG_TOL: Final = 1e-15
-"""Relative tolerance for detecting a collapsed (spike) density.
-
-If ``|m2 - m1^2|`` is below this fraction of ``max(m2, m1^2)`` the two
-moments agree to their last bit and post-fit statistics raise rather
-than report a meaningless variance.  Relative, so it is scale-free."""
-
-# ---------------------------------------------------------------------------
 # EM mixture fitting
 # ---------------------------------------------------------------------------
 
@@ -560,6 +550,19 @@ AUTO_LC_SWEEP_EM_MAX_ITER: Final = 5
 sweep.  The sweep only needs a rough BIC ranking, not converged fits, so
 this can be much smaller than ``EM_MAX_ITER`` (50)."""
 
+AUTO_LC_SCREEN_STOP_ABOVE_MODES: Final = True
+"""Stop the upward BIC screen at the first count above the KDE mode count
+whose best screen BIC is worse than the previous count's.
+
+Screens run for ``K = 1 .. 2 * kde_modes``.  Past the mode proposal, a count
+that scores worse than its predecessor ends the sweep: refinement still
+admits the screen winner's neighbors and opens the refined winner's upper
+edge until it closes, so a larger count stays reachable when it genuinely
+fits better.  The larger screens are the costliest (more components, each
+from two initializers at every screening degree) and, past a worse count,
+rarely win.
+"""
+
 AUTO_KDE_MIN_PROMINENCE: Final = 0.005
 """Minimum topographic prominence for a KDE local maximum to count as a
 mode, as a fraction of the sweep's peak density.
@@ -657,23 +660,31 @@ AUTO_POLY_DEGREE_MAX: Final = 12
 
 
 # ---------------------------------------------------------------------------
-# Robust scale
+# Canonical coordinate
 # ---------------------------------------------------------------------------
 
-UNIFORM_WIDTH_TO_SIGMA: Final = 0.28867513459481288
-"""Standard deviation of a uniform distribution of unit width (``1/sqrt(12)``).
+COORD_LOWER_QUANTILE: Final = 0.10
+"""Lower landmark level of the canonical coordinate (``q10``).
 
-Used as a floor on the scale estimate for interval-censored data.  The
-location and scale are estimated from interval midpoints, which say
-nothing about spread *within* a bin; with coarse bins more than half the
-midpoints can coincide, giving a zero MAD and rejecting data that is
-perfectly informative.  A bin of width ``w`` contributes at least
-``w * UNIFORM_WIDTH_TO_SIGMA`` of spread, so that is the floor."""
+On the full line ``z = (x - c) / h`` with ``c = (q10 + q90) / 2`` and
+``h = (q90 - q10) / 2``, so the landmarks sit at ``z = -1`` and ``z = +1``,
+the fixed gate centers.  An upper half-line uses ``h = U - q10``."""
 
-MAD_TO_SIGMA: Final = 1.4826
-"""Factor converting a median absolute deviation to a Gaussian-consistent
-standard deviation (``1 / Phi^{-1}(3/4)``).  Used to normalize data before
-fitting so the optimizer sees O(1) coordinates."""
+COORD_UPPER_QUANTILE: Final = 0.90
+"""Upper landmark level of the canonical coordinate (``q90``).
+
+A lower half-line uses ``h = q90 - L``."""
+
+COORD_MIN_SPREAD: Final = 5e-3
+"""Smallest data spread ``q90 - q10`` relative to the median's distance from
+the nearest finite end.
+
+Data that sit far from every finite end with a tiny spread occupy a sliver
+of the canonical coordinate, where the polynomial coefficients cancel beyond
+binary64 and the gate widths dwarf the data; data that hug an end are the
+endpoint logarithm's business and pass.
+Measured: fits are reliable down to about ``5e-3`` and fail below ``2.5e-3``.
+"""
 
 # ---------------------------------------------------------------------------
 # Spectral CDF / PPF construction
@@ -774,7 +785,7 @@ TAIL_SOLVE_TOL: Final = 1e-14
 """Relative bracket width at which an extreme quantile is accepted."""
 
 # ---------------------------------------------------------------------------
-# G3 potential basis: construction defaults
+# Potential basis: family constants and construction defaults
 # ---------------------------------------------------------------------------
 
 BASIS_DEFAULT_BULK_DEGREE: Final = 2
@@ -783,59 +794,100 @@ BASIS_DEFAULT_BULK_DEGREE: Final = 2
 Degree 2 is the smallest bulk degree that gives a proper density on the full
 line with both tails unspecified (degree 1 is structurally improper there)."""
 
-BASIS_TANH_LOWER_QUANTILE: Final = 0.10
-"""Data quantile used as the automatic lower tanh location ``x_L``."""
+BASIS_GATE_SHARPNESS: Final = 2.5066282746310007
+"""Sharpness ``s`` of the fixed Gaussian gates ``G_L = Phi(s (z + 1))`` and
+``G_U = Phi(s (1 - z))``: the binary64 value of ``sqrt(2 pi)``, taken as an exact
+family constant.  The signed gates are ``t = 2 G - 1 = erf(s (1 +- z) / sqrt(2))``."""
 
-BASIS_TANH_UPPER_QUANTILE: Final = 0.90
-"""Data quantile used as the automatic upper tanh location ``x_U``."""
-
-BASIS_TANH_STEEPNESS_KAPPA: Final = 2.0
-"""Dimensionless automatic tanh steepness: ``alpha = kappa / s`` with ``s``
-the robust fitting scale, i.e. a transition width of about ``s / kappa``."""
-
-BASIS_SOFT_POWER_ETA: Final = 1.0
-"""Dimensionless automatic soft-power smoothing: ``delta = (eta * s)**2``."""
+BASIS_SOFT_POWER_ROOT: Final = 4
+"""Root order ``m`` of the soft power ``A**p`` with ``A = (1 + z**m)**(1/m) - 1``."""
 
 # ---------------------------------------------------------------------------
-# G3 curvature separation (Stage 2, G3-026/G3-029)
+# Curvature separation
 # ---------------------------------------------------------------------------
 
-CURVATURE_CUT_RHO: Final = 1e-3
-"""Dimensionless cut threshold: minima of ``q''`` below ``rho / h**2`` are cut
-(the constraint stays ``q'' >= 0``); benchmarked in Stage 4."""
 
-CURVATURE_INITIAL_CELLS: Final = 64
-"""Asinh-spaced initial cells of the compact curvature search."""
+@dataclass(frozen=True)
+class _CurvatureSearchOptions:
+    """Policy of the curvature search (``curvature_search``, ``_curvature_kernels``).
 
-CURVATURE_MAX_CELLS: Final = 4096
-"""Cell budget per curvature search; leftover cells make it inconclusive."""
+    The search works on the scaled curvature ``H = q'' / ||pieces||``, which
+    is bounded, smooth and has the exact sign of ``q''``.  The constraint is
+    always ``q'' >= 0``; ``tau`` only decides which points are cut and what
+    counts as verified.
 
-CURVATURE_MIN_WIDTH: Final = 1e-10
-"""Smallest search cell width, in units of the fitting scale ``h``."""
+    Parameters
+    ----------
+    tau : float
+        Negligibility threshold on ``H``: a region whose minimum stays above
+        ``-tau`` is verified within the threshold; one below it is cut.
+        Experiments: ``1e-6`` keeps the density error at ``KL <~ tau`` (the
+        strict setting ``1e-8`` costs about two more outer iterations).
+    degree : int
+        Chebyshev degree per panel (``degree + 1`` cached nodes).
+    res_frac : float
+        A panel is resolved when its last Chebyshev coefficients fall below
+        ``res_frac * tau`` (or the rounding floor).
+    max_depth : int
+        Most bisections of one panel; a panel left unresolved there makes the
+        verdict unverified.
+    jmin : int
+        Inner panels reach ``r = 2**jmin`` around an interior origin.
+    jmax : int
+        Most shells toward an infinite end (``r`` up to ``2**(jmax + 1)``).
+    stop_shells : int
+        Consecutive converged panels that end the scan toward a half-line
+        endpoint without a log barrier.
+    jmin_end : int
+        Deepest panel ``[2**j, 2**(j+1)]`` toward a half-line endpoint.
+    end_shells : int
+        Endpoint-distance shells on a bounded support (down to
+        ``2**-(end_shells + 1)``).
+    nsamp_factor : int
+        Samples per candidate panel for root and critical-point bracketing,
+        in units of ``degree + 1``.
+    n_extra : int
+        Cut points per negative interval besides its minimum.
+    max_cuts : int
+        Most negative intervals cut per search (lowest minima first).
+    max_new_panels : int
+        Panels one search may add to the hierarchy before it stops splitting
+        and fails closed (bounds the cached rows a pathological ``theta`` can
+        create).
+    max_cached_panels : int
+        Panels the hierarchy may hold across searches; beyond it the split
+        panels and their cached rows are dropped before the next search.
+    zeta_cap : float
+        Largest tail cutoff tried (fitting units); an unproven positive tail
+        is searched out to it.
+    fallback_zeta : float
+        Extent (fitting units) of the search toward a violated tail, whose
+        tail cut row is added in any case.
+    """
 
-CURVATURE_NEWTON_TOL: Final = 1e-12
-"""Minimum-refinement bracket width, in units of ``h``."""
+    tau: float = 1e-6
+    degree: int = 12
+    res_frac: float = 1.0
+    max_depth: int = 30
+    jmin: int = -50
+    jmax: int = 1020
+    stop_shells: int = 3
+    jmin_end: int = -1000
+    end_shells: int = 52
+    nsamp_factor: int = 8
+    n_extra: int = 4
+    max_cuts: int = 16
+    max_new_panels: int = 65536
+    max_cached_panels: int = 65536
+    zeta_cap: float = 1e8
+    fallback_zeta: float = 12.0
 
-CURVATURE_NEWTON_MAX: Final = 60
-"""Maximum minimum-refinement iterations."""
 
-CURVATURE_ZETA_CAP: Final = 1e6
-"""Largest tail cutoff tried, in units of ``h``."""
-
-CURVATURE_FALLBACK_ZETA: Final = 12.0
-"""Half-width (units of ``h``) of the finite search toward an unproven tail."""
-
-CURVATURE_MAX_CUTS: Final = 16
-"""Most finite cuts returned per search (lowest minima first)."""
-
-CURVATURE_FEASIBILITY_TOL: Final = 1e-12
-"""Shape-verdict tolerance, G1's certificate value (``_certify``): ``q''``
-counts as nonnegative when ``q''_zz >= -1e-12`` in the fitting coordinate,
-i.e. ``q''_xx >= -1e-12 / h**2`` (G3-033).  It does not move the cut
-threshold or the constraint ``q'' >= 0``."""
+CURVATURE_SEARCH_OPTIONS: Final = _CurvatureSearchOptions()
+"""Default curvature-search policy."""
 
 # ---------------------------------------------------------------------------
-# G3 normalizer and moments (Stage 3, G3-030)
+# Normalizer and moments
 # ---------------------------------------------------------------------------
 
 NORMALIZER_REL_TOL: Final = 1e-12

@@ -343,52 +343,82 @@ def test_half_line_map_resolves_a_body_far_from_the_endpoint():
     def pdf(z):
         return np.exp(-polyval(np.asarray(z, dtype=np.float64), q_poly))
 
-    # The same quartic as a G3 basis (monomials of its fitting coordinate):
-    # coefficients by least squares on a grid, exact to rounding.
+    # The same quartic as a basis potential: monomials of the fitting
+    # coordinate z = (x - c) / h, whose origin is the endpoint, so the quartic
+    # in x is a quartic in z plus a constant.  The body sits near z = 1 with
+    # a spread of 0.12, where the z-monomials cancel to about 1e-11; the
+    # compiled CDF is therefore checked against quadrature of its own
+    # density, which isolates the spectral construction.
     model = _build_basis(
         BasisSpec(support=support, bulk_degree=4, expansion="minimal"),
         np.linspace(-2.0, 2.0, 41),
     )
     grid = np.linspace(-3.0, 3.0, 61)
     phi = _evaluate_basis(model, grid, max_order=0).phi
-    theta, *_ = np.linalg.lstsq(phi, polyval(grid, q_poly) - q_poly[0], rcond=None)
-    np.testing.assert_allclose(
-        phi @ theta + q_poly[0], polyval(grid, q_poly), atol=1e-12
-    )
+    design = np.column_stack([phi, np.ones(grid.size)])
+    solution, *_ = np.linalg.lstsq(design, polyval(grid, q_poly), rcond=None)
+    theta, log_z = solution[:-1], float(solution[-1])
+    np.testing.assert_allclose(phi @ theta + log_z, polyval(grid, q_poly), atol=1e-10)
     c, h = model.geometry.center, model.geometry.scale
-    density = density_spec(
-        [
-            (
-                model.kernel,
-                theta,
-                (support[0] - c) / h,
-                support[1],
-                q_poly[0] - math.log(h),
-                -c / h,
-                1.0 / h,
-                1.0 / h,
-                1.0,
-                -np.inf,
-                np.inf,
-            )
-        ],
-        view=False,
-    )
+
+    def compiled(log_z):
+        return density_spec(
+            [
+                (
+                    model.kernel,
+                    theta,
+                    (support[0] - c) / h,
+                    support[1],
+                    log_z - math.log(h),
+                    -c / h,
+                    1.0 / h,
+                    1.0 / h,
+                    1.0,
+                    -np.inf,
+                    np.inf,
+                )
+            ],
+            view=False,
+        )
+
+    def integral(f, upper):
+        # The density is below e^-800 outside [-8, 8].
+        def g(v):
+            return float(f(np.array([v]))[0])
+
+        upper = min(upper, 8.0)
+        return quad(g, -8.0, upper, epsabs=1e-15, epsrel=1e-13, limit=200)[0]
+
+    log_z += math.log(integral(compiled(log_z).pdf, np.inf))
+    density = compiled(log_z)
     x = np.linspace(-3.0, 3.0, 25)
+    expected_compiled = np.array([integral(density.pdf, v) for v in x])
     expected = np.array(
         [quad(pdf, -np.inf, v, epsabs=1e-15, epsrel=1e-13)[0] for v in x]
     )
-    for rep in (
-        SpectralCDF(
-            support,
-            density=density,
-            mode=0.1747,
-            std=0.829,
-            map_scale=None,
-            initial_breaks=None,
-            config=_SpectralCDFOptions(),
+    np.testing.assert_allclose(expected_compiled, expected, rtol=0.0, atol=1e-10)
+    for rep, want, atol in (
+        (
+            SpectralCDF(
+                support,
+                density=density,
+                mode=0.1747,
+                std=0.829,
+                map_scale=None,
+                initial_breaks=None,
+                config=_SpectralCDFOptions(),
+            ),
+            expected_compiled,
+            # The z-monomial coefficients are ~5e5: the density itself is
+            # rough at 3e-11 relative (measured), which quadrature and the
+            # spectral rule average differently.
+            2e-11,
         ),
-        PythonSpectralCDFBuilder(pdf, support, mode=0.1747, std=0.829),
+        (
+            PythonSpectralCDFBuilder(pdf, support, mode=0.1747, std=0.829),
+            expected,
+            1e-13,
+        ),
     ):
-        assert rep.map.kind == "lower_centered"
-        np.testing.assert_allclose(rep.cdf(x), expected, rtol=0.0, atol=1e-13)
+        assert rep.map.kind == "centered"
+        np.testing.assert_allclose(rep.cdf(x), want, rtol=0.0, atol=atol)

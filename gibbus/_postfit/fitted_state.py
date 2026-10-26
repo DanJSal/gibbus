@@ -1,9 +1,8 @@
 """Shared geometry, metadata and validation of fitted component states.
 
-G1 owner extended: ``_postfit/fitted_state.py``.  The state records the fixed
-fitting coordinate, the G3 basis record and coefficients, solver diagnostics
-and the downstream numerical representations used by public evaluation and
-warm starts; ``basis_state._pack_basis_state`` packs it.  It is a runtime
+The state records the fixed fitting coordinate, the basis record and
+coefficients, solver diagnostics and the downstream numerical
+representations used by public evaluation and warm starts; ``basis_state._pack_basis_state`` packs it.  It is a runtime
 representation, not the durable persistence schema; that boundary is defined
 in :mod:`gibbus._serialization`.
 """
@@ -47,7 +46,7 @@ def _shared_model_geometry(comp_states, /):
     # values; a log is active when its amplitude is positive (a zero amplitude
     # lies on its zero face).  Dimensions count each component's private
     # coefficients (``basis_n_face`` on the fit's face), the shared amplitudes
-    # once and ``K - 1`` weights, as G1 does.
+    # once and ``K - 1`` weights.
     def anchors(state):
         """Potential anchors of ``state`` in fitted base coordinates."""
         return float(state["fit_center"]) + float(state["fit_scale"]) * np.asarray(
@@ -240,7 +239,10 @@ _STATE_FIELDS = (
     "basis_theta",
     "basis_log_z",
     "basis_log_z_model",
+    "basis_log_z_canonical",
+    "basis_location",
     "basis_shape",
+    "basis_shape_tau",
     "basis_n_face",
 )
 
@@ -362,10 +364,17 @@ def _check_state_invariants(struct, /):
             raise ValueError(f"state {name} must satisfy lower < upper")
     if not np.all(np.isfinite(field("window"))):
         raise ValueError("state window must be finite")
-    active_support = (field("support") - float(struct["fit_center"])) / scale
+    support = field("support")
+    center = float(struct["fit_center"])
+    active_support = (support - center) / scale
     anchors = field("canonical_support")
+    # The active ends are differences of public coordinates: their rounding
+    # scales with the magnitudes that cancel, not with the result.
+    cancelled = (np.abs(support) + abs(center)) / scale
     tolerance = 1e-12 * max(
-        1.0, float(np.max(np.abs(anchors[np.isfinite(anchors)]), initial=0.0))
+        1.0,
+        float(np.max(np.abs(anchors[np.isfinite(anchors)]), initial=0.0)),
+        float(np.max(cancelled[np.isfinite(cancelled)], initial=0.0)),
     )
     if (
         active_support[0] < anchors[0] - tolerance

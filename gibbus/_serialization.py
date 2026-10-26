@@ -1,11 +1,12 @@
-"""Versioned durable serialization for fitted :class:`Distribution` models.
+"""Durable serialization of fitted :class:`Distribution` models.
 
-Gibbus reads and writes one format: version 2, the G3 basis model.  Any
-other version, older or newer, is rejected (no migration readers).  The
-format separates the mathematical model from optional provenance and runtime
-caches.  Only the ``model`` section is the durable contract.  ``provenance`` may grow by adding
-ignorable fields, and ``cache`` is an implementation detail that is reused
-only when it is known to match the running Gibbus build and the durable model.
+The envelope carries ``format`` and ``format_version`` and separates the
+mathematical model from optional provenance and runtime caches.  Only the
+``model`` section is the durable contract: per component, the basis record,
+the canonical coefficients, the canonical potential's ``log Z`` and the
+active support.  ``provenance`` may grow by adding ignorable fields, and
+``cache`` is an implementation detail that is reused only when it is known to
+match the running Gibbus build and the durable model.
 
 Optional sections are validated explicitly, field by field, before any value
 is read.  A section that does not match the recognized layout is treated as
@@ -34,7 +35,7 @@ from ._postfit.fitted_state import (
 )
 
 FORMAT_NAME = "gibbus"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 1
 
 _ENVELOPE_FIELDS = ("format", "format_version", "model", "provenance", "cache")
 
@@ -83,6 +84,7 @@ _PROVENANCE_COMPONENT_SPEC = {
     "optimizer_subproblem_iterations": ("<i8", ()),
     "optimizer_decrease_bound": ("<f8", ()),
     "basis_shape": ("<U32", ()),
+    "basis_shape_tau": ("<f8", ()),
     "basis_n_face": ("<i8", ()),
     "boundary_standard_errors": ("<f8", (2,)),
     "boundary_p_values": ("<f8", (2,)),
@@ -254,12 +256,12 @@ def _section_present(section, names, /):
 
 
 def _pack_model(weights, default_space, comp_states, /, *, mu, sigma):
-    """Pack the durable model section of G3 components.
+    """Pack the durable model section of basis components.
 
     Each component is its basis record (request, geometry, slot choice;
-    ``basis_state._model_record``), its coefficients, the model ``log Z``
-    over the basis support and the active support (a truncation keeps the
-    potential and narrows the support).
+    ``basis_state._model_record``), its canonical coefficients, the canonical
+    potential's ``log Z`` over the basis support and the active support (a
+    truncation keeps the potential and narrows the support).
 
     Parameters
     ----------
@@ -268,7 +270,7 @@ def _pack_model(weights, default_space, comp_states, /, *, mu, sigma):
     default_space : str
         Active query space, ``"base"`` or ``"exp"``.
     comp_states : sequence of numpy.void
-        Internal fitted G3 component states.
+        Internal fitted component states.
     mu, sigma : float
         Accumulated public affine transform.
 
@@ -311,7 +313,7 @@ def _pack_model(weights, default_space, comp_states, /, *, mu, sigma):
     out["basis_models"] = records
     out["theta_values"] = np.concatenate(thetas)
     out["theta_offsets"] = offsets
-    out["log_z"] = [float(s["basis_log_z_model"]) for s in comp_states]
+    out["log_z"] = [float(s["basis_log_z_canonical"]) for s in comp_states]
     out["support"] = np.stack(
         [np.asarray(s["support"], dtype="<f8") for s in comp_states]
     )
@@ -538,7 +540,7 @@ def pack_distribution_state(
     sigma=1.0,
     fit_metadata=None,
 ):
-    """Pack one versioned, non-object durable Distribution state.
+    """Pack one non-object durable Distribution state.
 
     Parameters
     ----------
@@ -558,7 +560,7 @@ def pack_distribution_state(
     Returns
     -------
     numpy.void
-        Serialization envelope (format ``FORMAT_VERSION``).
+        Serialization envelope.
     """
     model = _pack_model(weights, default_space, comp_states, mu=mu, sigma=sigma)
     if _history_unavailable(comp_states):
@@ -731,6 +733,9 @@ def _read_provenance(provenance, model, /):
         if np.any(np.asarray(provenance[name]) < -1):
             return None
     if np.any(np.asarray(provenance["basis_n_face"]) < 0):
+        return None
+    if np.any(np.asarray(provenance["basis_shape_tau"]) <= 0.0):
+        # A recorded threshold is positive; NaN means none was recorded.
         return None
     for name in ("boundary_standard_errors", "shared_boundary_standard_errors"):
         if np.any(np.asarray(provenance[name]) < 0.0):
@@ -962,7 +967,7 @@ def _check_runtime_components(comp_states, model, defect, /):
         if (
             str(state["basis_model"]) != str(model["basis_models"][j])
             or not np.array_equal(np.asarray(state["basis_theta"]), theta)
-            or float(state["basis_log_z_model"]) != float(model["log_z"][j])
+            or float(state["basis_log_z_canonical"]) != float(model["log_z"][j])
             or not np.array_equal(np.asarray(state["support"]), model["support"][j])
         ):
             raise ValueError(defect.format(f"disagrees with model component {j}"))
@@ -974,7 +979,7 @@ def _check_runtime_components(comp_states, model, defect, /):
 
 
 # ``log Z`` recomputed at load must reproduce the stored value (normalizer
-# accuracy, G3-030).
+# accuracy).
 _LOG_Z_TOLERANCE = 1e-9
 
 
@@ -1015,12 +1020,11 @@ def _rebuild_basis_component(model, j, /):
         raise ValueError("serialization coefficients do not match their basis")
     state = _pack_basis_state(basis, theta, suppressed=suppressed)
     stored = float(model["log_z"][j])
-    if abs(float(state["basis_log_z"]) - stored) > _LOG_Z_TOLERANCE * max(
-        1.0, abs(stored)
-    ):
+    rebuilt = float(state["basis_log_z_canonical"])
+    if abs(rebuilt - stored) > _LOG_Z_TOLERANCE * max(1.0, abs(stored)):
         raise ValueError(
             f"serialization component {j} does not reproduce its normalization "
-            f"(log Z {float(state['basis_log_z'])!r} vs stored {stored!r})"
+            f"(log Z {rebuilt!r} vs stored {stored!r})"
         )
     support = np.asarray(model["support"][j], dtype=np.float64)
     full = np.asarray(state["support"], dtype=np.float64)
@@ -1034,9 +1038,7 @@ def _rebuild_basis_component(model, j, /):
 
 
 def load_distribution_state(state, /):
-    """Validate and unpack one versioned durable Distribution state.
-
-    Only format ``FORMAT_VERSION`` is read; every other version is rejected.
+    """Validate and unpack one durable Distribution state.
 
     Parameters
     ----------
@@ -1051,8 +1053,8 @@ def load_distribution_state(state, /):
     Raises
     ------
     ValueError
-        If the envelope or durable model is invalid or uses an unsupported
-        format version, or if a digest-verified cache is inconsistent.
+        If the envelope or durable model is invalid, or if a digest-verified
+        cache is inconsistent.
     """
     raw = np.array(state, copy=True)
     names = _structured_fields(raw)
@@ -1061,28 +1063,20 @@ def load_distribution_state(state, /):
             "serialized Gibbus state must be a non-object structured scalar"
         )
     if names != _ENVELOPE_FIELDS:
-        if "format_version" not in names:
-            raise ValueError(
-                "unversioned Gibbus state is not supported; refit the model with "
-                "this Gibbus build"
-            )
-        raise ValueError("invalid Gibbus serialization envelope")
+        raise ValueError(
+            f"invalid Gibbus serialization envelope: fields {names} must be "
+            f"{_ENVELOPE_FIELDS}"
+        )
     if raw.dtype["format"] != np.dtype("<U8"):
         raise ValueError("serialization format must have dtype <U8")
     if raw.dtype["format_version"] != np.dtype("<i8"):
         raise ValueError("serialization format_version must have dtype <i8")
     if str(raw["format"]) != FORMAT_NAME:
         raise ValueError("serialized state is not a Gibbus model")
-    version = int(raw["format_version"])
-    if version > FORMAT_VERSION:
+    if int(raw["format_version"]) != FORMAT_VERSION:
         raise ValueError(
-            f"serialization format {version} is newer than this Gibbus build supports "
-            f"(it reads format {FORMAT_VERSION})"
-        )
-    if version != FORMAT_VERSION:
-        raise ValueError(
-            f"serialization format {version} is not supported by this Gibbus build "
-            f"(it reads format {FORMAT_VERSION}); refit the model"
+            f"invalid Gibbus serialization envelope: format_version must be "
+            f"{FORMAT_VERSION}"
         )
     model = raw["model"]
     _validate_model(model)
@@ -1122,7 +1116,7 @@ def _replace_optional_section(state, section, /):
     Parameters
     ----------
     state : numpy.void
-        Versioned Gibbus serialization envelope.
+        Gibbus serialization envelope.
     section : {"provenance", "cache"}
         Optional section to replace with the absent stub.
 
@@ -1133,11 +1127,11 @@ def _replace_optional_section(state, section, /):
     Raises
     ------
     ValueError
-        If *state* is not a versioned envelope.
+        If *state* is not a Gibbus serialization envelope.
     """
     raw = np.array(state, copy=True)
     if _structured_fields(raw) != _ENVELOPE_FIELDS:
-        raise ValueError("expected a versioned Gibbus serialization envelope")
+        raise ValueError("expected a Gibbus serialization envelope")
     stub = _absent_section()
     dtype = np.dtype(
         [
@@ -1160,7 +1154,7 @@ def strip_cache(state, /):
     Parameters
     ----------
     state : numpy.void
-        Versioned Gibbus serialization envelope.
+        Gibbus serialization envelope.
 
     Returns
     -------
@@ -1175,7 +1169,7 @@ def strip_provenance(state, /):
     Parameters
     ----------
     state : numpy.void
-        Versioned Gibbus serialization envelope.
+        Gibbus serialization envelope.
 
     Returns
     -------

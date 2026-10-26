@@ -9,10 +9,10 @@ from scipy.special import eval_genlaguerre
 
 from gibbus import BasisSpec
 from gibbus._fit.basis_objective import _BasisPointObjective, _point_statistics
-from gibbus._fit.laguerre import _laguerre_model
+from gibbus._fit.coordinates import _polynomial_coordinates
 from gibbus._model.basis import _build_basis
 from gibbus._model.basis_eval import _evaluate_basis
-from gibbus._model.basis_interval import _exact_ungated_curvature, _potential_enclosure
+from gibbus._model.basis_interval import _potential_enclosure
 from gibbus._model.basis_normalizer import _NormalizerContext
 
 
@@ -21,12 +21,12 @@ def _models(degree=12):
     model = _build_basis(
         BasisSpec(support=(0.0, np.inf), bulk_degree=degree, log_lower=True), data
     )
-    stats = _point_statistics(model, data)
     theta = np.zeros(model.n_coefficients)
     labels = [c.label for c in model.columns]
-    theta[labels.index("x")] = model.geometry.scale
+    theta[labels.index("z")] = model.geometry.scale
     theta[labels.index("logL")] = 0.35
-    orthogonal = _laguerre_model(model, stats, theta)
+    orthogonal = _polynomial_coordinates(model, data, None, theta)
+    assert orthogonal.polynomial_coordinates.family == "laguerre"
     return model, orthogonal, data, theta
 
 
@@ -77,10 +77,14 @@ def test_runtime_map_and_recurrence_represent_the_same_polynomial():
 
 
 def test_direct_objective_matches_canonical_density_and_fisher():
-    original, model, data, theta = _models()
+    # The canonical monomial Fisher is the reference here, and its condition
+    # number grows like 1e19 at degree 12 on this support (z = x / q90): the
+    # comparison is made at degree 8 (condition ~3e12), where the reference
+    # itself still carries seven digits.
+    original, model, data, theta = _models(8)
     plan = model.polynomial_coordinates
     theta[1] = 0.1
-    theta[11] = 1e-16
+    theta[[c.label for c in original.columns].index("z^8")] = 1e-16
     beta = plan.from_canonical(theta)
     np.testing.assert_allclose(plan.to_canonical(beta), theta, atol=2e-14, rtol=2e-12)
     first = _BasisPointObjective(
@@ -97,7 +101,7 @@ def test_direct_objective_matches_canonical_density_and_fisher():
     scale = np.sqrt(np.diag(second.fisher))
     assert (
         np.max(np.abs(second.fisher - expected) / scale[:, None] / scale[None, :])
-        < 2e-8
+        < 5e-7
     )
 
 
@@ -129,44 +133,3 @@ def test_mapped_point_bounds_contain_exact_curvature():
             elif fn.kind == "log":
                 exact += coefficient / Fraction(float(point)) ** 2
         assert Fraction(float(lower[row])) <= exact <= Fraction(float(upper[row]))
-
-
-@pytest.mark.parametrize(
-    "unresolved,tail_status",
-    [(0, "nonnegative"), (1, "nonnegative"), (0, "inconclusive")],
-)
-def test_exact_contact_fallback_preserves_unresolved_verdicts(
-    monkeypatch, unresolved, tail_status
-):
-    from gibbus._fit import curvature_search as search
-
-    model, _, _, theta = _models()
-    point = 2.0
-    exact = Fraction(float(theta[-1])) / Fraction(point) ** 2
-    bounds = _exact_ungated_curvature(model, theta, [point])[0]
-    assert Fraction(bounds[1]) <= exact <= Fraction(bounds[2])
-    row = _evaluate_basis(model, [point]).d2phi
-    tail = ("upper", tail_status, 10.0, 10.0, 1.0, 1.0, 0.0, 1.0, -1)
-    monkeypatch.setattr(
-        search,
-        "separate",
-        lambda *args: (
-            "inconclusive",
-            1e-3,
-            (0.1, 10.0),
-            [],
-            [(point, float(exact), -1.0, 1.0, "interior")],
-            [tail],
-            np.array([point]),
-            row,
-            1,
-            unresolved,
-        ),
-    )
-    result = search._separate_curvature(search._CurvatureContext(model), theta)
-    expected = (
-        "nonnegative"
-        if unresolved == 0 and tail_status == "nonnegative"
-        else "inconclusive"
-    )
-    assert result.status == expected

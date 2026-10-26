@@ -272,7 +272,7 @@ class TestSpectralDegradationIsGraceful:
                 ),
             )
 
-        # G3 states build their inverse in ``basis_state``, which binds
+        # Basis states build their inverse in ``basis_state``, which binds
         # ``SpectralPPF`` at import.
         monkeypatch.setattr(_spectral_ppf, "SpectralPPF", constrained_ppf)
         monkeypatch.setattr(_basis_state, "SpectralPPF", constrained_ppf)
@@ -653,7 +653,7 @@ class TestShapeBugsAreNotSwallowed:
     """
 
     def test_a_shape_bug_in_the_em_refit_reaches_the_caller(self, monkeypatch):
-        """The exact failure mode that hid a real bug during this review."""
+        """A programming error inside EM must not be absorbed as a numeric failure."""
 
         def broken(*args, **kwargs):
             return np.zeros(3) + np.zeros(5)
@@ -725,7 +725,7 @@ class TestMinorityComponentSpectralAccuracy:
         for comp in c.components:
             d = comp.data
             z = (float(comp.mean) - float(d["fit_center"])) / float(d["fit_scale"])
-            # G3 state: on the full line the minimal span is the bulk powers
+            # Basis state: on the full line the minimal span is the bulk powers
             # ``z^1 .. z^d`` and the potential is ``theta . Phi(z) + log Z``.
             theta = np.asarray(d["basis_theta"], dtype=float)
             terms = np.r_[

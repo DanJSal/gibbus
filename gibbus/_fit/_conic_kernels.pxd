@@ -18,7 +18,7 @@ ctypedef double (*face_step_fn)(
 ) noexcept nogil
 
 # An objective may return FACE_STOP from ``evaluate``: the loop then ends with
-# status 6 at its current accepted iterate (G3 cut exchange, G3-038).
+# status 6 at its current accepted iterate (cut exchange).
 cdef enum:
     FACE_STOP = -100
 

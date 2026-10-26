@@ -183,7 +183,7 @@ class TestHeavyTailRobustness:
         assert diagnostics["converged"]
         assert diagnostics["em"]["converged"]
         assert all(
-            record["shape"] == "nonnegative" for record in diagnostics["components"]
+            record["shape"] == "verified" for record in diagnostics["components"]
         )
 
 

@@ -1,9 +1,8 @@
 """Canonical interval observations: validated rows, weights, duplicate merge.
 
-G1 owner retained (G3-031): the observation-side representation of
-interval-censored data.  Validation, support checks, normalized weights and
-exact duplicate-row collapse are model-independent; the G3 interval
-likelihood (``_fit.basis_objective``) integrates each merged row with the
+The observation-side representation of interval-censored data.
+Validation, support checks, normalized weights and exact duplicate-row
+collapse are model-independent; the interval likelihood (``_fit.basis_objective``) integrates each merged row with the
 normalizer.  Zero-width rows retain the library's documented
 point-observation limit.
 """

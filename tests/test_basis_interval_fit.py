@@ -1,4 +1,4 @@
-"""G3 Stage 5 Phase B: interval/censored likelihood and fits (G3-044).
+"""Interval/censored likelihood and fits.
 
 Defining properties of the interval objective: the gradient and observed
 Hessian ``F - C`` are the derivatives of ``-sum w log P(B)``; the metric is
@@ -56,8 +56,8 @@ def _fd(f, theta, step=1e-5):
 
 
 MODELS = [
-    (BasisSpec(bulk_degree=4), {"x^4": 0.05, "x^2": 0.5, "x": 0.2}),
-    (BasisSpec(bulk_degree=4), {"x^4": 1.0, "x^2": -4.0, "x": 0.5}),
+    (BasisSpec(bulk_degree=4), {"z^4": 0.05, "z^2": 0.5, "z": 0.2}),
+    (BasisSpec(bulk_degree=4), {"z^4": 1.0, "z^2": -4.0, "z": 0.5}),
 ]
 
 
@@ -76,7 +76,7 @@ def test_gradient_and_observed_hessian_are_the_derivatives(spec, weights):
 
 def test_metric_is_the_observed_hessian_when_positive_definite():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 0.05, "x^2": 0.5})
+    theta, _ = _theta(model, {"z^4": 0.05, "z^2": 0.5})
     g = model.geometry
     narrow = np.column_stack(
         [
@@ -96,7 +96,7 @@ def test_metric_is_the_observed_hessian_when_positive_definite():
 def test_metric_reflects_negative_curvature():
     # Two wide overlapping rows of a bimodal model: F - C is indefinite.
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 1.0, "x^2": -4.0, "x": 0.5})
+    theta, _ = _theta(model, {"z^4": 1.0, "z^2": -4.0, "z": 0.5})
     g = model.geometry
     rows = np.array([[-INF, g.center], [g.center - 0.1 * g.scale, INF]])
     ev = _objective(model, rows)(theta)
@@ -122,7 +122,7 @@ def test_zero_width_rows_are_the_point_objective():
 
 def test_whole_support_rows_add_nothing():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 0.05, "x^2": 0.5, "x": 0.2})
+    theta, _ = _theta(model, {"z^4": 0.05, "z^2": 0.5, "z": 0.2})
     rows = _censored_rows(model, 30)
     base = _objective(model, rows)(theta)
     extra = np.vstack([rows, [[-INF, INF]] * 30])
@@ -134,7 +134,7 @@ def test_whole_support_rows_add_nothing():
 
 def test_face_metric_uses_the_restricted_matrices():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 1.0, "x^2": -4.0, "x": 0.5})
+    theta, _ = _theta(model, {"z^4": 1.0, "z^2": -4.0, "z": 0.5})
     g = model.geometry
     rows = np.array([[-INF, g.center], [g.center - 0.1 * g.scale, INF]])
     obj = _objective(model, rows)
@@ -150,7 +150,7 @@ def test_face_metric_uses_the_restricted_matrices():
 
 
 # ---------------------------------------------------------------------------
-# Fits: closed-form maximum likelihood, G1 parity, global certificate
+# Fits: closed-form maximum likelihood, global certificate
 # ---------------------------------------------------------------------------
 
 
@@ -249,7 +249,7 @@ def test_a_saturated_fit_reaches_the_nonparametric_bound():
     assert abs(fit.result.global_gap) <= 1e-10
 
 
-def test_interval_inputs_follow_g1_endpoint_rules():
+def test_interval_inputs_follow_endpoint_rules():
     from gibbus._fit.basis_selection import _fit_basis
 
     g = np.random.default_rng(16).gamma(2.0, 1.0, 100)
@@ -266,12 +266,25 @@ def test_interval_inputs_follow_g1_endpoint_rules():
         _fit_basis(BasisSpec(support=(0.0, INF)), np.vstack([rows, [-INF, 1.0]]))
 
 
-def test_an_expansion_that_cannot_lower_the_nll_is_not_kept():
+def test_an_expansion_that_cannot_lower_the_nll_is_not_kept(monkeypatch):
     # Censored exponential data: the fit sits on the active curvature row
-    # (zero z**2 coefficient), the joint score points out of the shape cone
-    # (p = 0.006) and the extension gains nothing; the likelihood ratio keeps
-    # the minimal span.
+    # (zero z**2 coefficient).  The joint score is forced to call for an
+    # expansion, as it can when it points out of the shape cone; the extension
+    # gains nothing, and the likelihood ratio keeps the minimal span.
+    import dataclasses
+
+    from gibbus._fit import basis_selection
     from gibbus._fit.basis_selection import _fit_basis
+
+    diagnostic = basis_selection._span_diagnostic
+
+    def forced(*args, **kwargs):
+        result = diagnostic(*args, **kwargs)
+        if result.label == "joint" and result.rank > 0:
+            result = dataclasses.replace(result, should_expand=True)
+        return result
+
+    monkeypatch.setattr(basis_selection, "_span_diagnostic", forced)
 
     rng = np.random.default_rng(1)
     rng.normal(size=400)

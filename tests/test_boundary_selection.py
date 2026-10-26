@@ -121,7 +121,7 @@ def test_standard_error_shrinks_like_one_over_root_n():
         # The square root of a gamma(3) variable: the lower log and the
         # quadratic bulk stay interior at both sizes (a gamma sample's linear
         # upper tail puts the degree-2 fit on its leader face at one size and
-        # not the other, G3-047).
+        # not the other).
         x = np.sqrt(rng.gamma(3.0, 1.0, n))
         model = Distribution().fit(
             x,

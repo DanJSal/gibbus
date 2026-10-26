@@ -1,14 +1,13 @@
-"""Empirical within-family tail parameters for G3 point-data fits.
+"""Empirical within-family tail parameters for point-data fits.
 
 The family is always user-selected. A fixed power/rate bypasses this module.
 For each requested automatic end, choose a parameter from conditional
 upper exceedances (reflect the data for the lower end). Only the empirical
-model is optimized; global G3 fitting is not an outer optimization loop.
+model is optimized; the fit is not an outer optimization loop.
 
 This is an approximate statistical screening procedure, not an estimator of
-unobservable ultimate asymptotics. Numerical certification remains the
-responsibility of the ordinary G3 solver. A second proposal is retained
-solely for a single numerical-failure recovery attempt.
+unobservable ultimate asymptotics; the fit itself verifies the shape, and a
+fit that fails with the estimate fails.
 """
 
 import math
@@ -24,21 +23,27 @@ from .._model.basis_spec import (
     _needs_tail_estimation,
 )
 from ._empirical_tail_likelihood import (
-    _h_exp,
-    _h_power,
     potential_fixed,
     prepare_tail,
     tail_data,
 )
 from .budget import _check_fit_time
 
+# Integer powers screened by the empirical tail likelihood (1 through this).
+_MAX_SCREENED_POWER = 6
+# The open soft-power range p > 1 is searched from here.
+_MIN_SOFT_POWER = 1.0 + 1e-6
+# An estimate this close to p = 1 means the tail is too heavy for the family.
+_SOFT_POWER_BOUNDARY = 1e-3
+# Decade widenings of the exponential-rate bracket.
+_BRACKET_WIDENINGS = 8
+
 
 @dataclass(frozen=True)
 class TailEstimate:
-    """Selected physical parameter, competitive backup, and tail sample size."""
+    """Selected physical parameter, tail sample size and family."""
 
     primary: float
-    alternative: float | None
     n_tail: int
     family: str
 
@@ -87,9 +92,11 @@ def _prepare_values(samples, weights):
 def estimate_tail(x, *, family, side, fraction=0.4):
     """Profile fixed-family conditional-tail likelihood; return top candidates.
 
-    Polynomial candidates are integers 1..6. SoftPower first screens those
-    integers, then optimizes in the best integer's clipped +/-1 interval.
-    Exponential rates are optimized in standardized inverse-data units.
+    Polynomial candidates are the integers 1 through 6.  A soft power takes
+    the best of those integers and is refined continuously within one of it
+    (``p > 1``; the refinement may leave the screened range).  An exponential
+    rate is optimized in log standardized inverse-data units from 0.12,
+    widening the bracket upward until the optimum is interior.
     """
     if family not in {"polynomial", "soft_power", "exponential"}:
         raise ValueError(f"unknown tail family {family!r}")
@@ -129,13 +136,17 @@ def estimate_tail(x, *, family, side, fraction=0.4):
         m = model(v)
         return -math.inf if m is None else m["ll"]
 
-    integers = tuple(float(i) for i in range(1, 7))
+    # Integer powers are screened over a fixed range: the conditional
+    # likelihood of a few dozen exceedances is nearly flat in the power for
+    # light tails, and an open scan climbs to spurious high powers there
+    # (Gaussian data: p = 10).  This is a screening policy, not a limit of
+    # the family, which accepts any explicit p > 1.
+    integers = tuple(float(i) for i in range(1, _MAX_SCREENED_POWER + 1))
     if family == "polynomial":
         primary = max(integers, key=score)
-        trials = integers
     elif family == "soft_power":
         n = max(integers, key=score)
-        low, high = max(1.0, n - 1.0), min(6.0, n + 1.0)
+        low, high = max(_MIN_SOFT_POWER, n - 1.0), n + 1.0
         fit = minimize_scalar(
             lambda p: -score(p),
             bounds=(low, high),
@@ -145,63 +156,47 @@ def estimate_tail(x, *, family, side, fraction=0.4):
         if not fit.success:
             raise RuntimeError("soft-power tail parameter search did not converge")
         primary = max((n, float(fit.x), low, high), key=score)
-        trials = sorted(
-            {primary, n, low, high, max(1.0, primary - 0.15), min(6.0, primary + 0.15)}
-        )
+        if primary < 1.0 + _SOFT_POWER_BOUNDARY:
+            # The likelihood climbs toward p = 1: the tail is at least as
+            # heavy as linear growth, which no soft power p > 1 follows (the
+            # fit would run into the improper boundary).
+            raise ValueError(
+                f"the {side} tail looks heavier than any SoftPower: the "
+                "automatic estimate reaches p = 1; give an explicit power or "
+                "another tail family"
+            )
     else:
-        fit = minimize_scalar(
-            lambda p: -score(p),
-            bounds=(0.12, 5.0),
-            method="bounded",
-            options={"xatol": 0.03, "maxiter": 18},
-        )
-        if not fit.success:
-            raise RuntimeError("exponential tail parameter search did not converge")
-        primary = float(fit.x)
-        trials = sorted(
-            {
-                primary,
-                max(0.12, primary * 0.75),
-                min(5.0, primary * 1.25),
-                max(0.12, primary * 0.9),
-                min(5.0, primary * 1.1),
-            }
-        )
+        # The bracket widens upward (steeper tails) until the optimum is
+        # interior.  Its lower end stays: as lambda -> 0 the empirical model
+        # tends to a quadratic potential, a different family whose
+        # likelihood the profile would otherwise follow (Gumbel's upper tail
+        # chose lambda ~ 1e-4).
+        lo_l, hi_l = math.log(0.12), math.log(5.0)
+        for _ in range(_BRACKET_WIDENINGS):
+            fit = minimize_scalar(
+                lambda t: -score(math.exp(t)),
+                bounds=(lo_l, hi_l),
+                method="bounded",
+                options={"xatol": 0.006, "maxiter": 24},
+            )
+            if not fit.success:
+                raise RuntimeError("exponential tail parameter search did not converge")
+            t = float(fit.x)
+            if hi_l - t < 0.05:
+                hi_l += math.log(10.0)
+            else:
+                break
+        primary = math.exp(t)
     if model(primary) is None:
         raise RuntimeError(
             "automatic tail estimation could not fit a finite conditional likelihood"
         )
-    # The backup is a different parameter with a statistically competitive
-    # conditional-tail likelihood, not the candidate with largest coefficient.
-    best = model(primary)
-    primary_h = (
-        _h_exp(y, primary, med) if kind == "exp" else _h_power(y, primary, u, med)
-    )
-    backups = []
-    for v in trials:
-        if v == primary or model(v) is None:
-            continue
-        m = model(v)
-        h = _h_exp(y, v, med) if kind == "exp" else _h_power(y, v, u, med)
-        diff = -(best["b"] - m["b"]) * y - (best["a"] * primary_h - m["a"] * h)
-        if not np.all(np.isfinite(diff)):
-            continue
-        se = float(np.std(diff, ddof=1) / math.sqrt(len(y)))
-        loss = float(score(primary) - score(v))
-        if loss <= max(1e-4, se):
-            backups.append((loss, float(v)))
-    backups.sort()
     physical = (lambda p: p / scale) if family == "exponential" else float
     if not math.isfinite(physical(primary)) or physical(primary) <= 0:
         raise ValueError(
             "estimated tail parameter is not representable in physical units; rescale the observations"
         )
-    return TailEstimate(
-        float(physical(primary)),
-        float(physical(backups[0][1])) if backups else None,
-        int(y.size),
-        family,
-    )
+    return TailEstimate(float(physical(primary)), int(y.size), family)
 
 
 def resolve_auto_tails(spec, samples, weights=None):
@@ -240,7 +235,7 @@ def resolve_auto_tails(spec, samples, weights=None):
             family = "soft_power"
 
             def ctor(v, old):
-                return SoftPower(float(v), delta=old.delta)
+                return SoftPower(float(v))
 
         else:
             family = "exponential"
@@ -252,13 +247,3 @@ def resolve_auto_tails(spec, samples, weights=None):
         estimates[side] = (term, est, ctor)
         result = replace(result, **{side + "_tail": ctor(est.primary, term)})
     return result, estimates
-
-
-def alternative_spec(spec, estimates):
-    """One backup configuration, prioritizing the first side with a backup."""
-    from dataclasses import replace
-
-    for side, (term, est, ctor) in estimates.items():
-        if est.alternative is not None:
-            return replace(spec, **{side + "_tail": ctor(est.alternative, term)})
-    return None

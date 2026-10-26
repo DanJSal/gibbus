@@ -1,14 +1,10 @@
-"""Weighted point and interval observation objectives for the G3 basis.
+"""Weighted point and interval observation objectives of the basis.
 
-G1 owner replaced: the point half of ``_fit/objective.py``
-(``_ObjectiveEvaluation``, ``_evaluate_point_objective``), the point objective
-callable of ``_fit/natural_objective.py`` (``_NaturalPointObjectiveFunction``)
-and the point statistics of ``_observations/empirical.py`` /
-``_observations/points.py``.  Retained from G1: the evaluation record and its
-field names, the callable-objective shape (``build_state`` and ``__call__``)
-that the Newton controller, interval EM and mixture M-steps consume, per-unit-
-weight NLL in user coordinates, and ``RuntimeError`` for non-normalizable
-candidates.  Replaced: polynomial power moments by the basis columns ``Phi``.
+An objective is a callable (``build_state`` and ``__call__``) returning one
+evaluation record; the Newton controller, interval EM and mixture M-steps
+consume it.  The NLL is per unit weight in user coordinates, and a
+non-normalizable candidate raises ``RuntimeError``.  The sufficient
+statistics are the basis columns ``Phi``.
 
 With fixed sufficient statistics ``Phi_bar = sum_i w_i Phi(x_i) / sum_i w_i``
 the negative log likelihood per unit weight is
@@ -21,21 +17,18 @@ data is zero).  All model quantities come from one normalized state
 (``basis_normalizer``).
 
 Point observations exactly at a finite endpoint with an enabled logarithm are
-rejected at the public boundary (G1 ``_fit/inputs.py``,
-``_validate_endpoint_observations``; an automatic log term resolves to no
-term), so the statistics here are always finite.
+rejected at the public boundary (``_fit/inputs.py``; an automatic log term
+resolves to no term), so the statistics here are always finite.
 
-**Interval rows** (G3-044; G1 owner replaced: the interval half of
-``_fit/objective.py`` and ``_NaturalIntervalObjectiveFunction`` of
-``_fit/natural_objective.py``).  With row masses ``P(B_r)`` and normalized
+**Interval rows.**  With row masses ``P(B_r)`` and normalized
 weights ``w_r`` the NLL per unit weight is ``-sum_r w_r log P(B_r)``, a
 difference of convex functions: gradient ``sum_r w_r E[Phi | B_r] -
 E[Phi]``, observed Hessian ``F - C`` with ``F = Cov[Phi]`` and the missing
 information ``C = sum_r w_r Cov(Phi | B_r)`` (``basis_normalizer.
 _interval_state``).  ``F`` is the Hessian of the EM surrogate, which has the
-same gradient.  Retained from G1: the Newton metric is ``F - C`` wherever it
-is positive definite relative to ``F`` and otherwise its saddle-free
-reflection, from G1's compiled ``_in_safeguarded_metric``; on a face the
+same gradient.  The Newton metric is ``F - C`` wherever it is positive
+definite relative to ``F`` and otherwise its saddle-free reflection
+(compiled); on a face the
 metric is formed from the restricted ``F`` and ``C``.  Zero-width rows are
 point observations (log densities), rows covering the support contribute
 nothing.
@@ -63,7 +56,7 @@ from ._conic_kernels import safeguarded_metric
 
 @dataclass(frozen=True)
 class _ObjectiveEvaluation:
-    """One exact objective/derivative evaluation (G1 record).
+    """One exact objective/derivative evaluation.
 
     Parameters
     ----------
@@ -234,8 +227,6 @@ class _BasisPointObjective:
         self.options = options
         self._zero_missing = np.zeros((stats.mean.size, stats.mean.size))
 
-    coefficient_convex = True
-
     def coordinate_observations(self, block):
         """Retained observations for direct statistics in runtime coordinates."""
         del block
@@ -332,7 +323,7 @@ class _BasisPointObjective:
         Raises
         ------
         _ImproperPotential
-            If ``Z = inf`` (a ``RuntimeError``, as in G1).
+            If ``Z = inf`` (a ``RuntimeError``).
         _QuadratureFailure
             Propagated from the normalizer (fails loudly).
         """
@@ -353,10 +344,10 @@ class _BasisPointObjective:
 
 @dataclass(frozen=True)
 class _IntervalRows:
-    """Canonical interval rows in user units (G1 ``_IntervalObservations``).
+    """Canonical interval rows in user units.
 
-    Duplicates merged and weights normalized by G1's
-    ``_build_interval_observations``; a zero-width row is a point
+    Duplicates merged and weights normalized (``_observations.intervals``);
+    a zero-width row is a point
     observation, an infinite end a censoring row.
 
     Parameters
@@ -382,7 +373,7 @@ class _IntervalRows:
 
     @property
     def intervals(self):
-        """Rows as ``(R, 2)`` (G1 ``_IntervalObservations.intervals``)."""
+        """Rows as ``(R, 2)``."""
         return np.column_stack([self.lower, self.upper])
 
     @property
@@ -438,12 +429,9 @@ def _interval_rows(support, intervals, weights=None, /):
 
 
 def _uniform_statistics(model, rows, /):
-    """Point statistics of uniforms within finite rows (G1 interval start).
+    """Point statistics of uniforms within finite rows (the interval start).
 
-    G1 owner adapted: ``_observations/empirical.py``
-    ``_uniform_interval_empirical_stats`` (exact power moments of the
-    uniforms) for the basis columns: each row's ``Phi`` mean by G1's
-    ``INTERVAL_GL_ORDER``-point Gauss-Legendre rule (``Phi(x)`` for a point
+    Each row's ``Phi`` mean by the ``INTERVAL_GL_ORDER``-point Gauss-Legendre rule (``Phi(x)`` for a point
     row).  Only a starting point is built from it; the fit is the interval
     likelihood's.
 
@@ -520,13 +508,12 @@ class _BasisIntervalObjective:
         )
 
     def lower_bound(self, nll, options, /):
-        """G1's nonparametric NLL lower bound, run until a fit's certificate is decided.
+        """Nonparametric NLL lower bound, run until a fit's certificate is decided.
 
-        G1 ``natural_objective._interval_nll_lower_bound`` (Turnbull EM with
-        its Frank-Wolfe duality gap: a bound on the NLL of every
-        distribution), stopped as soon as G1's certificate rule
+        Turnbull EM with its Frank-Wolfe duality gap (a bound on the NLL of
+        every distribution), stopped as soon as the certificate rule
         (``conic_newton._apply_global_objective_certificate``) is decided for
-        a fit of NLL ``nll`` (G3-044); ``None`` with point rows, whose
+        a fit of NLL ``nll``; ``None`` with point rows, whose
         nonparametric likelihood is unbounded.
 
         Parameters
@@ -534,7 +521,7 @@ class _BasisIntervalObjective:
         nll : float
             NLL of the fit to certify.
         options : _NewtonOptions
-            G1 certificate tolerances.
+            Certificate tolerances.
         """
         return _interval_nll_lower_bound(
             self.rows,
@@ -546,7 +533,7 @@ class _BasisIntervalObjective:
         )
 
     def metric(self, fisher, missing, /):
-        """Saddle-free Newton metric of restricted ``F`` and ``C`` (G1).
+        """Saddle-free Newton metric of restricted ``F`` and ``C``.
 
         Parameters
         ----------
@@ -642,7 +629,7 @@ class _BasisIntervalObjective:
 def _interval_nll_lower_bound(
     observations, /, *, max_iterations=20000, tolerance=1e-13, decide=None
 ):
-    """Return a rigorous lower bound on every interval NLL for these rows (G1).
+    """Return a rigorous lower bound on every interval NLL for these rows.
 
     The censoring endpoints partition the support into atoms; any
     distribution assigns them masses ``p`` and the interval log likelihood
@@ -664,7 +651,7 @@ def _interval_nll_lower_bound(
         Stop once the duality gap is below this value.
     decide : tuple or None, optional
         ``(nll, certified, floor)``: stop as soon as the certificate of a fit
-        with this NLL is decided (G3-044): the bound is within ``certified``
+        with this NLL is decided: the bound is within ``certified``
         of ``nll`` (certified), or the current iterate's NLL ``-l(p)``, which
         the nonparametric optimum cannot exceed, lies more than ``floor``
         below ``nll`` (no bound can come within ``floor``).  Either way the

@@ -147,7 +147,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         """
         return self._choose_scale(L, U, mode, s0, kind=kind)
 
-    def _choose_scale(self, L, U, mode, s0, *, kind=None):
+    def _choose_scale(self, L, U, mode, s0, *, kind):
         """Pick the map scale whose transformed density is easiest to fit.
 
         Trial scales are scored by the Chebyshev fit error of the
@@ -159,15 +159,12 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         ----------
         L, U : float
             Support endpoints, either of which may be infinite.
-        mode : float or None
-            Density mode, used to center a doubly-infinite map.
+        mode : float
+            Density mode, the center of a ``"centered"`` map.
         s0 : float
             Baseline scale, typically the fitted standard deviation.
-        kind : {"lower", "upper", "real", "lower_centered", "upper_centered"} or None, optional
-            Compactification family to score. If ``None``, infer the ordinary
-            lower-, upper-, or doubly-infinite map from the finite support
-            endpoints. Centered half-line variants are passed explicitly when
-            a finite endpoint is extremely remote from the density body.
+        kind : {"lower", "upper", "centered"}
+            Compactification family to score.
 
         Returns
         -------
@@ -176,11 +173,7 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         """
         multipliers = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0)
         best = None
-        if kind is None:
-            kind = (
-                "lower" if np.isfinite(L) else ("upper" if np.isfinite(U) else "real")
-            )
-        c = float(mode) if mode is not None and np.isfinite(mode) else 0.0
+        c = float(mode)
         for mult in multipliers:
             s = max(float(s0) * mult, np.finfo(float).tiny)
             if kind == "lower":
@@ -212,9 +205,9 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         z = np.asarray(z, dtype=np.float64)
         out = np.zeros_like(z)
         finite_mask = np.ones_like(z, dtype=bool)
-        if mp.kind in ("real", "upper", "upper_centered"):
+        if not np.isfinite(mp.L):
             finite_mask &= z > -1.0
-        if mp.kind in ("real", "lower", "lower_centered"):
+        if not np.isfinite(mp.U):
             finite_mask &= z < 1.0
         if np.any(finite_mask):
             zz = z[finite_mask]
@@ -316,6 +309,10 @@ class PythonSpectralCDFBuilder(SpectralCDF):
         The panel polynomial is lifted by a Bernstein-certified constant
         if it dips below zero, so the analytic antiderivative is monotone
         by construction rather than by inspection.
+
+        A callable density has no basis terms, hence no rounding bound: the
+        compiled builder's noise mass (``_g_noise``) is zero for it, and the
+        tolerances below are the compiled ones.
 
         Parameters
         ----------

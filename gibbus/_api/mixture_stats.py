@@ -269,29 +269,8 @@ class _MixtureAnalyticsMixin:
         out = all_derivs[n]
         return out.item() if scalar else out
 
-    def _mix_base_log_tail_mass(self, x, endpoint, /, *, upper):
-        """Combine exact component tail masses with a compiled stable reduction.
-
-        Parameters
-        ----------
-        x : float
-            Tail anchor in base coordinates.
-        endpoint : float
-            Support endpoint in the requested tail direction.
-        upper : bool
-            Select the upper tail instead of the lower tail.
-        """
-        with np.errstate(divide="ignore"):
-            log_w = np.where(self._weights > 0.0, np.log(self._weights), -np.inf)
-        logs = np.empty((self._K, 1), dtype=np.float64)
-        for j, comp in enumerate(self._components):
-            logs[j, 0] = log_w[j] + comp.base._exact_tail_log_mass(
-                float(x), float(endpoint), upper=bool(upper)
-            )
-        return float(-_neg_logsumexp_batch(np.ascontiguousarray(logs))[0])
-
     def _mix_base_log_tail_masses(self, x, endpoint, /, *, upper):
-        """Batched ``_mix_base_log_tail_mass`` over an array of anchors.
+        """Mixture tail masses: component masses combined by a stable reduction.
 
         Parameters
         ----------
@@ -307,7 +286,7 @@ class _MixtureAnalyticsMixin:
             log_w = np.where(self._weights > 0.0, np.log(self._weights), -np.inf)
         logs = np.empty((self._K, xs.size), dtype=np.float64)
         for j, comp in enumerate(self._components):
-            logs[j] = log_w[j] + comp.base._exact_tail_log_masses(
+            logs[j] = log_w[j] + comp.base._tail_log_masses(
                 xs, float(endpoint), upper=bool(upper)
             )
         return -np.asarray(

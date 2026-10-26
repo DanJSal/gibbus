@@ -1,18 +1,15 @@
 # cython: language_level=3
 # distutils: define_macros=NPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION
 
-"""Compiled G3 normalizer: ``log Z``, ``E[Phi]``, ``Cov[Phi]`` with an error bound.
-
-G1 owner replaced: the normalization/Fisher traversal of
-``_model/_state_kernels.pyx`` (``_state_numerics_c``) for the G3 basis.
+"""Compiled normalizer: ``log Z``, ``E[Phi]``, ``Cov[Phi]`` with an error bound.
 
 ``basis_state_c`` is the compiled body of ``basis_normalizer._basis_state``
 (see that module for the method): properness from order-1 tail atoms,
 reference potential and tail truncation, cell resolution by interval
 enclosures, Gauss--Kronrod on the kept cells (nested tanh-sinh on cells
-ending at an endpoint singularity) in batches, the error budget, and centred
+ending at an endpoint singularity) in batches, the error budget, and centered
 moments.  Failures return a status (the Python wrapper raises
-``_QuadratureFailure``); there is no fallback path (G3-030).
+``_QuadratureFailure``); there is no fallback path.
 """
 
 import numpy as np
@@ -73,6 +70,8 @@ cdef int _TS_LEVEL0 = 2
 cdef int _GRID = 257
 # Below this log weight a node's moment products are formed in logs.
 cdef double _LOG_FAR = -600.0
+# Above this magnitude a column's moment products are formed in logs.
+cdef double _BIG_COLUMN = 1e150
 # Highest tanh-sinh level of the cached node table (``Ws.ts``).
 cdef int _TS_LEVELS = 30
 # The Gauss--Kronrod 10/21 rule (``gauss_kronrod``): abscissae ``x >= 0``
@@ -133,7 +132,9 @@ cdef inline void _release(DArr* a) noexcept nogil:
 
 
 cdef class GrowthKernel:
-    """Per-column growth atoms ``(C, b, r)``: ``|Phi_c| <= sum C zeta^b e^{r zeta}``.
+    """Per-column growth atoms ``(C, b, r, c)``.
+
+    ``|Phi_c| <= sum C zeta^b e^{r zeta + c}``.
 
     Parameters
     ----------
@@ -142,18 +143,20 @@ cdef class GrowthKernel:
     """
 
     def __cinit__(self, growth):
-        starts, coef, power, rate = [0], [], [], []
+        starts, coef, power, rate, lconst = [0], [], [], [], []
         for atoms in growth:
-            for c_, b_, r_ in atoms:
+            for c_, b_, r_, k_ in atoms:
                 coef.append(c_)
                 power.append(b_)
                 rate.append(r_)
+                lconst.append(k_)
             starts.append(len(coef))
         arrays = [
             np.array(starts, dtype=np.intc),
             np.array(coef + [0.0], dtype=np.float64),
             np.array(power + [0.0], dtype=np.float64),
             np.array(rate + [0.0], dtype=np.float64),
+            np.array(lconst + [0.0], dtype=np.float64),
         ]
         self._keep = arrays
         self.t.d = len(growth)
@@ -161,6 +164,7 @@ cdef class GrowthKernel:
         self.t.coef = <const double*> cnp.PyArray_DATA(arrays[1])
         self.t.power = <const double*> cnp.PyArray_DATA(arrays[2])
         self.t.rate = <const double*> cnp.PyArray_DATA(arrays[3])
+        self.t.lconst = <const double*> cnp.PyArray_DATA(arrays[4])
 
 
 # --------------------------------------------------------------------------
@@ -207,7 +211,7 @@ cdef void _tail_bounds(
                 ok[0] = False
                 break
             total += g.coef[a] * exp(g.power[a] * log(zeta_t) + g.rate[a] * zeta_t
-                                     + shift) * 2.0 * h / k
+                                     + g.lconst[a] + shift) * 2.0 * h / k
         if moments != NULL:
             moments[col] = total
 
@@ -260,7 +264,7 @@ cdef void _sort_unique(double* v, Py_ssize_t* n) noexcept nogil:
 
 
 # --------------------------------------------------------------------------
-# Fitting-coordinate integration (G3-052 / OI-E2-1)
+# Fitting-coordinate integration
 # --------------------------------------------------------------------------
 
 cdef int _integration_table(
@@ -274,12 +278,11 @@ cdef int _integration_table(
     Tail atoms and curvature constraints already use zeta=(x-c)/h, so neither
     needs reinterpretation.  Memory belongs to the caller.
     """
-    cdef int j, nf = physical.nf
     cdef double h = physical.h, c = physical.c
-    cdef double* a = <double*> malloc(3 * nf * sizeof(double))
-    if a == NULL:
-        return -1
-    storage[0] = a
+    # The family is fixed in z (gates, soft powers and canonical rates), so only
+    # the coordinate map and the endpoint-log distances change.  No storage is
+    # needed; the caller's free(NULL) is a no-op.
+    storage[0] = NULL
     local[0] = physical[0]
     local.c = 0.0
     local.h = 1.0
@@ -287,25 +290,6 @@ cdef int _integration_table(
     local.orth_origin = (physical.orth_origin - c) / h
     local.lower = (physical.lower - c) / h if isfinite(physical.lower) else physical.lower
     local.upper = (physical.upper - c) / h if isfinite(physical.upper) else physical.upper
-    local.xl = (physical.xl - c) / h if physical.has_l else 0.0
-    local.xu = (physical.xu - c) / h if physical.has_u else 0.0
-    local.al = physical.al * h
-    local.au = physical.au * h
-    if physical.has_l and physical.has_u:
-        local.mid = 0.5 * local.xl + 0.5 * local.xu
-    elif physical.has_l:
-        local.mid = local.xl
-    elif physical.has_u:
-        local.mid = local.xu
-    else:
-        local.mid = INFINITY
-    for j in range(nf):
-        a[j] = physical.delta[j] / h / h
-        a[nf + j] = physical.rate[j] * h
-        a[2 * nf + j] = (physical.location[j] - c) / h
-    local.delta = a
-    local.rate = &a[nf]
-    local.location = &a[2 * nf]
     return 0
 
 
@@ -504,8 +488,7 @@ cdef int _node(
         dq = (d + 4) * _EPS * dq
         # Positional rounding: x itself is known to |x| eps, which an endpoint
         # log turns into |x| eps / (x - end) (a node 1e-9 below a finite end
-        # at 1: 1e-7 relative); the floor no quadrature in binary64 x can beat
-        # (G3-046).
+        # at 1: 1e-7 relative); the floor no quadrature in binary64 x can beat.
         if t.log_col_lower >= 0 and theta[t.log_col_lower] > 0.0:
             dq = dq + theta[t.log_col_lower] * _EPS * fabs(x) / (x - t.lower)
         if t.log_col_upper >= 0 and theta[t.log_col_upper] > 0.0:
@@ -522,10 +505,11 @@ cdef int _node(
         dq = 0.0
     contrib = wn * e
     # Where e^{-(q - q_ref)} underflows, a moment integrand e^{-q} Phi can
-    # still be large (an exponential column under a flat potential): its
-    # products are formed in logs (G3-043).
+    # still be large (an exponential column under a flat potential), and
+    # where a column is huge its square overflows before the weight scales
+    # it: those products are formed in logs.
     far = le < _LOG_FAR
-    lw = log(wn) + le if far else 0.0
+    lw = log(wn) + le if le > -INFINITY else -INFINITY
     w.pool.p[w.pool.n] = ident
     w.pool.p[w.pool.n + 1] = x
     w.pool.p[w.pool.n + 2] = wn
@@ -537,7 +521,7 @@ cdef int _node(
         gb[0] += gf * contrib
     for col in range(d):
         ph = phi[col]
-        if far and ph != 0.0:
+        if (far or fabs(ph) > _BIG_COLUMN) and ph != 0.0:
             v = copysign(exp(lw + log(fabs(ph))), ph)
             v2 = exp(lw + 2.0 * log(fabs(ph)))
         else:
@@ -637,15 +621,15 @@ cdef int _settle(
 cdef inline bint _end_singular(
     const BasisTable* t, const double* theta, double lo, double hi
 ) noexcept nogil:
-    """Whether the cell ends at a finite end with an active endpoint log.
+    """Whether the cell ends at a finite end with an endpoint log column.
 
-    There ``e^{-q}`` behaves as ``dist**theta``: not analytic at the cell's
-    end, which tanh-sinh absorbs and Gauss--Kronrod does not.
+    There ``e^{-q}`` behaves as ``dist**gamma`` and the log column's moments
+    as ``log dist`` (even at ``gamma = 0``): not analytic at the cell's end,
+    which tanh-sinh absorbs (its nodes carry the endpoint distance exactly)
+    and Gauss--Kronrod does not.
     """
-    return (
-        (lo == t.lower and t.log_col_lower >= 0 and theta[t.log_col_lower] > 0.0)
-        or (hi == t.upper and t.log_col_upper >= 0 and theta[t.log_col_upper] > 0.0)
-    )
+    return ((lo == t.lower and t.log_col_lower >= 0)
+            or (hi == t.upper and t.log_col_upper >= 0))
 
 
 cdef int _integrate_batch(
@@ -844,7 +828,7 @@ cdef bint _reference(
     if npts > _GRID:
         npts = _GRID
     stepv = (v1 - v0) / (npts - 1)
-    # A domain narrow against its distance from the centre (a censored row
+    # A domain narrow against its distance from the center (a censored row
     # at a finite end, 1e-93 wide) collapses in the asinh coordinate: the
     # grid is then linear in x.
     cdef bint linear = not (v1 - v0 > 1e-9 * npmax(1.0, fabs(v0)))
@@ -899,8 +883,8 @@ cdef int _truncate(
     Negligible: the potential has risen 80 above the reference, and the
     moment tails are below a quarter of the tolerance of ``z_est`` times the
     column scales (the moments of exponential columns under a flat potential
-    live far beyond the mass: ``exp(-b z**2 + l z)`` peaks at ``z = l / 2b``,
-    G3-043).  Returns ``0``, or ``1`` with ``r.status`` set.
+    live far beyond the mass: ``exp(-b z**2 + l z)`` peaks at ``z = l / 2b``).
+    Returns ``0``, or ``1`` with ``r.status`` set.
     """
     cdef double q_t = NAN, mass, deficit, stp, a, b
     cdef double qv[1]
@@ -956,7 +940,7 @@ cdef inline void _add_outer(
     """``acc += exp(lstp) dev dev^T`` on the upper triangle.
 
     Below ``_LOG_FAR`` the products are formed in logs: the weight can be
-    subnormal where ``dev`` is huge (G3-043).
+    subnormal where ``dev`` is huge.
     """
     cdef double stp = exp(lstp)
     cdef double v0
@@ -995,7 +979,7 @@ cdef int _domain_body(
     NormResult* r,
     Ws* w,
 ) noexcept nogil:
-    """Mass, mean and centred covariance of ``exp(-q)`` over one domain.
+    """Mass, mean and centered covariance of ``exp(-q)`` over one domain.
 
     The domain is ``[lo_end, hi_end]`` inside the support; an end with
     ``tail_on`` reaches an infinite support end and is truncated by the tail
@@ -1136,8 +1120,9 @@ cdef int _domain_body(
     m += 1
     extra[0] = t.c
     extra[1] = x_star
-    extra[2] = t.xl if t.has_l else NAN
-    extra[3] = t.xu if t.has_u else NAN
+    # The fixed gate centers z = -1 and z = +1.
+    extra[2] = t.c - t.h if t.has_l else NAN
+    extra[3] = t.c + t.h if t.has_u else NAN
     # (a one-cell domain is split by the variation rule alone)
     for i in range(4 if isfinite(part_step) else 0):
         if isfinite(extra[i]) and lo_x < extra[i] and extra[i] < hi_x:
@@ -1431,7 +1416,7 @@ cdef int _domain_body(
     for col in range(d):
         w.budget_mom.p[col] = w.dropped_mom.p[col] + tmom[d + col]
 
-    # --- moments (centred second pass) -----------------------------------------
+    # --- moments (centered second pass) -----------------------------------------
     for col in range(d):
         mean[col] = mean[col] / z_s
     for i in range(d * d):
@@ -1521,7 +1506,12 @@ cdef struct Reuse:
 
 
 cdef void _reuse_init(Reuse* u) noexcept nogil:
+    # Every field is defined before ``_reuse_build`` fills the table.
     u.nc = 0
+    u.kw = 0
+    u.q_ref = 0.0
+    u.z_s = 0.0
+    u.budget_mass = 0.0
     u.clo = NULL
     u.chi = NULL
     u.pre = NULL
@@ -1969,7 +1959,7 @@ cdef int interval_states_c(
 ) noexcept nogil:
     """Normalized state plus the weighted conditional moments of interval rows.
 
-    Rows are ``[row_lo, row_hi]`` inside the support (G1's clipping and
+    Rows are ``[row_lo, row_hi]`` inside the support (clipping and
     duplicate merging upstream).  A zero-width row is a point observation
     (its log density and ``Phi(x)``); a row covering the support is the
     whole model; any other row is one domain of ``_domain_body`` with its
@@ -2171,7 +2161,7 @@ def basis_state(BasisKernel kernel, const double[::1] theta, tail_lo, tail_hi,
     code = basis_state_c(t, &theta[0], tl, tu, gl, gu, &column_scale[0], &o, keep_nodes,
                          &mv[0], &cv[0, 0], &r)
     if code != 0:
-        raise MemoryError("G3 normalizer workspace")
+        raise MemoryError("normalizer workspace")
     nodes = weights = None
     if r.nodes != NULL:
         nodes = np.zeros(0)
@@ -2262,7 +2252,7 @@ def interval_states(BasisKernel kernel, const double[::1] theta, tail_lo, tail_h
                                  lo_p, hi_p, w_p, &mv[0], &cv[0, 0], &av[0], lp, rm, rc,
                                  &r, &rr, &fail)
     if code != 0:
-        raise MemoryError("G3 interval normalizer workspace")
+        raise MemoryError("interval normalizer workspace")
     if per_row:
         logp, rmean, rcov = logp[:n], rmean[:n], rcov[:n]
     return (r.status, fail, rr.status, r.side, rr.side, r.log_z, mean, cov, agg[0],

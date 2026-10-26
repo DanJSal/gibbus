@@ -304,6 +304,46 @@ def _check_spread(S, /):
         )
 
 
+def _check_bounded_likelihood(S, support, weights, /):
+    """Reject interval data whose likelihood has no maximizer.
+
+    If every positively weighted row reaches the same support end, moving
+    probability toward that end raises every row's probability: the
+    likelihood's supremum (every probability one) is approached by densities
+    collapsing onto that end and attained by none.
+
+    Parameters
+    ----------
+    S : numpy.ndarray, shape (R, 1) or (R, 2)
+        Canonical samples inside the closed support.
+    support : tuple of float
+        Validated support.
+    weights : numpy.ndarray or None
+        Normalized observation weights.
+
+    Raises
+    ------
+    ValueError
+        If every positively weighted interval row reaches one support end.
+    """
+    if S.shape[1] == 1:
+        return
+    rows = S if weights is None else S[np.asarray(weights) > 0.0]
+    lower, upper = (float(v) for v in support)
+    for side, end, reaches in (
+        ("lower", lower, rows[:, 0] <= lower),
+        ("upper", upper, rows[:, 1] >= upper),
+    ):
+        if np.all(reaches):
+            raise ValueError(
+                f"every interval observation extends to the {side} support end "
+                f"{end!r}, so the likelihood increases without bound as "
+                "probability moves toward that end and no density maximizes "
+                "it. Include observations bounded on that side (exact values "
+                "or finite intervals)."
+            )
+
+
 def _canon_univariate_samples(samples, /, *, min_samples=2):
     """Convert user samples to the canonical ``(R, k)`` float64 layout.
 
@@ -812,7 +852,7 @@ def _coerce_sample_size(size, /):
 
 @dataclass(frozen=True)
 class _BasisInputs:
-    """Validated G3 fit inputs (G1 ``_normalize_univariate_fit_inputs`` role).
+    """Validated fit inputs.
 
     Parameters
     ----------
@@ -825,7 +865,7 @@ class _BasisInputs:
         Weights normalized to sum to one (``None`` for equal weights).
     log_policy : tuple
         ``(lower, upper)`` boundary-term policy: ``True``, ``False`` or
-        ``"auto"`` after G1's endpoint-observation rule (an automatic term
+        ``"auto"`` after the endpoint-observation rule (an automatic term
         at an infinite end, or at a finite end carrying an exact point
         observation, resolves to ``False``).
     effective_n : float
@@ -845,11 +885,10 @@ class _BasisInputs:
 
 
 def _normalize_basis_inputs(spec, samples, weights=None, /):
-    """Validate a G3 fit request with G1's input rules.
+    """Validate a fit request at the public boundary.
 
-    G1 owner adapted: ``_normalize_univariate_fit_inputs`` (sample layout,
-    weights, spread, support and endpoint-observation rules, boundary
-    policy) for a :class:`BasisSpec` instead of G1's degree/boundary flags.
+    Sample layout, weights, spread, support and endpoint-observation rules,
+    and the boundary-term policy of a :class:`BasisSpec`.
 
     Parameters
     ----------
@@ -857,7 +896,7 @@ def _normalize_basis_inputs(spec, samples, weights=None, /):
         Basis request.
     samples : array_like
         Point observations, shape ``(R,)`` or ``(R, 1)``, or interval rows,
-        shape ``(R, 2)`` (G1 layouts; reversed rows are swapped).
+        shape ``(R, 2)`` (reversed rows are swapped).
     weights : array_like or None
         Nonnegative observation weights.
 
@@ -871,7 +910,8 @@ def _normalize_basis_inputs(spec, samples, weights=None, /):
         If ``spec`` is not a ``BasisSpec``.
     ValueError
         If the observations leave the closed support, points are not finite
-        or all coincide, an infinite row has zero width, the weights are
+        or all coincide, an infinite row has zero width, every interval row
+        reaches one support end (no maximum likelihood), the weights are
         invalid, or an explicit log term meets an exact observation at its
         endpoint.
     """
@@ -890,6 +930,7 @@ def _normalize_basis_inputs(spec, samples, weights=None, /):
     if np.any(s[:, 0] < lower) or np.any(s[:, -1] > upper):
         kind = "point samples" if s.shape[1] == 1 else "interval samples"
         raise ValueError(f"{kind} must lie inside the closed support")
+    _check_bounded_likelihood(s, (lower, upper), w)
     policy = _resolve_endpoint_observations(
         s,
         (lower, upper),

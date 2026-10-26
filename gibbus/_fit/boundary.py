@@ -1,7 +1,6 @@
 """Data-driven boundary-log terms and their identification diagnostics.
 
-G1 owner retained (adapted for basis log columns, G3-031): the one-sided
-likelihood-ratio selection of endpoint logs.
+The one-sided likelihood-ratio selection of endpoint logs.
 
 A finite endpoint may carry the term ``-a log(z - L)`` (or ``-a log(U - z)``)
 with ``a >= 0``.  When the caller leaves the choice open, the term is kept

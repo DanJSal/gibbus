@@ -4,23 +4,18 @@ This guide covers installation and the shortest path from observations to a fitt
 
 ## Installation
 
-For a published release, install Gibbus from PyPI. This command does not select
-the unreleased development snapshot described in these docs:
+These docs describe the unreleased `0.2.0.dev0` model on the `develop` branch.
+The package on PyPI is an earlier model with a different API, so install this
+version from source. Source builds compile the Cython extensions and therefore require C and C++ compilers and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
 
 ```bash
-python -m pip install gibbus
-```
-
-This source declares CPython 3.10 through 3.14 as its targets. See
-[Development status](development-status.md) for the current verification limits.
-When pip selects a compatible release wheel, no compiler is required.
-
-To install this source snapshot, use this source directory or
-extract its archive and build from the project root. Source builds compile the Cython extensions and therefore require C and C++ compilers and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
-
-```bash
+git clone --branch develop https://github.com/DanJSal/gibbus.git
+cd gibbus
 python -m pip install .
 ```
+
+The supported interpreters are CPython 3.11 through 3.14; see
+[Development status](development-status.md) for the verification scope.
 
 For editable source development:
 
@@ -34,15 +29,13 @@ On GCC/Clang builds, set `GIBBUS_NATIVE_ARCH=1` at build time to add `-march=nat
 
 ## Dependencies
 
-- CPython 3.10 through 3.14 are the declared development targets
+- CPython 3.11 through 3.14
 - NumPy
 - SciPy
 
-## Earlier saved models
+## Saved models
 
-This branch uses durable format 2. Saved states from the earlier format-1
-polynomial engine must be refitted from their observations; they are not
-converted on load. See [Serialization](serialization.md#version-policy).
+Fitted models are saved and loaded through a durable NumPy format; see [Serialization](serialization.md).
 
 ## Fit a single-component distribution
 

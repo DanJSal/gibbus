@@ -71,7 +71,7 @@ def test_reflected_upper_half_line_round_trips_pdf_cdf_ppf_and_potential():
         support=(-np.inf, 8.0),
     )
     state = fitted.components[0].data
-    # G3 fits are never reflected: the upper end is the basis's own end.
+    # Fits are never reflected: the upper end is the basis's own end.
     assert float(state["support"][1]) == 8.0
     assert tuple(map(float, fitted.support)) == (-np.inf, 8.0)
     assert fitted.ppf(1.0) == 8.0
@@ -126,15 +126,15 @@ def test_reported_support_is_exactly_the_requested_support():
     """Mapping canonical endpoints back can land an ulp outside the support."""
     from gibbus._model.coords import _build_fit_coordinate
 
-    data = np.random.default_rng(2).lognormal(0.0, 0.6, 200)
-    coordinate = _build_fit_coordinate((0.0, np.inf), data, None, None)
-    assert coordinate.from_canonical(np.asarray(coordinate.canonical_support))[0] < 0.0
-    model = Distribution().fit(
-        data, n_components=1, poly_degree=4, support=(0.0, np.inf), rng=0
-    )
-    np.testing.assert_array_equal(model.support, [0.0, np.inf])
-    np.testing.assert_array_equal(model.data["model"]["support"][0], [0.0, np.inf])
-    assert model.ppf(0.0) == 0.0
+    support = (0.1, 0.7)
+    coordinate = _build_fit_coordinate(support, None)
+    assert coordinate.from_canonical(np.asarray(coordinate.canonical_support))[0] < 0.1
+    data = np.random.default_rng(2).beta(2.0, 3.0, 200) * 0.6 + 0.1
+    model = Distribution().fit(data, n_components=1, poly_degree=4, support=support)
+    np.testing.assert_array_equal(model.support, support)
+    np.testing.assert_array_equal(model.data["model"]["support"][0], support)
+    assert model.ppf(0.0) == 0.1
+    assert model.ppf(1.0) == 0.7
 
 
 def test_load_rejects_a_non_positive_scale():

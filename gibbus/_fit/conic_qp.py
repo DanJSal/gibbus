@@ -1,15 +1,14 @@
 """Cone descriptions and results of the Newton subproblems.
 
-G1 owner extended: ``_fit/conic_qp.py``.  A description has the form
+A description has the form
 
     B theta = sum_b L_b(Q_b),        Q_b PSD,
 
 where ``B`` is a fixed linear map of the coefficients and
 ``L_b(Q)_i = <A_{b,i}, Q>``; Gram matrices are solver state.  A ``1 x 1``
 block is a nonnegative scalar and a row whose matrices are zero in every
-block is an exact linear equality.  G1 built these from polynomial
-Markov-Lukacs certificates; G3 builds them from curvature cuts and structural rows (``basis_constraints``, G3-032), so only the
-packed representation and the result record are kept.  The compiled solver
+block is an exact linear equality.  The rows come from curvature cuts and
+structural rows (``basis_constraints``).  The compiled solver
 in ``_conic_kernels`` minimizes the Newton model over a description by an
 infeasible-start primal-dual interior-point method (HKM direction, Mehrotra
 predictor-corrector) and returns a weak-duality gap bound.
@@ -55,7 +54,7 @@ class _ConicRepresentation:
         inverted either: inverting a near-null singular value (parallel rows
         differing by 1e-14) amplified rounding of ``L(Q)`` into a large move
         of the reconstructed endpoint (a certified subproblem endpoint 45%
-        suboptimal, G3-050).
+        suboptimal).
         """
         left, values, right = np.linalg.svd(self.b_matrix, full_matrices=False)
         rank = _numerical_rank(values)

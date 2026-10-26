@@ -33,7 +33,7 @@ from .._fit.basis_mixture import (
 )
 from .._fit.basis_selection import _fit_basis
 from .._fit.boundary import _effective_n
-from .._fit.conic_newton import _CONVERGED, _UNCERTIFIED
+from .._fit.conic_newton import _CONVERGED, _UNVERIFIED
 from .._fit.degree import _DegreeSelectionConfig
 from .._fit.inputs import (
     _boundary_policy,
@@ -51,7 +51,7 @@ from .._fit.mixture import (
     _interval_initial_representatives,
     _sort_components_by_mode,
 )
-from .._fit.tail_estimation import alternative_spec, resolve_auto_tails
+from .._fit.tail_estimation import resolve_auto_tails
 from .._model.basis import _compile_basis
 from .._model.basis_spec import (
     _EXPONENTIAL,
@@ -61,7 +61,6 @@ from .._model.basis_spec import (
     Exponential,
     Polynomial,
     SoftPower,
-    TanhSpec,
 )
 from .._postfit.basis_state import _pack_basis_fit, _pack_selected
 from .component import _Component
@@ -109,11 +108,11 @@ class _FitRequest:
     seed_weights : numpy.ndarray or None
         Prepared mixture weights matching ``seed_components``.
     basis : BasisSpec or None
-        Full G3 basis request (tails, spans) in place of ``poly_degree``,
+        Full basis request (tails, spans) in place of ``poly_degree``,
         ``support`` and ``log_boundary_*``.
     seed_basis : BasisSpec or None
         The warm-start seed's basis family in public units (tails, span
-        policy, tanh geometry), used when ``basis`` is not given.
+        policy), used when ``basis`` is not given.
     degree_config : _DegreeSelectionConfig
         Immutable diagnostic policy created once for this request and reused by
         automatic candidates, component selection, degree growth and warm refits.
@@ -264,12 +263,11 @@ def _as_integer(value, name, /):
 
 
 def _check_optional_fit_controls(request, /):
-    """Validate the optional controls that silently changed a fit when wrong.
+    """Validate the optional controls that would silently change a fit when wrong.
 
-    ``n_components`` is checked by the caller.  These are the remaining
-    knobs where an out-of-range value used to be accepted: a non-positive
-    ``k_max`` capped automatic selection at one component without saying
-    so, and negative EM controls were passed through to the solver.
+    ``n_components`` is checked by the caller.  Unchecked, a non-positive
+    ``k_max`` would cap automatic selection at one component without saying
+    so, and negative EM controls would reach the solver.
 
     Parameters
     ----------
@@ -429,9 +427,8 @@ def _seed_basis_spec(component, /):
     """The basis family of a warm-start seed, in its public units.
 
     The seed's canonical request lives in model units; the presentation
-    ``x = shift + scale u`` maps tanh locations, steepnesses, exponential
-    rates and soft-power smoothings into public units (a negative scale
-    swaps the ends).  The span policy is ``"full"`` for a full-span seed,
+    ``x = shift + scale u`` maps exponential rates into public units (a
+    negative scale swaps the ends).  The span policy is ``"full"`` for a full-span seed,
     ``"auto"`` when the seed's span grew beyond the minimal one, else
     ``"minimal"``.  Support, degree and endpoint logs are set by the caller.
 
@@ -442,7 +439,7 @@ def _seed_basis_spec(component, /):
     """
     parent = component._basis.parent
     req = parent.request
-    shift, scale = map(float, component._affine())
+    _, scale = map(float, component._affine())
     size = abs(scale)
 
     def tail(t):
@@ -452,23 +449,11 @@ def _seed_basis_spec(component, /):
             return Polynomial(int(t.value))
         if t.kind == _EXPONENTIAL:
             return Exponential(float(t.value) / size)
-        return SoftPower(
-            float(t.value), "auto" if t.delta is None else float(t.delta) * size**2
-        )
-
-    def location(v):
-        return "auto" if v is None else shift + scale * float(v)
-
-    def steepness(v):
-        return "auto" if v is None else float(v) / size
+        return SoftPower(float(t.value))
 
     tails = (tail(req.lower_tail), tail(req.upper_tail))
-    tanh = (
-        (location(req.lower_location), steepness(req.lower_steepness)),
-        (location(req.upper_location), steepness(req.upper_steepness)),
-    )
     if scale < 0.0:
-        tails, tanh = tails[::-1], tanh[::-1]
+        tails = tails[::-1]
     if req.expansion == _FULL:
         expansion = _FULL
     else:
@@ -481,12 +466,6 @@ def _seed_basis_spec(component, /):
         upper_tail=tails[1],
         independent_equal_rate_coefficients=req.independent,
         expansion=expansion,
-        tanh=TanhSpec(
-            lower_location=tanh[0][0],
-            upper_location=tanh[1][0],
-            lower_steepness=tanh[0][1],
-            upper_steepness=tanh[1][1],
-        ),
     )
 
 
@@ -580,8 +559,8 @@ def _prepare_mixture_context(request, /):
     )
 
 
-def _natural_degree_policy(global_degree, component_options, /):
-    """Resolve public global/per-component degree precedence for natural EM.
+def _degree_policy(global_degree, component_options, /):
+    """Resolve public global/per-component degree precedence for mixtures.
 
     Parameters
     ----------
@@ -603,15 +582,15 @@ def _natural_degree_policy(global_degree, component_options, /):
 
 
 # ----------------------------------------------------------------------
-# G3 fit controller (G3-047): public requests on the basis fitters
+# Fit controller: public requests on the basis fitters
 # ----------------------------------------------------------------------
 
 
 def _basis_spec_of(request, support, degree, lower, upper, /):
-    """The fit's ``BasisSpec``: the caller's, or G1's arguments mapped onto one.
+    """The fit's ``BasisSpec``: the caller's, or the public arguments mapped onto one.
 
-    G1's arguments describe G1's family exactly: ``poly_degree`` is the bulk
-    degree (``"auto"`` by default, as G1), ``log_boundary_*`` the endpoint-log
+    ``poly_degree`` is the bulk degree (``"auto"`` by default),
+    ``log_boundary_*`` the endpoint-log
     policies (``"auto"`` lets the data decide) and the span is minimal (bulk
     monomials and logs: no gated slots, which only a ``basis`` request with
     tails or an expansion policy adds).  A warm start without ``basis``
@@ -654,12 +633,12 @@ def _basis_spec_of(request, support, degree, lower, upper, /):
 
 
 def _em_diagnostics(fit, /):
-    """In-process EM record of a G3 mixture (G1 ``em_diagnostics`` keys).
+    """In-process EM record of a mixture (``em_diagnostics`` keys).
 
     Parameters
     ----------
     fit : _MixtureFit
-        Fitted G3 mixture.
+        Fitted mixture.
     """
     status = str(fit.status)
     return {
@@ -692,7 +671,7 @@ def _em_diagnostics(fit, /):
 
 
 def _seed_responsibilities(context, seeds, weights, /):
-    """Responsibilities of the seed mixture at the data (G1 warm E-step).
+    """Responsibilities of the seed mixture at the data (warm E-step).
 
     Parameters
     ----------
@@ -719,7 +698,7 @@ def _seed_responsibilities(context, seeds, weights, /):
 
 
 def _check_identifiable(context, log_likelihood, n_parameters, /):
-    """G1's interval identifiability rule on a mixture (fails loudly).
+    """Interval identifiability rule on a mixture (fails loudly).
 
     ``log_likelihood`` is the mixture's mean interval log-likelihood, or a
     nested model's (a mixture contains its one-component model): reaching
@@ -761,14 +740,14 @@ def _check_identifiable(context, log_likelihood, n_parameters, /):
 
 
 def _run_basis_request(request, /):
-    """Execute a prepared public request on the G3 fitters.
+    """Execute a prepared public request on the basis fitters.
 
-    Inputs are validated by G1's public rules (``_prepare_mixture_context``:
+    Inputs are validated by the public rules (``_prepare_mixture_context``:
     sample layouts, support, weights, endpoint observations, component
     options); the request becomes a ``BasisSpec``; one component is the
     single fit, an explicit count ``_fit_mixture_auto`` (a warm start seeds
     its EM with the seed's responsibilities at the data), ``"auto"``
-    ``_select_components``.  Results are packed G3 component states.
+    ``_select_components``.  Results are packed component states.
 
     Parameters
     ----------
@@ -795,9 +774,7 @@ def _run_basis_request(request, /):
         )
     else:
         degrees = (
-            None
-            if options is None or k == "auto"
-            else _natural_degree_policy(degree, options)
+            None if options is None or k == "auto" else _degree_policy(degree, options)
         )
     global_degree = "auto" if degree is None else degree
     for policy in (
@@ -826,11 +803,7 @@ def _run_basis_request(request, /):
         side: {
             "family": est.family,
             "estimated_parameter": float(est.primary),
-            "backup_parameter": (
-                None if est.alternative is None else float(est.alternative)
-            ),
             "tail_n": est.n_tail,
-            "fallback_used": False,
         }
         for side, (_, est, _) in tail_proposals.items()
     }
@@ -840,50 +813,10 @@ def _run_basis_request(request, /):
     selection = None
     with _maybe_suppress(context.suppress_warnings, SUPPRESSED_WARNINGS):
         if k == 1:
-            backup = alternative_spec(spec, tail_proposals) if tail_proposals else None
-            original_error = None
-            fit = None
-            try:
-                fit = _fit_basis(spec, samples, weights, config=config)
-                if tail_proposals and fit.result.status not in _CONVERGED:
-                    original_error = RuntimeError(
-                        f"automatic tail primary fit did not converge ({fit.result.status})"
-                    )
-            except (RuntimeError, ArithmeticError, FloatingPointError) as exc:
-                if not tail_proposals or backup is None:
-                    raise
-                original_error = exc
-            if original_error is not None:
-                if backup is None:
-                    raise original_error
-                try:
-                    recovered = _fit_basis(backup, samples, weights, config=config)
-                    if recovered.result.status not in _CONVERGED:
-                        raise RuntimeError(
-                            "automatic tail backup did not converge "
-                            f"({recovered.result.status})"
-                        )
-                except (
-                    RuntimeError,
-                    ArithmeticError,
-                    FloatingPointError,
-                ) as retry_error:
-                    raise RuntimeError(
-                        "automatic tail fit failed with the empirical parameter "
-                        f"({original_error}); single backup failed ({retry_error})"
-                    ) from original_error
-                fit = recovered
-                for side, data in tail_diagnostics.items():
-                    old = getattr(spec, side + "_tail")
-                    new = getattr(backup, side + "_tail")
-                    if old != new:
-                        data["fallback_used"] = True
-                        data["estimated_parameter"] = float(
-                            new.rate if isinstance(new, Exponential) else new.power
-                        )
-            if fit.result.status == _UNCERTIFIED:
+            fit = _fit_basis(spec, samples, weights, config=config)
+            if fit.result.status == _UNVERIFIED:
                 warnings.warn(
-                    "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                    "the fitted shape is not verified within the curvature threshold tau; inspect fit_diagnostics before quantitative use",
                     RuntimeWarning,
                     stacklevel=3,
                 )
@@ -935,9 +868,8 @@ def _run_basis_request(request, /):
                     raise
                 # No start of an explicit interval mixture converged.  If the
                 # one-component fit already reaches the nonparametric bound,
-                # the mixture (which contains it) does too: G1's
-                # non-identifiability error, which G1 reported after its EM
-                # reached the bound (G3-047).
+                # the mixture (which contains it) does too: the
+                # non-identifiability error.
                 nested = _fit_basis(spec, samples, weights, config=config)
                 _check_identifiable(
                     context,
@@ -945,19 +877,19 @@ def _run_basis_request(request, /):
                     int(k) * nested.model.n_coefficients + int(k) - 1,
                 )
                 raise
-            if str(fit.status) not in _CONVERGED and str(fit.status) != _UNCERTIFIED:
-                # Explicit counts and a selected count's final fit fail loudly
-                # (G3-047); automatic searches end at their last converged
+            if str(fit.status) not in _CONVERGED and str(fit.status) != _UNVERIFIED:
+                # Explicit counts and a selected count's final fit fail loudly;
+                # automatic searches end at their last converged
                 # member inside the fitters.
                 raise RuntimeError(
-                    f"the {len(fit.models)}-component G3 mixture did not converge "
+                    f"the {len(fit.models)}-component mixture did not converge "
                     f"({fit.status})"
                 )
             if len(fit.models) > 1:
                 _check_identifiable(context, fit.log_likelihood, fit.n_face_parameters)
-            if fit.status == _UNCERTIFIED:
+            if fit.status == _UNVERIFIED:
                 warnings.warn(
-                    "fit returned an uncertified shape verdict; inspect fit_diagnostics before quantitative use",
+                    "the fitted shape is not verified within the curvature threshold tau; inspect fit_diagnostics before quantitative use",
                     RuntimeWarning,
                     stacklevel=3,
                 )

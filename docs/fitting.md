@@ -34,17 +34,17 @@ All parameters except `samples` are keyword-only. Returns `self` for method chai
 
 ## Automatic component-count selection
 
-The default `n_components=1` fits one log-concave component. Passing an explicit integer greater than one fits exactly that many components with EM. Passing `n_components="auto"` opts into staged component-count selection: a KDE bandwidth sweep proposes a mode count, lightweight shared-boundary fits screen a focused candidate range, competitive candidates are refined under the requested degree and boundary-selection policy, and BIC selects the winner.
+The default `n_components=1` fits one log-concave component. Passing an explicit integer greater than one fits exactly that many components with EM. Passing `n_components="auto"` opts into staged component-count selection: a KDE bandwidth sweep proposes a mode count, lightweight shared-boundary fits screen a focused candidate range (stopping above the mode count once a count screens worse than its predecessor), competitive candidates are refined under the requested degree and boundary-selection policy, and BIC selects the winner.
 
-This procedure is intentionally pragmatic rather than exhaustive or globally certified. On large inputs, selection may use a stratified subsample controlled by `auto_k_subsample`; the selected component count is then refit on all observations. Use `selection_diagnostics` to retain the proposal, candidate scores, subsample information, and selected count when the decision is scientifically material.
+This procedure is intentionally pragmatic rather than exhaustive or globally optimal. On large inputs, selection may use a stratified subsample controlled by `auto_k_subsample`; the selected component count is then refit on all observations. Use `selection_diagnostics` to retain the proposal, candidate scores, subsample information, and selected count when the decision is scientifically material.
 
 For interval-censored observations, candidate models are scored using the actual interval probability masses rather than midpoint-density surrogates.
 
-Mixture screens use a certified Newton target of `1e-6` nats per observation,
+Mixture screens use a Newton convergence target of `1e-6` nats per observation,
 without changing the curvature-feasibility threshold. Admitted candidates use
 the final optimizer's requested tolerances. `selection_diagnostics` reports the
 screen target as `screen_newton_tolerance`. Screening scores are heuristic and
-are not certified bounds on the corresponding fully refined BIC.
+are not bounds on the corresponding fully refined BIC.
 
 ## Runtime and model complexity
 
@@ -104,10 +104,9 @@ c = Distribution().fit(data, basis=spec)
 | `support` | `(L, U)`, `L < U`; either end may be infinite. |
 | `bulk_degree` | Highest bulk monomial degree, or `"auto"` (degree ladder). |
 | `log_lower`, `log_upper` | `-log(x - L)` / `-log(U - x)` terms; `True` requires the finite endpoint; `"auto"` decides by the one-sided likelihood-ratio test. |
-| `lower_tail`, `upper_tail` | Leading tail class at an infinite end: `Polynomial(power)`, `SoftPower(power, delta)` (noninteger power; an integer power becomes `Polynomial` with a `GibbusBasisWarning`) or `Exponential(rate)`; `None` keeps the bulk behavior. |
+| `lower_tail`, `upper_tail` | Leading tail class at an infinite end: `Polynomial(power)` (integer power at least 1), `SoftPower(power)` (power greater than 1; an integer power becomes `Polynomial` with a `GibbusBasisWarning`) or `Exponential(rate)` (rate greater than 0); `None` keeps the bulk behavior. |
 | `independent_equal_rate_coefficients` | Independent leading amplitudes for equal-rate tails instead of one shared amplitude. |
 | `expansion` | `"auto"` (default) starts from the minimal span and adds slots of the full span only when a score test resolves them; `"minimal"` and `"full"` fix the span. |
-| `tanh` | `TanhSpec` geometry of the tanh gates that confine tail terms to their side. |
 
 `BasisSpec()` defaults to `bulk_degree=2`, no endpoint logs, no explicit tail
 families, and `expansion="auto"`. In contrast, fitting without `basis` defaults
@@ -118,47 +117,27 @@ is checked for each requested component.
 
 Omitting a selected family's parameter (`Polynomial()`, `SoftPower()`,
 `Exponential()`) requests empirical within-family estimation. See
-[Automatic tail parameters](AUTOMATIC_TAIL_PARAMETERS.md) for sample-size,
+[Automatic tail parameters](automatic-tail-parameters.md) for sample-size,
 weighting, censoring and persistence limits. Explicit parameters stay fixed.
 
-The basis is defined in a fixed robust fitting coordinate `z = (x - c) / h` (per component in mixtures). Every fit is constrained to a convex potential (`q'' >= 0`) and to proper outward growth at infinite ends. `BasisSpec` is provisional and may change.
+The basis is defined in a fitting coordinate `z = (x - c) / h` fixed by the support and the data (per component in mixtures): on the full line the 10th and 90th percentiles sit at `z = -1` and `z = 1`; on a half-line the origin is the finite endpoint and the 90th (or 10th) percentile sits at distance 1; on a bounded support the interval maps to `[-1, 1]`. Soft-power and exponential tail terms are confined to their own end by fixed smooth gates centered at `z = -1` and `z = 1`. Every fit is constrained to a convex potential (`q'' >= 0`, verified numerically within a threshold `tau`) and to proper outward growth at infinite ends.
+
+On a half-line or bounded support, data whose 10–90% spread is below 0.5% of the median's distance from the nearest finite end are rejected with a `ValueError`: the coordinate is anchored at the end and cannot represent them. Fit on the full line instead, or choose a support whose finite end is nearer the data.
 
 ### Tail-family selection versus other automatic choices
 
 `BasisSpec.lower_tail` and `BasisSpec.upper_tail` accept an explicitly chosen
 `Polynomial`, `SoftPower`, or `Exponential` instance (or `None`, retaining
-bulk-determined behavior). G3 **does not automatically compare these three
+bulk-determined behavior). Gibbus **does not automatically compare these three
 tail families** or choose a different tail class from the one requested.
 Automatic degree selection, optional endpoint-log tests, and automatic basis
 expansion are separate mechanisms. An explicitly constrained tail model may
 extrapolate poorly on incompatible data without indicating a solver error;
-Gibbus should not silently replace the user's specification. See
-[Model-selection research plan](model-selection-research.md).
-
-### Automatic tanh transition geometry
-
-Full-line, **single-component fits to unweighted point observations** use a
-sample-size-adjusted skew-aware geometry by default. The lower/upper gates
-are still fixed *before* convex coefficient optimization. There is no mode
-switch: specify explicit `TanhSpec` locations and/or steepnesses to override
-individual automatically chosen values. The full formula is in
-[Transition geometry](transition-geometry.md).
-
-For samples of at most 150 observations, full-line automatic gates retain the
-original 10th/90th percentile locations and shared `2/h` steepness. Between
-150 and 700 observations the skew adjustment is gradually introduced; from
-700 onward it applies in full. It is suppressed when the quantile spacing
-is unresolved or approximately symmetric. **Mixture components, weighted
-points, interval-censored observations, and half-line fits** retain their
-previous defaults; bounded support has no tanh gates.
-
-Because the automatic geometry is data dependent, a newly fitted model may
-differ from one fitted by an older release with the same observations. Saved
-fitted models preserve their already resolved gate geometry.
+Gibbus should not silently replace the user's specification. See [Limitations](limitations.md) for predictive-tail qualifications.
 
 ## Failures
 
-Gibbus does not return a fit it could not compute. An explicit request whose fit does not converge raises `RuntimeError`: an explicit `poly_degree` (Gibbus first retries it from the nested next-smaller admissible degree), an explicit `n_components`, or `expansion="full"`. Automatic searches (`poly_degree="auto"`, automatic expansion, mixture degree growth, `n_components="auto"`) stop at the last size that converged and record why: for mixtures in `em_diagnostics["selection"][i]["failure"]`; the single-component degree ladder records it in its internal selection history, which is not yet public (see [Limitations](limitations.md)). A fit whose convexity check is inconclusive reports the status `uncertified` instead of raising.
+Gibbus does not return a fit it could not compute. An explicit request whose fit does not converge raises `RuntimeError`: an explicit `poly_degree` (Gibbus first retries it from the lifted fit of the largest smaller admissible degree that converges), an explicit `n_components`, or `expansion="full"`. Automatic searches (`poly_degree="auto"`, automatic expansion, mixture degree growth, `n_components="auto"`) stop at the last size that converged and record why: for mixtures in `em_diagnostics["selection"][i]["failure"]`; the single-component degree ladder records it in its internal selection history, which is not yet public (see [Limitations](limitations.md#known-open-items)). A fit whose convexity is not verified within the threshold reports the status `unverified` (with a `RuntimeWarning`) instead of raising; its `fit_diagnostics` records the verdict and `shape_tau`.
 
 ## Input Formats
 
@@ -228,7 +207,7 @@ point-density collapse mechanism does not apply.
 
 ## Warm-Starting from a Previous Fit
 
-Use `init_from` to initialize a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the component count, support and basis family (tail classes, span policy, tanh geometry, mapped through any presentation transform) are inherited from the seed; `basis=` replaces the family. Boundary flags inherit when left as `None` but can be explicitly overridden. The bulk degree can also be overridden globally or per component. Other compatible per-component seed structure is carried forward automatically:
+Use `init_from` to initialize a new fit from a previously fitted `Distribution`. This can speed up convergence when fitting similar data. When `init_from` is given, the component count, support and basis family (tail classes and span policy, mapped through any presentation transform) are inherited from the seed; `basis=` replaces the family. Boundary flags inherit when left as `None` but can be explicitly overridden. The bulk degree can also be overridden globally or per component. Other compatible per-component seed structure is carried forward automatically:
 
 ```python
 # Single-component warm start

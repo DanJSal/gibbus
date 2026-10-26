@@ -1,20 +1,23 @@
-"""G3 Stage 1b: numerical evaluation of ``Phi``, ``Phi'``, ``Phi''``.
+"""Numerical evaluation of ``Phi`` and its ``x`` derivatives to order four.
 
-The independent oracle is a direct 150-digit mpmath evaluation of each column
-from its defining formula ``sum_j f_j(x) (a0 + a1 tanh(.) + a2 tanh(.))``,
-differentiated with ``mpmath.diff``.  It shares only the compiled gate
-coefficients and geometry with the production evaluator, not its stable
-rearrangements.  Far-tail points check that exactly suppressed gates are
-evaluated with *relative* accuracy rather than as cancelling differences.
+The reference is the independent high-precision oracle of ``_basis_oracle``
+(symbolic derivatives of the defining formulas, mpmath at adaptive
+precision).  It shares only the compiled gate coefficients and family
+constants with the evaluator, not its Taylor arithmetic or rearrangements.
+Agreement is required at the backward-stable level: a few ``eps`` times the
+absolute Leibniz magnitude of each column plus the effect of rounding ``z``.
+Far-tail points check that exactly suppressed gates are evaluated with
+*relative* accuracy rather than as cancelling differences.
 """
 
 import itertools
 import math
 import warnings
 
-import mpmath as mp
 import numpy as np
 import pytest
+from _basis_oracle import BasisOracle
+from scipy.special import erf
 
 from gibbus import (
     BasisSpec,
@@ -23,6 +26,7 @@ from gibbus import (
     Polynomial,
     SoftPower,
 )
+from gibbus._fit.basis_objective import _point_statistics
 from gibbus._model.basis import _build_basis
 from gibbus._model.basis_eval import _evaluate_basis, _potential
 
@@ -32,7 +36,7 @@ NORMAL = RNG.normal(1.5, 2.0, size=400)
 HALF = RNG.gamma(2.0, 1.5, size=400) + 0.25
 BOUNDED = RNG.beta(2.0, 3.0, size=400) * 4.0 - 1.0
 
-mp.mp.dps = 150  # suppressed gates reach exp(-240); see the far-tail test
+EPS = 2.220446049250313e-16
 
 
 def _data_for(support):
@@ -47,9 +51,11 @@ def _data_for(support):
 
 
 def _compile(spec):
+    lo, up = spec.support
+    data = None if math.isfinite(lo) and math.isfinite(up) else _data_for(spec.support)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", GibbusBasisWarning)
-        return _build_basis(spec, _data_for(spec.support))
+        return _build_basis(spec, data)
 
 
 ORACLE_SPECS = [
@@ -88,6 +94,7 @@ ORACLE_SPECS = [
         expansion="full",
     ),
     BasisSpec(bulk_degree=2, upper_tail=SoftPower(3.0)),
+    BasisSpec(bulk_degree=2, lower_tail=SoftPower(1.01), upper_tail=SoftPower(37.5)),
     BasisSpec(bulk_degree=3, lower_tail=Exponential(0.7), upper_tail=Exponential(0.7)),
     BasisSpec(
         bulk_degree=3,
@@ -99,48 +106,10 @@ ORACLE_SPECS = [
     BasisSpec(support=(0.0, INF), bulk_degree=4, upper_tail=Polynomial(2)),
     BasisSpec(support=(0.0, INF), bulk_degree=2, upper_tail=Exponential(0.9)),
     BasisSpec(support=(-INF, 0.0), bulk_degree=3, lower_tail=SoftPower(1.5)),
+    BasisSpec(
+        bulk_degree=2, lower_tail=Exponential(1e-5), upper_tail=Exponential(40.0)
+    ),
 ]
-
-
-def _oracle_column(model, column):
-    """Return an mpmath callable for one column, built from the formulas."""
-    g = model.geometry
-    req = model.request
-    c, h = mp.mpf(g.center), mp.mpf(g.scale)
-
-    def tl(x):
-        return mp.tanh(mp.mpf(g.lower_steepness) * (x - mp.mpf(g.lower_location)))
-
-    def tu(x):
-        return mp.tanh(mp.mpf(g.upper_steepness) * (mp.mpf(g.upper_location) - x))
-
-    def f(fn, x):
-        if fn.kind == "monomial":
-            return ((x - c) / h) ** fn.degree
-        if fn.kind == "log":
-            if fn.side == "lower":
-                return -mp.log(x - mp.mpf(req.lower))
-            return -mp.log(mp.mpf(req.upper) - x)
-        if fn.kind == "exponential":
-            lam, loc = mp.mpf(fn.rate), mp.mpf(fn.location)
-            if fn.side == "lower":
-                return mp.exp(-lam * (x - loc))
-            return mp.exp(lam * (x - loc))
-        p = mp.mpf(fn.power)
-        return ((x - c) ** 2 + mp.mpf(fn.delta)) ** (p / 2) / h**p
-
-    def column_value(x):
-        total = mp.mpf(0)
-        for j, (a0, a1, a2) in column.terms:
-            gate = mp.mpf(a0.numerator) / a0.denominator
-            if a1 != 0:
-                gate += mp.mpf(a1.numerator) / a1.denominator * tl(x)
-            if a2 != 0:
-                gate += mp.mpf(a2.numerator) / a2.denominator * tu(x)
-            total += f(model.functions[j], x) * gate
-        return total
-
-    return column_value
 
 
 def _test_points(model):
@@ -151,53 +120,62 @@ def _test_points(model):
     up = req.upper if math.isfinite(req.upper) else c + 6.0 * h
     span = up - lo
     pts.extend(lo + span * np.array([0.03, 0.2, 0.41, 0.5, 0.67, 0.85, 0.97]))
+    pts.extend([c, c - h, c + h, c + 1e-7 * h])
     tail = []
     if not math.isfinite(req.lower):
         tail.extend(c - h * np.array([8.0, 15.0, 25.0]))
     if not math.isfinite(req.upper):
         tail.extend(c + h * np.array([8.0, 15.0, 25.0]))
-    return np.array(pts), np.array(tail)
+    # Keep the added points clear of finite endpoints (derivative stencils).
+    inside = [p for p in pts if req.lower + 1e-3 * h < p < req.upper - 1e-3 * h]
+    return np.array(inside), np.array(tail)
 
 
 @pytest.mark.parametrize("spec", ORACLE_SPECS, ids=lambda s: "")
 def test_columns_and_derivatives_match_high_precision_oracle(spec):
     model = _compile(spec)
+    oracle = BasisOracle(model)
+    h = model.geometry.scale
     bulk, tail = _test_points(model)
-    for points, is_tail in ((bulk, False), (tail, True)):
-        if points.size == 0:
-            continue
-        values = _evaluate_basis(model, points, max_order=4)
-        arrays = [values.derivative(k) for k in range(5)]
+    points = np.concatenate([bulk, tail])
+    values = _evaluate_basis(model, points, max_order=4)
+    for i, x in enumerate(points):
+        # Rounding z = (x - c) / h moves the evaluation by about eps |z| h.
+        shift = 2.0 * EPS * (abs(float(model.geometry.to_internal(x))) + 1.0) * h
         for col, column in enumerate(model.columns):
-            oracle = _oracle_column(model, column)
+            refs = [oracle.column(col, x, k) for k in range(6)]
             for order in range(5):
-                ref = np.array(
-                    [float(mp.diff(oracle, mp.mpf(float(x)), order)) for x in points]
+                got = values.derivative(order)[i, col]
+                ref, mag = refs[order]
+                if got == float(ref):
+                    continue  # includes a matching overflow to +-inf
+                tol = (
+                    16.0 * EPS * float(mag) + shift * float(refs[order + 1][1]) + 1e-300
                 )
-                got = arrays[order][:, col]
-                if is_tail:
-                    # Relative accuracy, including exactly suppressed gates.
-                    tol = 1e-10 * np.abs(ref) + 1e-30
-                else:
-                    tol = 1e-11 * np.max(np.abs(ref)) + 1e-30
-                bad = np.abs(got - ref) > tol
-                assert not np.any(bad), (
-                    f"{column.label} d{order}: got {got[bad]}, ref {ref[bad]} "
-                    f"at x={points[bad]}"
-                )
+                assert (
+                    abs(got - float(ref)) <= tol
+                ), f"{column.label} d{order} at x={x}: got {got}, ref {float(ref)}"
 
 
 def test_suppressed_gate_is_relatively_accurate_far_into_the_tail():
-    # x^3 (tL + tU) on the full line: exactly zero gate limit at both ends.
+    # z^3 (tL + tU) on the full line: exactly zero gate limit at both ends.
     model = _compile(BasisSpec(bulk_degree=3))
-    col = next(i for i, c in enumerate(model.columns) if c.label == "x^3*(tL+tU)")
+    col = next(i for i, c in enumerate(model.columns) if c.label == "z^3*(tL+tU)")
     g = model.geometry
-    x = g.center + g.scale * np.array([-60.0, -40.0, 40.0, 60.0])
+    x = g.center + g.scale * np.array([-12.0, -8.0, -5.0, 5.0, 8.0, 12.0])
     got = _evaluate_basis(model, x).phi[:, col]
-    oracle = _oracle_column(model, model.columns[col])
-    ref = np.array([float(oracle(mp.mpf(float(v)))) for v in x])
+    oracle = BasisOracle(model, max_order=0)
+    ref = np.array([float(oracle.column(col, v, 0)[0]) for v in x])
     assert np.all(ref != 0.0) and np.all(np.isfinite(got))
     np.testing.assert_allclose(got, ref, rtol=1e-12)
+
+
+def test_soft_power_columns_vanish_to_fourth_order_at_the_origin():
+    model = _compile(BasisSpec(bulk_degree=2, lower_tail=SoftPower(1.01)))
+    col = next(i for i, c in enumerate(model.columns) if c.label.startswith("powL"))
+    values = _evaluate_basis(model, np.array([model.geometry.center]), max_order=4)
+    for order in range(5):
+        assert values.derivative(order)[0, col] == 0.0
 
 
 def _broad_battery():
@@ -227,7 +205,7 @@ def _broad_battery():
 def test_derivatives_consistent_by_finite_differences(spec):
     model = _compile(spec)
     bulk, _ = _test_points(model)
-    step = 1e-4 * model.geometry.scale
+    step = 2e-5 * model.geometry.scale
     vals = _evaluate_basis(model, bulk)
     plus = _evaluate_basis(model, bulk + step)
     minus = _evaluate_basis(model, bulk - step)
@@ -271,32 +249,28 @@ def test_reduced_columns_reproduce_full_slot_potential(spec):
     theta = RNG.normal(size=model.n_coefficients)
     full = model.full_coefficients(theta)
     g, req = model.geometry, model.request
-    tl = (
-        np.tanh(g.lower_steepness * (bulk - g.lower_location))
-        if g.lower_location is not None
-        else np.zeros_like(bulk)
-    )
-    tu = (
-        np.tanh(g.upper_steepness * (g.upper_location - bulk))
-        if g.upper_location is not None
-        else np.zeros_like(bulk)
-    )
     z = g.to_internal(bulk)
+    a = g.gate_sharpness / math.sqrt(2.0)
+    tl = erf(a * (1.0 + z)) if g.has_lower_gate else np.zeros_like(bulk)
+    tu = erf(a * (1.0 - z)) if g.has_upper_gate else np.zeros_like(bulk)
     q_full = np.zeros_like(bulk)
     for fn in model.functions:
-        a, b, c = full[3 * fn.index : 3 * fn.index + 3]
-        if a == b == c == 0.0:
+        a0, b, c = full[3 * fn.index : 3 * fn.index + 3]
+        if a0 == b == c == 0.0:
             continue
         if fn.kind == "monomial":
             f = z**fn.degree
         elif fn.kind == "log":
             f = -np.log(bulk - req.lower if fn.side == "lower" else req.upper - bulk)
         elif fn.kind == "exponential":
-            sgn = -1.0 if fn.side == "lower" else 1.0
-            f = np.exp(sgn * fn.rate * (bulk - fn.location))
+            f = (
+                np.exp(fn.rate * (z - 1.0))
+                if fn.side == "upper"
+                else np.exp(-fn.rate * (z + 1.0))
+            )
         else:
-            f = (z * z + fn.delta / g.scale**2) ** (fn.power / 2)
-        q_full += f * (a + b * tl + c * tu)
+            f = ((1.0 + z**4) ** 0.25 - 1.0) ** fn.power
+        q_full += f * (a0 + b * tl + c * tu)
     q, _, _ = _potential(model, theta, bulk)
     np.testing.assert_allclose(q, q_full, rtol=1e-12, atol=1e-12 * np.max(np.abs(q)))
 
@@ -369,7 +343,7 @@ def test_exponential_leading_coefficient_metadata_matches_evaluation(spec):
     for side in model.asymptotics:
         lead = side.leading
         assert lead.shape == "exponential"
-        rate = lead.order[1]
+        rate = lead.order[1] / g.scale  # canonical lambda to user units
         coef = math.exp(lead.log_factor) * float(lead.row @ theta)
         sign = -1.0 if side.side == "lower" else 1.0
         dist = 60.0 / rate
@@ -431,3 +405,17 @@ def test_potential_derivatives_are_the_same_linear_map():
         np.testing.assert_allclose(
             got, ref, rtol=1e-13, atol=1e-13 * np.max(np.abs(ref))
         )
+
+
+def test_tiny_endpoint_distances_stay_exact_in_point_statistics():
+    # Distances from subnormal up are formed physically, not after rounding
+    # through the fitting coordinate.
+    x = np.array([np.nextafter(0.0, 1.0), 1e-300, 1e-100, 1e-20, 1e-5, 0.01, 0.4])
+    spec = BasisSpec(support=(0.0, math.inf), bulk_degree=2, log_lower=True)
+    model = _build_basis(spec, x)
+    i = [c.label for c in model.columns].index("logL")
+    phi = _evaluate_basis(model, x, max_order=0).phi
+    np.testing.assert_allclose(phi[:, i], -np.log(x), rtol=2e-14)
+    stats = _point_statistics(model, x)
+    assert np.all(np.isfinite(stats.mean))
+    assert stats.mean[i] == pytest.approx(float(np.mean(-np.log(x))), rel=2e-14)

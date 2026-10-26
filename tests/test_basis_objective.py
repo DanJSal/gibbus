@@ -1,9 +1,9 @@
-"""G3 Stage 3c: weighted point objective (NLL, gradient, Fisher Hessian).
+"""Weighted point objective (NLL, gradient, Fisher Hessian).
 
 Finite differences check the gradient against the NLL and the Hessian
 against the gradient; the Gaussian maximum-likelihood point makes the
 gradient vanish; weights behave (zero weights neutral, scaling invariant);
-the G1 evaluation-record contract holds; points on an enabled log endpoint
+the evaluation-record contract holds; points on an enabled log endpoint
 are rejected and improper vectors raise a ``RuntimeError``.
 """
 
@@ -31,26 +31,26 @@ def _model(spec, data):
 
 
 CASES = [
-    (BasisSpec(bulk_degree=2), NORMAL, {"x^2": 0.6, "x": -0.2}),
+    (BasisSpec(bulk_degree=2), NORMAL, {"z^2": 0.6, "z": -0.2}),
     (
         BasisSpec(bulk_degree=4, lower_tail=Polynomial(1), upper_tail=SoftPower(1.5)),
         NORMAL,
-        {"x": -0.5, "powU*(1+tL)": 0.5, "x^2*(tL+tU)": 0.3, "x^4*(tL+tU)": 0.01},
+        {"z": -0.5, "powU*(-1+tU)": -0.5, "z^2*(tL+tU)": 0.3, "z^4*(tL+tU)": 0.01},
     ),
     (
         BasisSpec(bulk_degree=3, lower_tail=Exponential(0.7), upper_tail=Polynomial(3)),
         NORMAL,
-        {"expL": 0.3, "x^3": 0.02, "x^2": 0.4, "x": 0.1},
+        {"expL*(-1+tL)": -0.3, "z^3": 0.02, "z^2": 0.4, "z": 0.1},
     ),
     (
         BasisSpec(support=(0.0, math.inf), bulk_degree=2, log_lower=True),
         HALF,
-        {"logL": 1.3, "x^2": 0.2, "x": 0.5},
+        {"logL": 1.3, "z^2": 0.2, "z": 0.5},
     ),
     (
         BasisSpec(support=(-1.0, 3.0), bulk_degree=3, log_lower=True, log_upper=True),
         BOUNDED,
-        {"logL": 1.1, "logU": 2.2, "x^3": 0.1, "x^2": 0.3, "x": -0.2},
+        {"logL": 1.1, "logU": 2.2, "z^3": 0.1, "z^2": 0.3, "z": -0.2},
     ),
 ]
 
@@ -100,14 +100,14 @@ def test_gaussian_mle_has_zero_gradient():
     z = model.geometry.to_internal(NORMAL)
     m, v = z.mean(), z.var()
     theta = np.zeros(model.n_coefficients)
-    theta[labels.index("x^2")] = 1.0 / (2.0 * v)
-    theta[labels.index("x")] = -m / v
+    theta[labels.index("z^2")] = 1.0 / (2.0 * v)
+    theta[labels.index("z")] = -m / v
     obj = _BasisPointObjective(
         _NormalizerContext(model), _point_statistics(model, NORMAL)
     )(theta)
     assert np.max(np.abs(obj.gradient)) < 1e-10 * max(1.0, v)
     # nll at the MLE: 0.5 log(2 pi v h^2) + 0.5, shifted by the gauge
-    # (theta . Phi_bar contains -m^2 / (2v) relative to the centred form).
+    # (theta . Phi_bar contains -m^2 / (2v) relative to the centered form).
     h = model.geometry.scale
     exact = 0.5 * math.log(2 * math.pi * v * h * h) + 0.5
     assert obj.nll == pytest.approx(exact, rel=1e-12)
@@ -130,7 +130,7 @@ def test_zero_weights_are_neutral_and_scaling_invariant():
 
 
 def test_point_on_a_log_endpoint_is_rejected():
-    # The public boundary (G1 _validate_endpoint_observations) rejects these;
+    # The public boundary rejects these;
     # the statistic itself refuses a non-finite value.
     data = np.concatenate([HALF, [0.0]])
     model = _model(
@@ -148,7 +148,7 @@ def test_improper_and_invalid_inputs():
     stats = _point_statistics(model, NORMAL)
     labels = [c.label for c in model.columns]
     theta = np.zeros(model.n_coefficients)
-    theta[labels.index("x^2")] = -1.0
+    theta[labels.index("z^2")] = -1.0
     objective = _BasisPointObjective(_NormalizerContext(model), stats)
     with pytest.raises(_ImproperPotential):
         objective(theta)

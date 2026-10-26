@@ -1,6 +1,9 @@
-"""G3 Stage 2b: tail cutoffs and finite-endpoint exclusion.
+"""Tail atoms, tail cutoffs and finite-endpoint exclusion.
 
-Every verdict is checked against an analytic 400-digit mpmath ``q''``:
+The reference is the independent high-precision oracle of ``_basis_oracle``.
+The atoms themselves are checked rigorously: at every ``zeta >= zeta_min`` the
+oracle's ``d^k q / d zeta^k`` lies within the sum of the main atoms plus or
+minus the sum of the envelopes.  Every verdict is checked too:
 ``nonnegative`` cutoffs must have ``q'' > 0`` (or exactly 0) at several points
 beyond them, ``violated`` tails must have ``q'' < 0`` far out, and an
 artificially small cutoff cap must never yield ``nonnegative``.
@@ -11,6 +14,7 @@ import math
 import mpmath as mp
 import numpy as np
 import pytest
+from _basis_oracle import BasisOracle
 from test_basis_admissibility import VALID, _grid_lp
 from test_basis_construction import _compile_quiet
 
@@ -24,76 +28,103 @@ from gibbus._model.basis_tails import (
 RNG = np.random.default_rng(1610202602)
 
 
-def _mp(v):
-    return mp.mpf(v.numerator) / v.denominator if hasattr(v, "numerator") else mp.mpf(v)
+_ORACLES = {}
+
+
+def _oracle(model):
+    key = id(model)
+    if key not in _ORACLES:
+        _ORACLES[key] = (model, BasisOracle(model, max_order=2))
+    return _ORACLES[key][1]
 
 
 def _oracle_q2(model, theta, x):
-    """Analytic ``q''(x)`` (user units) at the current mpmath precision."""
-    g, req = model.geometry, model.request
-    c, h = mp.mpf(g.center), mp.mpf(g.scale)
-    x = mp.mpf(x)
+    """High-precision ``q''(x)`` in user units."""
+    return _oracle(model).potential(theta, x, 2, dps=mp.mp.dps)[0]
 
-    def tanh_parts(alpha, loc, sign):
-        u = sign * mp.mpf(alpha) * (x - mp.mpf(loc))
-        t = mp.tanh(u)
-        w = mp.sech(u) ** 2
-        cc = sign * mp.mpf(alpha)
-        return t, cc * w, -2 * cc**2 * t * w
 
-    tl = (
-        tanh_parts(g.lower_steepness, g.lower_location, 1)
-        if g.lower_location is not None
-        else (1, 0, 0)
-    )
-    tu = (
-        tanh_parts(g.upper_steepness, g.upper_location, -1)
-        if g.upper_location is not None
-        else (1, 0, 0)
+def _weight(atom_or_env, zeta):
+    z = mp.mpf(zeta)
+    return z**atom_or_env.power * mp.exp(
+        atom_or_env.rate * z - atom_or_env.kappa * z * z + atom_or_env.const
     )
 
-    def f(fn):
-        if fn.kind == "monomial":
-            n = fn.degree
-            z = (x - c) / h
-            v = z**n
-            d1 = n * z ** (n - 1) / h if n >= 1 else 0
-            d2 = n * (n - 1) * z ** (n - 2) / h**2 if n >= 2 else 0
-            return v, d1, d2
-        if fn.kind == "log":
-            if fn.side == "lower":
-                d = x - mp.mpf(req.lower)
-                return -mp.log(d), -1 / d, 1 / d**2
-            d = mp.mpf(req.upper) - x
-            return -mp.log(d), 1 / d, 1 / d**2
-        if fn.kind == "exponential":
-            lam = mp.mpf(fn.rate) * (-1 if fn.side == "lower" else 1)
-            v = mp.exp(lam * (x - mp.mpf(fn.location)))
-            return v, lam * v, lam**2 * v
-        p, a = mp.mpf(fn.power), mp.mpf(fn.power) / 2
-        dl = mp.mpf(fn.delta)
-        s = (x - c) ** 2 + dl
-        v = s**a / h**p
-        d1 = 2 * a * (x - c) * s ** (a - 1) / h**p
-        d2 = (
-            2 * a * s ** (a - 1) + 4 * a * (a - 1) * (x - c) ** 2 * s ** (a - 2)
-        ) / h**p
-        return v, d1, d2
 
-    total = mp.mpf(0)
-    for coef, column in zip(theta, model.columns):
-        if coef == 0.0:
-            continue
-        col = mp.mpf(0)
-        for j, gate in column.terms:
-            a0, a1, a2 = (_mp(v) for v in gate)
-            g0 = a0 + a1 * tl[0] + a2 * tu[0]
-            g1 = a1 * tl[1] + a2 * tu[1]
-            g2 = a1 * tl[2] + a2 * tu[2]
-            v, d1, d2 = f(model.functions[j])
-            col += d2 * g0 + 2 * d1 * g1 + v * g2
-        total += mp.mpf(float(coef)) * col
-    return total
+ENVELOPE_SPECS = [
+    BasisSpec(bulk_degree=3),
+    BasisSpec(
+        bulk_degree=4,
+        lower_tail=Polynomial(1),
+        upper_tail=Polynomial(1),
+        expansion="full",
+    ),
+    BasisSpec(
+        bulk_degree=2,
+        lower_tail=SoftPower(1.01),
+        upper_tail=SoftPower(7.3),
+        expansion="full",
+    ),
+    BasisSpec(bulk_degree=2, lower_tail=SoftPower(2.5), upper_tail=SoftPower(2.5)),
+    BasisSpec(
+        bulk_degree=3,
+        lower_tail=Exponential(0.7),
+        upper_tail=Exponential(5.0),
+        expansion="full",
+    ),
+    BasisSpec(
+        support=(0.0, math.inf),
+        bulk_degree=2,
+        log_lower=True,
+        upper_tail=SoftPower(1.4),
+        expansion="full",
+    ),
+    BasisSpec(
+        support=(-math.inf, 1.0),
+        bulk_degree=3,
+        log_upper=True,
+        lower_tail=Polynomial(1),
+    ),
+]
+
+
+@pytest.mark.parametrize("spec", ENVELOPE_SPECS, ids=lambda s: "")
+@pytest.mark.parametrize("order", [1, 2])
+def test_main_atoms_and_envelopes_enclose_the_tail_derivative(spec, order):
+    model = _compile_quiet(spec)
+    oracle = BasisOracle(model, units="z", max_order=2)
+    for side in [s.side for s in model.asymptotics]:
+        sgn = 1.0 if side == "upper" else -1.0
+        tail = _build_tail_model(model, side, order=order)
+        for _ in range(2):
+            theta = RNG.normal(size=model.n_coefficients)
+            for zeta in (tail.zeta_min, 2.5, 3.3, 5.0, 8.0, 15.0, 40.0, 300.0):
+                if zeta < tail.zeta_min:
+                    continue
+                with mp.workdps(60):
+                    value = oracle.potential(theta, sgn * zeta, order, dps=60)[0]
+                    value *= sgn**order
+                    main = mp.mpf(0)
+                    for atom in tail.atoms:
+                        coef = mp.mpf(float(atom.row @ theta))
+                        if atom.kind == "log":
+                            main += coef / (mp.mpf(zeta) + atom.offset) ** order
+                        else:
+                            main += coef * _weight(atom, zeta)
+                    envelope = sum(
+                        (
+                            abs(theta[e.column]) * e.coef * _weight(e, zeta)
+                            for e in tail.envelopes
+                        ),
+                        mp.mpf(0),
+                    )
+                    slack = envelope + mp.mpf(1e-12) * (abs(value) + abs(main))
+                    assert abs(value - main) <= slack + mp.mpf(10) ** -300, (
+                        side,
+                        zeta,
+                        float(value),
+                        float(main),
+                        float(envelope),
+                    )
 
 
 TAIL_SPECS = [s for s in VALID if math.isinf(s.support[0]) or math.isinf(s.support[1])][
@@ -102,8 +133,8 @@ TAIL_SPECS = [s for s in VALID if math.isinf(s.support[0]) or math.isinf(s.suppo
 
 
 def _thetas(model, seed):
-    # Per-case generator: the module RNG made the draws depend on which tests
-    # ran earlier in the same worker (an order-dependent oracle miss, G3-049).
+    # Per-case generator: the module RNG would make the draws depend on which
+    # tests ran earlier in the same worker.
     rng = np.random.default_rng(seed)
     out = [rng.normal(size=model.n_coefficients) for _ in range(2)]
     feasible = _grid_lp(model, 8.0, 801)
@@ -126,14 +157,19 @@ def test_tail_verdicts_agree_with_high_precision_curvature(spec):
         tail = _build_tail_model(model, side)
         for theta in _thetas(model, 1000 + TAIL_SPECS.index(spec)):
             res = _tail_verdict(tail, model, theta)
-            if res.status == "nonnegative":
+            if res.status == "verified":
                 lead = next(
                     (a for a in tail.atoms if float(a.row @ theta) != 0.0), None
                 )
                 for mult in (1.0, 1.5, 3.0, 10.0, 40.0):
                     zeta = res.zeta * mult
                     if lead is not None and lead.kind == "power":
-                        log_w = lead.power * math.log(zeta) + lead.rate * zeta
+                        log_w = (
+                            lead.power * math.log(zeta)
+                            + lead.rate * zeta
+                            - lead.kappa * zeta * zeta
+                            + lead.const
+                        )
                         if log_w < -900.0:
                             break
                     dps = (
@@ -152,8 +188,8 @@ def test_tail_verdicts_agree_with_high_precision_curvature(spec):
             elif res.status == "violated":
                 lead = next(a for a in tail.atoms if float(a.row @ theta) != 0.0)
                 # The cut is the leader's row, unless a stronger atom is
-                # exactly zero at theta: then that atom's row (G3-049; the
-                # leader's row is not a valid cut there).
+                # exactly zero at theta: then that atom's row (the leader's row
+                # is not a valid cut there).
                 stronger = tail.atoms[: tail.atoms.index(lead)]
                 zero = [
                     a
@@ -184,7 +220,7 @@ def test_tail_verdicts_agree_with_high_precision_curvature(spec):
                 assert found, (side, res)
             # Fail closed: a cap below the first admissible cutoff never proves.
             capped = _tail_verdict(tail, model, theta, zeta_cap=0.5 * tail.zeta_min)
-            assert capped.status != "nonnegative" or capped.lead_value == 0.0
+            assert capped.status != "verified" or capped.lead_value == 0.0
 
 
 def test_violated_linear_tail_gives_leading_functional_as_cut():
@@ -204,14 +240,15 @@ def test_violated_linear_tail_gives_leading_functional_as_cut():
 @pytest.mark.parametrize(
     "spec,weights",
     [
-        (BasisSpec(bulk_degree=2), {"x^2": 1.0}),
+        (BasisSpec(bulk_degree=2), {"z^2": 1.0}),
         (
             BasisSpec(
                 bulk_degree=2, lower_tail=Exponential(0.7), upper_tail=SoftPower(1.5)
             ),
-            {"expL": 1.0, "powU": 1.0},
+            # (-1 + t) = -2 W: negative weights give outward-convex tails.
+            {"expL*(-1+tL)": -1.0, "powU*(-1+tU)": -1.0},
         ),
-        (BasisSpec(support=(0.0, math.inf), bulk_degree=1), {"x": 1.0}),
+        (BasisSpec(support=(0.0, math.inf), bulk_degree=1), {"z": 1.0}),
     ],
     ids=lambda s: "",
 )
@@ -225,7 +262,7 @@ def test_hand_built_convex_members_have_nonnegative_tails(spec, weights):
     for side in ("lower", "upper"):
         if math.isinf(getattr(model.request, side)):
             res = _tail_verdict(_build_tail_model(model, side), model, theta)
-            assert res.status == "nonnegative", (side, res)
+            assert res.status == "verified", (side, res)
 
 
 @pytest.mark.parametrize("side", ["lower", "upper"])

@@ -23,6 +23,7 @@ cdef struct GrowthTable:
     const double* coef
     const double* power
     const double* rate
+    const double* lconst
 
 
 cdef class GrowthKernel:

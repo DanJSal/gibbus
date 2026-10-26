@@ -1,5 +1,11 @@
 # Releasing Gibbus
 
+`ci.yml` builds and tests installed wheels and the sdist on Linux, Windows and macOS for every supported CPython on pushes to `main` and `develop` and on pull requests. The release automation is stored dormant as `wheels.yml.disabled` and `release.yml.disabled` (GitHub runs only `.yml` and `.yaml` files) until the release matrix is qualified. Activate it in this order:
+
+1. Rename `wheels.yml.disabled` to `wheels.yml` and require the 16-wheel matrix (four CPython versions on four platform targets) to build and pass its installed tests.
+2. Configure the TestPyPI and PyPI Trusted Publishers and the `testpypi`/`pypi` GitHub environments, then rename `release.yml.disabled` to `release.yml`. It calls `wheels.yml` and `scripts/release_gate.py`.
+3. Decide whether development versions such as `0.2.0.dev0` may be published from a tag; the gate currently accepts any version that matches the metadata.
+
 Gibbus releases are built and published by GitHub Actions. The production tag workflow builds the source distribution and all supported binary wheels, tests those artifacts, publishes them to TestPyPI, verifies the TestPyPI installation, and only then permits publication of the same artifact set to PyPI.
 
 ## Version and tag rule
@@ -12,11 +18,11 @@ A production release tag must be exactly:
 v<project.version>
 ```
 
-For example, `version = "0.1.0"` must be released from tag `v0.1.0`.
+For example, `version = "X.Y.Z"` must be released from tag `vX.Y.Z`.
 
 `.github/workflows/release.yml` enforces this relationship. A mismatched tag fails before any artifact is published.
 
-Manual `workflow_dispatch` runs are lightweight preflights only. They verify synchronized release metadata, build and validate the sdist, and report the expected production tag. They do not build the 20-wheel matrix and can never publish to TestPyPI or PyPI.
+Manual `workflow_dispatch` runs are lightweight preflights only. They verify synchronized release metadata, build and validate the sdist, and report the expected production tag. They do not build the 16-wheel matrix and can never publish to TestPyPI or PyPI.
 
 ## Trusted Publishing setup
 
@@ -80,11 +86,11 @@ It stops there. No wheel matrix is built and a manual dispatch never publishes.
 Pushing the exact release tag performs the authoritative release build:
 
 1. validates that the tag is exactly `v<project.version>`;
-2. calls the reusable wheel workflow and builds/tests all 20 supported wheels;
+2. calls the reusable wheel workflow and builds/tests all 16 supported wheels;
 3. builds the sdist, installs it, smoke-tests all compiled extensions, and runs focused packaging/API/serialization tests;
-4. combines the tested 20 wheels and one sdist into one 21-file release artifact;
+4. combines the tested 16 wheels and one sdist into one 17-file release artifact;
 5. verifies the final artifact set and runs `twine check --strict`;
-6. publishes the 21 tested files to TestPyPI using the `testpypi` environment;
+6. publishes the 17 tested files to TestPyPI using the `testpypi` environment;
 7. installs the exact release version from TestPyPI on CPython 3.14 and smoke-tests the installed compiled extensions;
 8. waits for the `pypi` environment approval if that environment is protected;
 9. downloads the same `gibbus-release-artifacts` artifact used for TestPyPI and publishes it to PyPI;
@@ -109,13 +115,13 @@ Create and push the tag:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v0.1.0 -m "Gibbus 0.1.0"
-git push origin v0.1.0
+git tag -a vX.Y.Z -m "Gibbus X.Y.Z"
+git push origin vX.Y.Z
 ```
 
 During the tag workflow:
 
-1. Require the final 20-wheel build, sdist build, and artifact-assembly jobs to pass.
+1. Require the final 16-wheel build, sdist build, and artifact-assembly jobs to pass.
 2. Require TestPyPI publication and the TestPyPI installation smoke test to pass.
 3. Inspect the TestPyPI project page if desired.
 4. Approve the protected `pypi` environment.

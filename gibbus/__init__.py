@@ -66,7 +66,6 @@ Public API
     Polynomial
     SoftPower
     Exponential
-    TanhSpec
     GibbusBasisWarning
     FitTimeoutError
     suppressed_failures
@@ -88,7 +87,6 @@ from ._model.basis_spec import (
     GibbusBasisWarning,
     Polynomial,
     SoftPower,
-    TanhSpec,
 )
 
 try:
@@ -104,7 +102,6 @@ __all__ = [
     "GibbusBasisWarning",
     "Polynomial",
     "SoftPower",
-    "TanhSpec",
     "__version__",
     "clear_suppressed_failures",
     "suppressed_failures",

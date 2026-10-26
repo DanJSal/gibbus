@@ -12,10 +12,28 @@ from fractions import Fraction as F
 import numpy as np
 
 from .._model.basis import _restrict_to
+from .conic_newton import _UNVERIFIED
 
 
 class _CoordinateMismatch(ArithmeticError):
     """A runtime coordinate conversion failed likelihood accounting."""
+
+
+def _contraction_floor(state, /):
+    """``sum_c |theta_c E[Phi_c]|`` of a normalizer state, in its coordinates.
+
+    The rounding scale of the linear part ``theta . E[Phi]`` of a likelihood
+    evaluated at ``state``; ``0.0`` for a state without moments.
+
+    Parameters
+    ----------
+    state : _BasisState or interval state
+        Normalized state (an interval state's inner state carries the moments).
+    """
+    base = state if hasattr(state, "theta") else getattr(state, "state", None)
+    if base is None or getattr(base, "mean", None) is None:
+        return 0.0
+    return float(np.abs(np.asarray(base.theta)) @ np.abs(np.asarray(base.mean)))
 
 
 @dataclass(frozen=True)
@@ -33,6 +51,19 @@ class _PolynomialCoordinates:
     transform_low: np.ndarray
     column_degree: np.ndarray
     column_fn: np.ndarray
+    gauge: np.ndarray
+
+    def gauge_value(self, coefficients):
+        """Constant the recurrence form adds to the canonical potential.
+
+        ``q_recurrence(x; beta) = q_canonical(x; T beta) + gauge . beta``,
+        summed exactly (``math.fsum``).
+        """
+        return math.fsum(
+            float(g) * float(b)
+            for g, b in zip(self.gauge, np.asarray(coefficients), strict=True)
+            if g
+        )
 
     def _wide_transform(self):
         return self.transform.astype(np.longdouble) + self.transform_low.astype(
@@ -102,13 +133,79 @@ def _recurrence(family, degree, alpha=0.0):
     return norms, np.ascontiguousarray(coefficients), polynomials
 
 
-def _polynomial_coordinates(model, points=None, weights=None, start=None, movable=None):
+# Data whose spread is below this fraction of the support's own scale (the
+# half-width of a bounded support, the distance from a half-line endpoint)
+# take recurrence coordinates centered on the data.
+_CONCENTRATION = 0.125
+
+
+def _data_location(points, weights, /):
+    """Weighted mean and standard deviation of the points, or ``None``."""
+    if points is None:
+        return None
+    x = np.asarray(points, dtype=np.float64).reshape(-1)
+    w = np.ones(x.size) if weights is None else np.asarray(weights, dtype=np.float64)
+    keep = np.isfinite(x) & (w > 0.0)
+    if np.count_nonzero(keep) < 2:
+        return None
+    x, w = x[keep], w[keep] / np.sum(w[keep])
+    mean = float(np.sum(w * x))
+    spread = float(math.sqrt(np.sum(w * (x - mean) ** 2)))
+    if not (math.isfinite(mean) and math.isfinite(spread) and spread > 0.0):
+        return None
+    return mean, spread
+
+
+def _concentrated(located, request, geometry, /):
+    """Whether the data occupy a small part of a finite-ended support."""
+    mean, spread = located
+    lower, upper = request.lower, request.upper
+    if math.isfinite(lower) and math.isfinite(upper):
+        return spread < _CONCENTRATION * (0.5 * upper - 0.5 * lower)
+    if math.isfinite(lower):
+        return spread < _CONCENTRATION * (mean - lower)
+    if math.isfinite(upper):
+        return spread < _CONCENTRATION * (upper - mean)
+    return False
+
+
+def _polynomial_coordinates(
+    model, points=None, weights=None, start=None, movable=None, *, location=None
+):
     """Construct support-appropriate coordinates without enlarging a gated span.
 
     Complete degree prefixes with identical gates can be reparameterized.
     Incomplete or coupled columns retain their direct canonical evaluator;
     converting those columns alone would enlarge the requested span or cause
     cancellation in a recurrence expansion of an isolated monomial.
+
+    ``location`` is the law's ``(center, spread)`` in user units when no
+    observations are at hand (a fitted state): it takes the place of the
+    points' weighted mean and standard deviation.
+
+    Parameters
+    ----------
+    model : _BasisModel
+        Canonical basis whose polynomial span is preserved.
+    points : numpy.ndarray or None
+        Observations in model units, shape (n,).
+    weights : numpy.ndarray or None
+        Observation weights, shape (n,), or equal weights when omitted.
+    start : numpy.ndarray or None
+        Canonical coefficients supplying the initial endpoint-log amplitude
+        for the Laguerre reference measure.
+    movable : sequence of int or None
+        Independent coefficient indices allowed to change coordinates; None
+        allows every index.
+    location : tuple of float or None
+        Explicit center and spread in model units, replacing the location
+        derived from observations.
+
+    Returns
+    -------
+    _BasisModel
+        Equivalent recurrence basis, or the original basis when no complete
+        polynomial prefix can be transformed.
     """
     if model.polynomial_coordinates is not None:
         return model
@@ -118,7 +215,14 @@ def _polynomial_coordinates(model, points=None, weights=None, start=None, movabl
     request, geometry = model.request, model.geometry
     lower, upper = request.lower, request.upper
     alpha = 0.0
-    if math.isfinite(lower) and math.isfinite(upper):
+    located = _data_location(points, weights) if location is None else location
+    if located is not None and _concentrated(located, request, geometry):
+        # Data occupying a small part of a bounded support, or sitting far
+        # from a half-line's endpoint: the support's own recurrence is badly
+        # conditioned there, and the data's location and spread give
+        # well-conditioned (Hermite) coordinates of the same span.
+        family, (origin, scale) = "hermite", located
+    elif math.isfinite(lower) and math.isfinite(upper):
         family, origin, scale = (
             "chebyshev",
             geometry.center,
@@ -140,11 +244,18 @@ def _polynomial_coordinates(model, points=None, weights=None, start=None, movabl
             distance = float(
                 np.average(np.abs(np.asarray(points) - origin), weights=weights)
             ) / (alpha + 1)
+        elif located is not None:
+            distance = abs(located[0] - origin) / (alpha + 1)
         scale = distance if math.isfinite(lower) else -distance
     else:
         family, origin, scale = "hermite", geometry.center, geometry.scale
     if not math.isfinite(scale) or scale == 0 or not math.isfinite(origin):
         return model
+    movable = tuple(range(model.n_coefficients)) if movable is None else tuple(movable)
+    key = (family, origin, scale, alpha, tuple(sorted(movable)))
+    cache = model._polynomial_coordinate_cache
+    if key in cache:
+        return cache[key]
     norms, recurrence, polynomials = _recurrence(family, degree, alpha)
     offset = (F(geometry.center) - F(origin)) / F(scale)
     slope = F(geometry.scale) / F(scale)
@@ -228,8 +339,9 @@ def _polynomial_coordinates(model, points=None, weights=None, start=None, movabl
         low,
         column_degree,
         column_fn,
+        np.array([float(v) for v in constants]),
     )
-    return replace(
+    numerical = replace(
         transformed,
         coefficient_map_exact=tuple(map(tuple, full)),
         coefficient_map=np.array(full, dtype=float),
@@ -246,6 +358,11 @@ def _polynomial_coordinates(model, points=None, weights=None, start=None, movabl
             for j, c in enumerate(transformed.columns)
         ),
     )
+    # Keep only the most recent plan. Changing responsibilities may change
+    # the coordinates, but fixed coordinates reuse their exact compilation.
+    cache.clear()
+    cache[key] = numerical
+    return numerical
 
 
 @dataclass
@@ -280,9 +397,9 @@ class _CoordinateBinding:
 
     def restore(self, result, curvature_options):
         """Validate the canonical likelihood and shape before returning a fit."""
+        from .._defaults import CURVATURE_SEARCH_OPTIONS
         from .basis_constraints import _ConstraintRows
         from .basis_newton import _face_from, _JointCurvature
-        from .curvature_search import _CurvatureOptions
 
         if self.original is self.objective:
             return result
@@ -317,10 +434,11 @@ class _CoordinateBinding:
             canonical_objective = canonical_objective.on_face(canonical_basis)
             canonical_curvature = canonical_curvature.on_face(canonical_basis)
         evaluation = canonical_objective(theta)
-        errors = 0.0
+        errors, floor = 0.0, 0.0
         for state in (evaluation.state, result.evaluation.state):
             if state is not None:
                 errors += state.rel_error + state.cond_error
+                floor += _contraction_floor(state)
         if evaluation.state is None:
             # Joint objectives expose per-component normalization contexts.
             # Recover their numerical error estimates, not an ad hoc NLL slack.
@@ -343,7 +461,14 @@ class _CoordinateBinding:
                         context, blocks.part(k, coefficients), objective.options
                     )
                     errors += state.rel_error + state.cond_error
-        tolerance = 32 * (errors + np.finfo(float).eps * max(1.0, abs(evaluation.nll)))
+                    floor += _contraction_floor(state)
+        # Both likelihoods round their contraction theta . E[Phi]: the floor
+        # is eps times its absolute term sum in each coordinate system, which
+        # dominates once the coefficients cancel (|theta| ~ 1e3 at an NLL of
+        # order one).
+        tolerance = 32 * (
+            errors + np.finfo(float).eps * (max(1.0, abs(evaluation.nll)) + floor)
+        )
         if (
             not math.isfinite(evaluation.nll)
             or abs(evaluation.nll - result.objective_value) > tolerance
@@ -355,14 +480,14 @@ class _CoordinateBinding:
         norms = np.linalg.norm(rows, axis=1)
         rows /= np.where(norms > 0, norms, 1)[:, None]
         separation = canonical_curvature.separate(
-            theta, curvature_options or _CurvatureOptions()
+            theta, curvature_options or CURVATURE_SEARCH_OPTIONS
         )
         status = result.status
         if (
             status in ("converged", "converged_approximately")
             and not separation.feasible
         ):
-            status = "uncertified"
+            status = _UNVERIFIED
         families = sorted(
             {
                 m.polynomial_coordinates.family

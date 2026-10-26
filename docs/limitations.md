@@ -13,29 +13,27 @@ Near a **finite** endpoint, boundary distances are evaluated directly in the pub
 
 **Mixtures with narrow minority components.** Each component uses its own responsibility-weighted center and robust scale, so its basis and normalization work on that component's numerical scale. This keeps narrow or remote minority components well conditioned even when component widths or locations differ by many orders of magnitude. Mixture CDFs are constructed from the weighted component density, and component/mixture consistency is covered by the numerical regression suite.
 
-Checking `error_estimate` after fitting a mixture is the simplest general guard. `uncertified_mass` remains useful for distinguishing a certification failure from a normalization or certified-panel interpolation error. Note that a `cdf`/`ppf` round-trip is *not* a useful check on its own: the PPF is constructed from the CDF, so the two stay self-consistent even when both are wrong.
+Checking `error_estimate` after fitting a mixture is the simplest general guard. `uncertified_mass` (CDF panels whose nonnegativity could not be proved) distinguishes that case from a normalization or panel interpolation error. Note that a `cdf`/`ppf` round-trip is *not* a useful check on its own: the PPF is constructed from the CDF, so the two stay self-consistent even when both are wrong.
 
-The runtime coordinate refactor preserves the smooth statistical basis. It does
-not add `|x|`, nonsmooth knots, or fractional-power bulk terms; fitting such
-populations remains a model approximation as well as a numerical challenge.
+The basis is smooth: it has no `|x|` terms, nonsmooth knots, or fractional-power
+bulk terms, so fitting populations with such features is a model approximation.
 
 ## Known open items
 
-These are open defects of the current build, tracked for the optimization pass. Each fails loudly rather than returning a wrong fit.
+A failed explicit request raises an exception rather than silently installing an invalid result.
 
-- **Extreme-coordinate regimes.** G3-052/G3-053 introduced fitting-coordinate normalization, spectral evaluation, and post-fit moment integration, and the original extreme-offset acceptance cases passed. These corrections do not certify accuracy in every floating-point edge case; public-coordinate precision is still limited by representable values, and remaining edge cases should fail explicitly.
-- **Leader faces in the fitter.** When a requested tail leader collapses to zero (the data's tail is lighter than requested, e.g. `Exponential(2.0)` on rate-1 data, or `Polynomial(3)` at both ends on Gumbel data), the fitter evaluates the face through floating-point projections; gated columns cancelling far in the tail can stall the face solve, and the explicit request raises `RuntimeError`. Fitted states are evaluated on an exact face model, so a fit that converges is evaluated without this cancellation.
-- **Linear tails at higher bulk degree.** `Polynomial(1)` tails at both ends converge at bulk degree 2, and matched-gate degree-3 fits now enforce the exact zero cubic coefficient required by their opposite asymptotic curvature signs (G3-064). Degree 4 can still exhaust the curvature cut exchange, and exploratory degree-5 fits can do so as well. G3-062 matches automatic steepnesses without changing explicitly specified rates; explicitly asymmetric gate geometry does not share the same guarantee. G3-063 scopes face-derived tail curvature cuts to the faces on which they are valid, repairing an independently reproduced cut inconsistency. The exact historical degree-3 separator/cut trace is still unavailable for replay.
-- **High explicit degrees.** High-degree fits can stop without a resolved optimization bound. Eligible complete polynomial prefixes use support-appropriate directly evaluated recurrences through the common Newton controller; scalar projection can refine an interior-point endpoint when its checked bound improves. In particular, both the 1,200-point likelihood-accounting fixture and the 3,000-point degree-12 lognormal acceptance fixture converge. This does not establish reliability for every high-degree sample or for gated, interval or coupled-mixture fits. Explicit nonconvergence raises `RuntimeError`; automatic degree selection can stop at a smaller converged family. Check component status and bound in `fit_diagnostics`.
-- **Ladder failure records.** The single-component degree ladder records why it stopped only internally; mixture searches expose it in `em_diagnostics`.
-- **Performance and automatic selection.** Single-component fits typically take well under a second, but a mixture fit costs a median of tens of times a single-component fit: near a degenerate curvature contact (`q''` flat to higher order) the cut exchange converges linearly, about half the remaining gap per round (see [Benchmark findings](benchmark-findings.md#g3-060-mixture-cost-analysis)). On the G3-060 benchmark the largest fit took about 40 s on a 2-core machine. Automatic component counts always refine the screen winner's neighbors, so a fit that selects one component still pays for a two-component refinement; screen BIC is not a safe bound for pruning it (a four-component screen 63 BIC behind one component refined to the winner).
-- **`Exponential` tail failures.** At higher bulk degrees an `Exponential` tail fit can fail to converge, and a non-finite generated constraint row currently surfaces as `RuntimeError: generated constraint rows must be finite and nonzero`; the internal row overflow still needs numerical recovery.
-- **`SoftPower` face starts.** A failed optional candidate face retains a previously certified incumbent rather than aborting the entire fit (G3-061); other uncommon face-start failures have not been comprehensively retested.
-- **Full-line default tails.** With no explicit tail family, full-line tails derive from the bulk degree, so a higher automatic degree also raises the tail growth order; on linear- or exponential-tailed data an explicit `SoftPower` tail is usually more accurate.
-- **Platforms.** Current development verification covers CPython 3.12 on Linux x86_64. The full supported interpreter and operating-system CI matrix remains unverified for this checkpoint.
-- **Log-concavity margin resolution.** `log_concavity_margin` is the minimum of `V''` over a quantile grid; near a degenerate contact (`V''` about 1e-9) a denser grid can find a smaller value than the reported margin. It is numerical evidence, not the shape certificate. (Before G3-059 it raised on bounded supports by inverting quantiles near 1e-300.)
-- **Explicit tail-family mismatch.** An explicitly chosen polynomial or other tail family can have very poor predictive log density if incompatible with the population tail. The fitter is not expected to change the requested family. Current G3 does not automatically choose among Polynomial, SoftPower, and Exponential tail families; prospective selection work applies only where no family is explicitly requested.
-- **Shape evidence.** The convexity verdict is numerical (interval enclosures and tail bounds), not an arbitrary-precision proof.
+- **Data concentrated far from a finite end.** On a half-line or bounded support, data whose 10–90% spread is below 0.5% of the median's distance from the nearest finite end are rejected with a clear error (the fitting coordinate is anchored at the end). Fit on the full line, or on a support whose finite end is nearer the data. Data that hug the end itself are fine.
+- **High explicit degrees on half-lines.** An explicit degree whose cold start does not converge is lifted from the converged smaller degrees, so degrees up to 12 converge on ordinary half-line data, but slowly (several to about 20 seconds at degree 12). On data concentrated well away from the endpoint (spread of a few percent of the distance) explicit degrees of about 8 and above may still not converge (`non_descent`). Automatic degrees are reliable there.
+- **High-degree polynomial tails.** Explicit `Polynomial` tails of degree 10 and above are numerically difficult.
+- **Heavy tails and `SoftPower`.** An automatic `SoftPower` estimate that reaches `p = 1` reports that the tail is heavier than the family can represent; give an explicit power or another family.
+- **Extreme-coordinate regimes.** Public-coordinate accuracy is limited by float64 representability; unusual offsets or scales may still cause an explicit numerical failure.
+- **Mixture performance.** Mixture EM repeatedly fits component models, and near-degenerate curvature contacts can make cut exchanges slow. Automatic component selection is heuristic and may refine several neighboring counts.
+- **Tail-family mismatch.** Explicit tail choices are not replaced automatically, even when statistically incompatible with the population; automatic comparison of different tail classes is not implemented.
+- **Shape evidence.** Convexity is verified numerically within a threshold `tau` (recorded as `shape_tau` in `fit_diagnostics`), from interval enclosures and tail bounds; it is not an arbitrary-precision proof. `log_concavity_margin` is a separate grid diagnostic.
+- **Degree-ladder history.** The single-component degree ladder records why it stopped in an internal selection history that is not yet exposed through `fit_diagnostics`; mixtures report their growth steps in `em_diagnostics["selection"]`.
+- **Interval mixtures with gated tails.** Interval-censored mixtures whose components carry `SoftPower` or `Exponential` tails can take tens of seconds: each M-step's curvature contact moves with the coefficients, and the point cuts that enforce convexity follow it one exchange at a time.
+- **Far-tail masses.** Survival and tail-quantile queries normally use the compiled tail integrator. Where it cannot close a far-tail row (a fit whose requested tail leader is fixed to zero, or a potential beyond binary64 resolution), the scaled tail quadrature evaluates the mass instead and the event is recorded in `suppressed_failures()`.
+- **Platforms.** CI runs the suite on Linux, Windows and macOS for CPython 3.11 through 3.14; the local verification record is in [Development status](development-status.md). Debug builds, the minimum declared NumPy/SciPy versions and the release wheel matrix are not yet qualified.
 
 ---
 
@@ -43,10 +41,6 @@ These are open defects of the current build, tracked for the optimization pass. 
 
 Evaluation of an already-fitted `Distribution` is read-only at the Python level and the compiled bulk kernels may release the GIL. `gibbus` itself does not create thread pools, process pools, or other worker orchestration during fitting or spectral finalization. Do not mutate, transform, load, or refit the same instance concurrently. Separate `Distribution` instances may be fitted concurrently by the caller, but keep `suppress_warnings=False`: Python warning filters are process-global on standard CPython builds, 3.14 included, so opt-in warning suppression can affect unrelated threads while its context is active. The suppressed-failure ledger itself is thread-local.
 
-## Development checkpoint verification
+## Verification
 
-See [Development status](development-status.md) and the
-[review follow-up register](review-follow-up.md) for current test outcomes and
-known convergence/accuracy cases. Historical checkpoint counts do not validate
-the current source. An `uncertified` return emits a `RuntimeWarning` by default;
-check `fit_diagnostics` before quantitative use.
+See [Development status](development-status.md) for verification scope. A fit whose shape is not verified within `tau` emits a `RuntimeWarning` by default; check `fit_diagnostics` before quantitative use.

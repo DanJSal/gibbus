@@ -13,7 +13,7 @@ from gibbus._fit.basis_constraints import (
 )
 from gibbus._fit.conic_newton import _preconditioned_subproblem
 
-# G3 inequality cones use only scalar blocks for curvature and structural rows.
+# Inequality cones use only scalar blocks for curvature and structural rows.
 _DESCRIPTIONS = [(4, 3), (6, 4), (8, 5), (10, 6), (6, 1)]
 
 

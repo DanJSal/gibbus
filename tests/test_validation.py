@@ -54,53 +54,36 @@ class TestSampleValidation:
         assert "Traceback" not in str(exc.value)
         assert "sample" in str(exc.value).lower()
 
-    def test_large_offset_tiny_spread_is_not_misclassified_as_degenerate(self):
-        """A small physical spread must survive the user-coordinate pullback."""
-        rng = np.random.default_rng(0)
-        data = 1e6 + 1e-9 * rng.standard_normal(800)
+    @pytest.mark.parametrize(
+        "support,offset",
+        [((0.0, np.inf), 1e6), ((-np.inf, 0.0), -1e6), ((0.0, 2e6), 1e6)],
+    )
+    def test_data_far_too_concentrated_for_a_finite_end_fail_clearly(
+        self, support, offset
+    ):
+        """A spread of 1e-15 of the distance to the finite end is rejected."""
+        data = offset + 1e-9 * np.random.default_rng(0).standard_normal(800)
+        with pytest.raises(ValueError, match="too concentrated"):
+            Distribution().fit(data, n_components=1, poly_degree=4, support=support)
 
+    def test_large_offset_tiny_spread_fits_on_the_full_line(self):
+        """The same data on the full line keep their physical spread."""
+        data = 1e6 + 1e-9 * np.random.default_rng(0).standard_normal(800)
         fitted = Distribution().fit(
-            data,
-            n_components=1,
-            poly_degree="auto",
-            support=(0.0, np.inf),
+            data, n_components=1, poly_degree=4, support=(-np.inf, np.inf)
         )
-
         assert fitted.is_fitted
-        assert np.isfinite(fitted.std)
-        assert 2e-10 < fitted.std < 5e-9
-        assert abs(fitted.mean - 1e6) < 5e-9
-        assert fitted.ppf(0.0) == 0.0
-        assert np.isposinf(fitted.ppf(1.0))
-        assert 0.0 < fitted.cdf(fitted.mean) < 1.0
-        assert not fitted.fit_diagnostics["shared_boundary"]["allowed"][0]
-        assert fitted.fit_diagnostics["shared_boundary"]["p_values"][0] == 1.0
-
-    def test_large_offset_tiny_spread_degree_four_is_stable(self):
-        """A direct degree-four fit must remain stable at extreme offset/scale."""
-        rng = np.random.default_rng(0)
-        data = 1e6 + 1e-9 * rng.standard_normal(800)
-
-        fitted = Distribution().fit(
-            data,
-            n_components=1,
-            poly_degree=4,
-            support=(0.0, np.inf),
-        )
-
-        assert fitted.is_fitted
-        assert int(fitted.components[0].data["bulk_degree"]) == 4
         assert np.isfinite(fitted.std) and 2e-10 < fitted.std < 5e-9
+        assert abs(fitted.mean - 1e6) < 5e-9
 
-    def test_large_negative_offset_auto_upper_log_is_unresolvable(self):
-        """The mirrored remote upper endpoint is likewise excluded only when auto."""
-        x = -1e6 + 1e-9 * np.random.default_rng(0).standard_normal(800)
+    def test_concentrated_half_line_data_within_the_limit_fit(self):
+        """A spread of 1% of the distance to the endpoint is fitted."""
+        data = 1000.0 + 10.0 * np.random.default_rng(0).standard_normal(800)
         fitted = Distribution().fit(
-            x, n_components=1, poly_degree=2, support=(-np.inf, 0.0)
+            data, n_components=1, poly_degree=4, support=(0.0, np.inf)
         )
-        assert fitted.is_fitted and 2e-10 < fitted.std < 5e-9
-        assert not fitted.fit_diagnostics["shared_boundary"]["allowed"][1]
-        assert fitted.fit_diagnostics["shared_boundary"]["p_values"][1] == 1.0
+        assert fitted.fit_diagnostics["converged"]
+        assert abs(fitted.std / 10.0 - 1.0) < 0.1
 
     def test_single_extreme_outlier_does_not_make_auto_degree_fail(self):
         """Auto-degree screening should retain a valid low-degree candidate."""
@@ -503,7 +486,7 @@ class TestBoundaryEndpointValidation:
 
 
 class TestFitControlValidation:
-    """Options that used to change the fitted model silently when wrong."""
+    """Invalid fitting options raise before modifying the fitted model."""
 
     def test_non_integral_n_components_rejected(self, rng):
         with pytest.raises(ValueError, match="positive integer or 'auto'"):
@@ -545,3 +528,25 @@ class TestFitControlValidation:
             support=(-np.inf, np.inf),
         )
         assert fitted.is_fitted
+
+
+@pytest.mark.parametrize(
+    "rows,support,weights",
+    [
+        # Right-censored everywhere on an unbounded upper end.
+        (np.c_[np.linspace(-1.0, 1.0, 50), np.full(50, np.inf)], None, None),
+        # Left-censored at a finite lower end.
+        (np.c_[np.zeros(50), np.linspace(0.1, 2.0, 50)], (0.0, np.inf), None),
+        # Every row reaches a finite upper end.
+        (np.c_[np.linspace(0.0, 0.9, 50), np.ones(50)], (0.0, 1.0), None),
+        # The only bounded row carries no weight.
+        (
+            np.r_[np.c_[np.linspace(-1.0, 1.0, 50), np.full(50, np.inf)], [[0.0, 1.0]]],
+            None,
+            np.r_[np.ones(50), 0.0],
+        ),
+    ],
+)
+def test_censoring_toward_one_end_has_no_maximum_likelihood(rows, support, weights):
+    with pytest.raises(ValueError, match="no density maximizes"):
+        Distribution().fit(rows, support=support, sample_weight=weights)

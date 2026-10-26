@@ -13,15 +13,7 @@ from numpy.polynomial import chebyshev as C
 
 from ._cdf_eval import SpectralEvaluator
 from ._ppf_eval import SpectralPPFEvaluator
-
-_KIND_TO_CODE = {
-    "finite": 0,
-    "lower": 1,
-    "upper": 2,
-    "real": 3,
-    "lower_centered": 4,
-    "upper_centered": 5,
-}
+from .cdf import _KIND_CODE
 
 
 def pack_cdf_state(rep):
@@ -75,7 +67,7 @@ def pack_cdf_state(rep):
         "cdf_uncertified_mass": np.float64(rep.uncertified_mass_fraction),
         "cdf_mass_defect": np.float64(rep.mass_defect),
         "cdf_error_estimate": np.float64(rep.cdf_error_estimate),
-        "cdf_map_kind": np.int32(_KIND_TO_CODE[mp.kind]),
+        "cdf_map_kind": np.int32(_KIND_CODE[mp.kind]),
         "cdf_map_params": np.array([mp.L, mp.U, mp.center, mp.scale], dtype=np.float64),
         "cdf_npanels": np.int32(m),
         "cdf_coeff_stride": np.int32(max_ncoeff),
@@ -179,8 +171,8 @@ def build_cdf_evaluator(data):
         raise ValueError("cdf_npanels must be positive")
     if stride <= 0:
         raise ValueError("cdf_coeff_stride must be positive")
-    if not 0 <= kind <= 5:
-        raise ValueError("cdf_map_kind must be an integer in 0..5")
+    if not 0 <= kind < len(_KIND_CODE):
+        raise ValueError(f"cdf_map_kind must be an integer in 0..{len(_KIND_CODE) - 1}")
     coeffs = np.asarray(data["cdf_coeffs"], dtype=np.float64).reshape(m, stride)
     params = np.asarray(data["cdf_map_params"], dtype=np.float64)
     return SpectralEvaluator(
@@ -228,8 +220,8 @@ def build_ppf_evaluator(data):
         raise ValueError("cdf_npanels must be positive")
     if cdf_stride <= 0:
         raise ValueError("cdf_coeff_stride must be positive")
-    if not 0 <= kind <= 5:
-        raise ValueError("cdf_map_kind must be an integer in 0..5")
+    if not 0 <= kind < len(_KIND_CODE):
+        raise ValueError(f"cdf_map_kind must be an integer in 0..{len(_KIND_CODE) - 1}")
     cdf_coeffs = np.asarray(data["cdf_coeffs"], dtype=np.float64).reshape(
         cdf_m, cdf_stride
     )

@@ -51,7 +51,7 @@ def test_public_survival_prepares_inputs_before_computation(
 ):
     seen = []
 
-    def compute(potential, ppf, support, probabilities, *, log_tail_mass):
+    def compute(potential, ppf, support, probabilities, *, log_tail_masses):
         assert isinstance(probabilities, np.ndarray)
         assert probabilities.dtype == np.float64
         seen.append(probabilities)

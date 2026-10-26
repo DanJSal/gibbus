@@ -4,14 +4,10 @@ import math
 
 import numpy as np
 from scipy.optimize import minimize
-from scipy.special import logsumexp, roots_laguerre
+from scipy.special import roots_laguerre
 
+from . import _tail_likelihood_kernels as _tail_kernels
 from .budget import _check_fit_time
-
-try:
-    from . import _tail_likelihood_kernels as _g3tail_accel
-except ImportError:
-    _g3tail_accel = None
 
 GX, GW = roots_laguerre(96)
 LOGW = np.log(GW)
@@ -87,35 +83,15 @@ def potential_fixed(y, u, med, kind="power", p=2, starts=None):
     hnodes = geth(GX / rate)
     if np.isnan(hnodes).any():
         raise ArithmeticError("nan quadrature basis")
-    hsafe = np.where(np.isfinite(hnodes), hnodes, 0.0)
-    ynodes = GX / rate
-    logwr = LOGW + GX
-    if _g3tail_accel is not None:
-        ynodes = np.ascontiguousarray(ynodes, dtype=np.float64)
-        hnodes = np.ascontiguousarray(hnodes, dtype=np.float64)
-        logwr = np.ascontiguousarray(logwr, dtype=np.float64)
+    ynodes = np.ascontiguousarray(GX / rate, dtype=np.float64)
+    hnodes = np.ascontiguousarray(hnodes, dtype=np.float64)
+    logwr = np.ascontiguousarray(LOGW + GX, dtype=np.float64)
 
-        def obj_and_grad(z):
-            _check_fit_time("tail likelihood optimization")
-            return _g3tail_accel.objective_gradient(
-                z[0], z[1], ym, mh, rate, ynodes, hnodes, logwr
-            )
-
-    else:
-
-        def obj_and_grad(z):
-            _check_fit_time("tail likelihood optimization")
-            b, a = np.exp(z)
-            score = logwr - b * ynodes - a * hnodes
-            logsum = logsumexp(score)
-            nll = b * ym + a * mh + logsum - np.log(rate)
-            if not np.isfinite(nll):
-                return 1e30, np.zeros(2)
-            prob = np.exp(score - logsum)
-            # A quadrature point at infinite h has exactly zero posterior weight.
-            mean_y = float(np.dot(prob, ynodes))
-            mean_h = float(np.dot(prob, hsafe))
-            return float(nll), np.array((b * (ym - mean_y), a * (mh - mean_h)))
+    def obj_and_grad(z):
+        _check_fit_time("tail likelihood optimization")
+        return _tail_kernels.objective_gradient(
+            z[0], z[1], ym, mh, rate, ynodes, hnodes, logwr
+        )
 
     bounds = [(-8, 5), (-13, 7)]
     xstarts = (

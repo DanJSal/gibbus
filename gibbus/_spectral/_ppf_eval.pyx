@@ -14,9 +14,11 @@ there is no Python/SciPy tail fallback and no separate asymptotic tail model.
 
 import numpy as np
 cimport numpy as cnp
-from libc.math cimport hypot, isnan, log, log1p
+from libc.math cimport isnan, log, log1p
 from libc.stdint cimport int32_t
 from libc.stdlib cimport malloc, free
+
+from ._maps cimport Map, map_set, map_x
 
 cnp.import_array()
 
@@ -201,8 +203,7 @@ cdef class SpectralPPFEvaluator:
     """Compiled bulk evaluator for the full compact-coordinate PPF."""
 
     cdef double pmin, pmax
-    cdef int map_kind
-    cdef double map_L, map_U, map_center, map_scale
+    cdef Map mp
     cdef Py_ssize_t npanels, stride
 
     cdef cnp.ndarray _breaks_arr
@@ -255,14 +256,13 @@ cdef class SpectralPPFEvaluator:
             Probability range covered by the fitted inverse panels.
             Outside it, quantiles are found by bisecting the source CDF.
         map_kind : int
-            Support type of the underlying distribution: 0 finite, 1
-            lower-bounded, 2 upper-bounded, 3 unbounded, 4 lower-bounded
-            centered near the density, 5 upper-bounded centered near the
+            Source CDF map family (``_maps.pxd``): 0 affine, 1 anchored at
+            the lower end, 2 anchored at the upper end, 3 centered on the
             density.
         map_L, map_U : float
             Support endpoints in physical coordinates.
         map_center, map_scale : float
-            Affine parameters of the compact-to-physical map.
+            Map location (the anchoring end for kinds 1 and 2) and scale.
         breaks_r : array_like, shape (npanels + 1,)
             Inverse-panel boundaries in logit coordinates, ascending.
         breaks_z : array_like, shape (npanels + 1,)
@@ -285,20 +285,16 @@ cdef class SpectralPPFEvaluator:
         ValueError
             If either coefficient array is not 2-D, if either panel set
             is empty, if any panel arrays disagree on length, if *map_kind*
-            is outside 0..5, or if a live coefficient count is outside its
+            is outside 0..3, or if a live coefficient count is outside its
             row stride.
         """
         cdef Py_ssize_t j
 
-        if map_kind < 0 or map_kind > 5:
-            raise ValueError("map_kind must be an integer in 0..5")
+        if map_kind < 0 or map_kind > 3:
+            raise ValueError("map_kind must be an integer in 0..3")
         self.pmin = pmin
         self.pmax = pmax
-        self.map_kind = map_kind
-        self.map_L = map_L
-        self.map_U = map_U
-        self.map_center = map_center
-        self.map_scale = map_scale
+        map_set(&self.mp, map_kind, map_L, map_U, map_center, map_scale)
         self._breaks_arr = np.ascontiguousarray(breaks_r, dtype=np.float64)
         self._zbreaks_arr = np.ascontiguousarray(breaks_z, dtype=np.float64)
         self._coeff_arr = np.ascontiguousarray(coeffs, dtype=np.float64)
@@ -482,32 +478,7 @@ cdef class SpectralPPFEvaluator:
 
     cdef inline double _x_from_z(self, double z) noexcept nogil:
         """Map a compact coordinate back to physical coordinates."""
-        cdef double y_edge, t_edge, t
-        if self.map_kind == 0:
-            if z <= -1.0:
-                return self.map_L
-            if z >= 1.0:
-                return self.map_U
-            return self.map_center + self.map_scale * z
-        if self.map_kind == 1:
-            return self.map_L + self.map_scale * (1.0 + z) / (1.0 - z)
-        if self.map_kind == 2:
-            return self.map_U - self.map_scale * (1.0 - z) / (1.0 + z)
-        if self.map_kind == 4:
-            if z <= -1.0:
-                return self.map_L
-            y_edge = (self.map_L - self.map_center) / self.map_scale
-            t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-            t = t_edge + 0.5 * (z + 1.0) * (1.0 - t_edge)
-            return self.map_center + (2.0 * self.map_scale * t) / (1.0 - t * t)
-        if self.map_kind == 5:
-            if z >= 1.0:
-                return self.map_U
-            y_edge = (self.map_U - self.map_center) / self.map_scale
-            t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-            t = -1.0 + 0.5 * (z + 1.0) * (t_edge + 1.0)
-            return self.map_center + (2.0 * self.map_scale * t) / (1.0 - t * t)
-        return self.map_center + (2.0 * self.map_scale * z) / (1.0 - z * z)
+        return map_x(&self.mp, z)
 
     cdef void _map_many_to_x(self, double* out, Py_ssize_t n) noexcept nogil:
         """Map an array of compact coordinates to physical, in place."""

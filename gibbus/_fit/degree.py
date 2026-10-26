@@ -1,9 +1,8 @@
 """Selection policy and PSD helpers of the omitted-statistic score test.
 
-G1 owner extended: ``_fit/degree.py``.  G1's polynomial power-moment
-diagnostics are replaced by ``basis_selection._span_diagnostic`` (one score
-test for degrees, spans and mixtures, G3-035/045); this module keeps the
-immutable selection policy (``_DegreeSelectionConfig``) and the
+The score test itself is ``basis_selection._span_diagnostic`` (one test for
+degrees, spans and mixtures); this module holds the immutable selection
+policy (``_DegreeSelectionConfig``) and the
 positive-semidefinite projections the test uses.
 """
 

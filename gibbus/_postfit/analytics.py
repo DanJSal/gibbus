@@ -13,98 +13,14 @@ This module is called from:
   computation beyond the cached ``raw_moments`` array.
 
 The helpers are pure functions of moments already computed from the fitted
-G3 potential; tolerances come from :mod:`._defaults`.
+basis potential; tolerances come from :mod:`._defaults`.
 """
 
 from math import comb
 
 import numpy as np
 
-from .._defaults import (
-    EXP_NARROW_D2_THRESHOLD,
-    STATS_VAR_NEG_TOL,
-)
-
-
-def _stats_from_raw_moments(m1, m2, m3, m4, /):
-    """Compute summary statistics from the first four raw moments.
-
-    Parameters
-    ----------
-    m1 : float
-        First raw moment (mean).
-    m2 : float
-        Second raw moment ``E[X^2]``.
-    m3 : float
-        Third raw moment ``E[X^3]``.
-    m4 : float
-        Fourth raw moment ``E[X^4]``.
-
-    Returns
-    -------
-    dict with keys ``mean``, ``var``, ``std``, ``skew``, ``kurt``
-        Variance is computed as ``m2 - m1^2``.  When that result is
-        within ``STATS_VAR_NEG_TOL`` *relative to* ``max(m2, m1^2)`` the
-        two terms agree to their last bit, which is the signature of a
-        density that has collapsed onto a spike, and a ``RuntimeError``
-        is raised with an explanation.  The tolerance is purely relative
-        so the check is scale-free.  ``kurt`` is
-        the Pearson (raw) kurtosis, the standardized fourth moment, so a
-        Gaussian reads 3.0.  Skewness and kurtosis are set to ``nan``
-        when ``m3`` or ``m4`` is non-finite.
-
-    Raises
-    ------
-    RuntimeError
-        If the variance is non-finite, or is zero to within floating
-        point.  That means the density has concentrated onto a point:
-        the likelihood of a flexible density family is unbounded, and a
-        fit can walk into a spike where the log-likelihood is arbitrarily
-        high and every moment beyond the first is meaningless.
-    """
-    mean = float(m1)
-    m2f = float(m2)
-    var = m2f - mean * mean
-
-    # ``m2`` and ``mean ** 2`` agree to their last bit on a spike, so
-    # this subtraction is where the degeneracy shows up.  Scale the
-    # tolerance by ``m2``: an absolute threshold means something
-    # different at every data scale.
-    # No absolute floor here: with one, data at scale 1e-8 has
-    # ``m2 ~ 1e-16`` below a tolerance pinned at 1e-15 and is rejected as
-    # degenerate even though it is perfectly well-conditioned.  If both
-    # terms are zero the ``var <= 0`` check below still fires.
-    scale_ref = max(abs(m2f), abs(mean * mean))
-    noise = float(STATS_VAR_NEG_TOL) * scale_ref
-    if -noise < var < noise:
-        raise RuntimeError(
-            f"Degenerate variance encountered: E[X^2] = {m2f!r} and "
-            f"E[X]^2 = {mean * mean!r} agree to within floating point, so "
-            f"the fitted density has concentrated onto a point. The "
-            f"likelihood of this family is unbounded, and an optimizer "
-            f"can converge onto such a spike at excessive polynomial "
-            f"complexity. Try a lower polynomial degree or a more "
-            f"appropriate support/model specification."
-        )
-    if (not np.isfinite(var)) or (var <= 0.0):
-        raise RuntimeError(f"Degenerate variance encountered (var={var}).")
-    std = float(np.sqrt(var))
-
-    skew = np.nan
-    kurt = np.nan
-    if np.isfinite(m3) and np.isfinite(m4):
-        m3 = float(m3)
-        m4 = float(m4)
-        mu3 = m3 - 3.0 * float(m2) * mean + 2.0 * (mean**3)
-        mu4 = m4 - 4.0 * m3 * mean + 6.0 * float(m2) * (mean**2) - 3.0 * (mean**4)
-        # Standardized third and fourth moments.  ``kurt`` is the Pearson
-        # (raw) kurtosis, so a Gaussian reads 3.0, not 0.0 -- it is the
-        # counterpart of ``skew``, not the Fisher excess.  Subtract 3 if
-        # you want excess.
-        skew = float(mu3 / (std**3))
-        kurt = float(mu4 / (std**4))
-
-    return {"mean": mean, "var": var, "std": std, "skew": skew, "kurt": kurt}
+from .._defaults import EXP_NARROW_D2_THRESHOLD
 
 
 def _stats_from_centered_moments(mean, mu2, mu3, mu4, /):
@@ -325,10 +241,10 @@ def _exp_stats_from_log_moments(log_moments, relative_centered_moment, subject, 
 
     d2 = float(l2 - 2.0 * l1)
     if d2 < EXP_NARROW_D2_THRESHOLD:
-        # The centre first: ``l1`` carries the log-moment quadrature's
-        # relative error (3e-11), which moves the centre of a law 9e-8 wide
+        # The center first: ``l1`` carries the log-moment quadrature's
+        # relative error (3e-11), which moves the center of a law 9e-8 wide
         # enough to change its skewness by 1e-3; the first relative moment
-        # is O(width) with that relative error (G3-047).
+        # is O(width) with that relative error.
         l1 = float(l1 + np.log1p(float(relative_centered_moment(l1, 1))))
         rel2 = float(relative_centered_moment(l1, 2))
         rel3 = float(relative_centered_moment(l1, 3))

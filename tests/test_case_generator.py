@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from scipy import integrate
 
-from tests.g3_casegen import (
+from tests.casegen import (
     Affine,
     CaseSpec,
     CaseUniverse,
@@ -29,7 +29,7 @@ from tests.g3_casegen import (
     to_dict,
     validate,
 )
-from tests.g3_casegen.cases import _canonical, case_from_dict, coverage_counts, manifest
+from tests.casegen.cases import _canonical, case_from_dict, coverage_counts, manifest
 
 CATALOG = default_distributions("standard")
 
@@ -226,7 +226,7 @@ def test_serialized_spec_identifies_cases_independent_of_global_rng():
         100,
     )
     json.dumps(s.as_dict(), allow_nan=False)
-    assert s.scenario_id.startswith("G3S-") and s.case_id.startswith("G3C-")
+    assert s.scenario_id.startswith("GBS-") and s.case_id.startswith("GBC-")
     assert _canonical(s.as_dict()) == _canonical(s.as_dict())
     x = materialize(s, seed=3)
     y = materialize(s, seed=4)
@@ -276,8 +276,8 @@ def test_fit_kwargs_adapter_works_when_gibbus_built():
         Named("beta", a=2, b=3),
     ):
         bounds = support(d)
-        for ll in ((False, True) if math.isfinite(bounds[0]) else (False,)):
-            for lu in ((False, True) if math.isfinite(bounds[1]) else (False,)):
+        for ll in (False, True) if math.isfinite(bounds[0]) else (False,):
+            for lu in (False, True) if math.isfinite(bounds[1]) else (False,):
                 kw = FitSpec(ll, lu).fit_kwargs(bounds)
                 assert isinstance(kw["basis"], BasisSpec)
                 assert (
@@ -291,7 +291,7 @@ def test_pairwise_catalog_expands_all_valid_two_family_structures():
     assert len(expanded) > 500
     kinds = {"named": 0, "sum": 0, "mixture": 0}
     for d in expanded:
-        from tests.g3_casegen import category
+        from tests.casegen import category
 
         kinds[category(d)] += 1
         if isinstance(d, Mixture):

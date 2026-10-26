@@ -87,7 +87,7 @@ def test_uniform_envelope_and_portable_roundtrip(original):
         loaded.pdf([0.2, 1.0, 4.0]), model.pdf([0.2, 1.0, 4.0])
     )
     assert loaded.default == "exp"
-    with pytest.raises(ValueError, match="unversioned"):
+    with pytest.raises(ValueError, match="invalid Gibbus serialization envelope"):
         Distribution(model.components[0].data)
 
 
@@ -292,7 +292,7 @@ def test_component_sorting_retains_immutable_object_identity(original):
 
 
 def test_joint_component_packing_never_claims_independent_inference(monkeypatch):
-    """Mixture components carry no per-component inference (G1 rule).
+    """Mixture components carry no per-component inference.
 
     Shared-boundary standard errors and p-values belong to the joint model;
     each component of a mixture is packed without an effective sample size,

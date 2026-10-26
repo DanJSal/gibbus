@@ -1,27 +1,20 @@
-"""Fitted G3 components: durable model record, potential and packed state.
+"""Fitted basis components: durable model record, potential and packed state.
 
-G1 owners replaced (G3-046): G1's natural-state packer (packing),
-``evaluators`` (potential and density closures) and
-``_spectral._tail_integrals.TailIntegrator`` (exact tail masses) for G3
-components.  A G3 component is ``p(x) = exp(-theta . Phi(x)) / Z`` over a
-compiled basis; everything a fitted state needs is rebuilt from the basis
-request, its geometry and the slot choice (no data), the coefficients and
-``log Z``.
-
-Coordinates follow G1's component contract: the internal coordinate is the
-fitting coordinate ``z = (x - c) / h`` (never reflected for G3), so the
-G1 views, affine presentations and spectral evaluators apply unchanged.
+A component is ``p(x) = exp(-theta . Phi(x)) / Z`` over a compiled basis;
+everything a fitted state needs is rebuilt from the basis request, its
+geometry and the slot choice (no data), the coefficients and ``log Z``.
+The internal coordinate is the fitting coordinate ``z = (x - c) / h``, so the
+views, affine presentations and spectral evaluators apply unchanged.
 
 * **Potential** (``_BasisPotential``): ``q`` and its derivatives up to order
-  four from the compiled basis evaluator (G3-046(c): higher orders fail
-  loudly).
-* **Exact masses**: ``log P(a < X < b)`` from the G3 normalizer's interval
+  four from the compiled basis evaluator, evaluated in recurrence
+  coordinates placed at the law (the durable coefficients stay canonical).
+* **Exact masses**: ``log P(a < X < b)`` from the normalizer's interval
   rows (log space, certified tails), the reference for CDF tails and
   quantile refinement.
-* **Packed state**: G1's runtime fields (support, window, mode, median,
-  moments, spectral CDF/PPF) plus the durable G3 record; the spectral CDF is
-  G1's compiled builder over the G3 density, whose panel mass must equal the
-  normalizer's ``Z``.
+* **Packed state**: runtime fields (support, window, mode, median, moments,
+  spectral CDF/PPF) plus the durable record; the spectral CDF's panel mass
+  must equal the normalizer's ``Z``.
 """
 
 from __future__ import annotations
@@ -41,7 +34,8 @@ from .._defaults import (
 )
 from .._fit.basis_mixture import _mixture_blocks
 from .._fit.basis_newton import _matching_face
-from .._model._basis_kernels import BasisKernel, potential
+from .._fit.coordinates import _polynomial_coordinates
+from .._model._basis_kernels import BasisKernel, potential, potential_z
 from .._model.basis import _compile_basis, _face_model
 from .._model.basis_geometry import _BasisGeometry
 from .._model.basis_normalizer import _basis_state, _interval_state, _NormalizerContext
@@ -50,12 +44,11 @@ from .._model.basis_spec import (
     Exponential,
     Polynomial,
     SoftPower,
-    TanhSpec,
     _BasisRequest,
     _TailRequest,
 )
 from .._model.basis_tails import _build_tail_model, _growth_verdict
-from .._model.coords import _FitCoordinate, _support_kind
+from .._model.coords import _CANONICAL_SUPPORT, _FitCoordinate, _support_kind
 from .._spectral.cdf import (
     SpectralCDF,
     boundary_aware_breaks_from_amplitudes,
@@ -64,12 +57,12 @@ from .._spectral.cdf import (
 from .._spectral.config import _SpectralCDFOptions, _SpectralPPFOptions
 from .._spectral.ppf import SpectralPPF
 from .._spectral.runtime import fallback_ppf_state, pack_cdf_state, pack_ppf_state
-from .analytics import _powaff_moment_from_z_moments, _stats_from_raw_moments
+from .analytics import _powaff_moment_from_z_moments, _stats_from_centered_moments
 from .expectation import expect_vectorized
 from .fitted_state import _shared_model_geometry, _structured_scalar
 
 _RECORD_TYPES = ("_BasisRequest", "_TailRequest", "_BasisGeometry", "_FitCoordinate")
-_RECORD_VERSION = 2
+_RECORD_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +91,7 @@ def _encode(value, /):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         name = type(value).__name__
         if name not in _RECORD_TYPES:
-            raise TypeError(f"{name} is not part of the G3 model record")
+            raise TypeError(f"{name} is not part of the basis model record")
         return {
             "type": name,
             "fields": {
@@ -183,22 +176,20 @@ def _model_from_record(text, /):
     Raises
     ------
     ValueError
-        If the record is malformed, of another version, or recompiles to
-        different columns.
+        If the record is malformed or recompiles to different columns.
     """
 
     try:
         payload = json.loads(str(text))
     except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError("malformed G3 model record") from exc
+        raise ValueError("malformed basis model record") from exc
     required = {"version", "request", "geometry", "slots", "suppressed", "columns"}
     if not isinstance(payload, dict) or not required <= payload.keys():
-        raise ValueError("malformed G3 model record: missing fields")
-    version = payload["version"]
-    if type(version) is not int:
-        raise ValueError("G3 model record version must be an integer")
-    if version != _RECORD_VERSION:
-        raise ValueError(f"unsupported G3 model record version {version}")
+        raise ValueError("malformed basis model record: missing fields")
+    if type(payload["version"]) is not int or payload["version"] != _RECORD_VERSION:
+        raise ValueError(
+            f"malformed basis model record: version must be {_RECORD_VERSION}"
+        )
     types = _record_types()
     try:
         request = _decode(payload["request"], types)
@@ -206,25 +197,25 @@ def _model_from_record(text, /):
         slots = _decode(payload["slots"], types)
         suppressed = _check_suppressed(tuple(payload["suppressed"]))
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("malformed G3 model record") from exc
+        raise ValueError("malformed basis model record") from exc
     try:
         _validate_record_geometry(request, geometry)
     except (TypeError, OverflowError) as exc:
-        raise ValueError("malformed G3 model record") from exc
+        raise ValueError("malformed basis model record") from exc
     if not isinstance(slots, tuple) or any(
         not isinstance(group, tuple) or any(type(i) is not int or i < 0 for i in group)
         for group in slots
     ):
-        raise ValueError("malformed G3 model record: invalid slots")
+        raise ValueError("malformed basis model record: invalid slots")
     if not isinstance(payload["columns"], list) or not all(
         isinstance(c, str) for c in payload["columns"]
     ):
-        raise ValueError("malformed G3 model record: invalid columns")
+        raise ValueError("malformed basis model record: invalid columns")
     model = _compile_basis(request, geometry, slots=slots or None)
     labels = [c.label for c in model.columns]
     if labels != list(payload["columns"]):
         raise ValueError(
-            "G3 model record recompiles to different columns: "
+            "basis model record recompiles to different columns: "
             f"{labels} != {payload['columns']}"
         )
     return model, suppressed
@@ -235,33 +226,30 @@ def _validate_record_geometry(request, geometry):
     if not isinstance(request, _BasisRequest) or not isinstance(
         geometry, _BasisGeometry
     ):
-        raise ValueError("malformed G3 model record: invalid request or geometry type")
+        raise ValueError(
+            "malformed basis model record: invalid request or geometry type"
+        )
     if not isinstance(geometry.coordinate, _FitCoordinate):
-        raise ValueError("malformed G3 model record: invalid coordinate type")
+        raise ValueError("malformed basis model record: invalid coordinate type")
 
     def tail(value):
         if value is None:
             return None
         if not isinstance(value, _TailRequest):
-            raise ValueError("malformed G3 model record: invalid tail type")
+            raise ValueError("malformed basis model record: invalid tail type")
         if value.kind == "polynomial":
             if (
                 not isinstance(value.value, numbers.Real)
                 or not math.isfinite(value.value)
                 or not float(value.value).is_integer()
             ):
-                raise ValueError("malformed G3 polynomial tail")
+                raise ValueError("malformed basis polynomial tail")
             return Polynomial(int(value.value))
         if value.kind == "soft_power":
-            return SoftPower(
-                value.value, "auto" if value.delta is None else value.delta
-            )
+            return SoftPower(value.value)
         if value.kind == "exponential":
             return Exponential(value.value)
-        raise ValueError("malformed G3 model record: unknown tail kind")
-
-    def supplied(value):
-        return "auto" if value is None else value
+        raise ValueError("malformed basis model record: unknown tail kind")
 
     BasisSpec(
         support=(request.lower, request.upper),
@@ -272,17 +260,6 @@ def _validate_record_geometry(request, geometry):
         upper_tail=tail(request.upper_tail),
         independent_equal_rate_coefficients=request.independent,
         expansion=request.expansion,
-        tanh=TanhSpec(
-            *(
-                supplied(getattr(request, field))
-                for field in (
-                    "lower_location",
-                    "upper_location",
-                    "lower_steepness",
-                    "upper_steepness",
-                )
-            )
-        ),
     )
     coordinate = geometry.coordinate
     if coordinate.support_kind not in {
@@ -291,16 +268,16 @@ def _validate_record_geometry(request, geometry):
         "upper_half_line",
         "bounded",
     }:
-        raise ValueError("malformed G3 coordinate support kind")
+        raise ValueError("malformed basis coordinate support kind")
     for value in (coordinate.center, coordinate.scale):
         if (
             isinstance(value, bool)
             or not isinstance(value, numbers.Real)
             or not math.isfinite(value)
         ):
-            raise ValueError("malformed G3 coordinate scale or center")
+            raise ValueError("malformed basis coordinate scale or center")
     if coordinate.scale <= 0:
-        raise ValueError("G3 coordinate scale must be positive")
+        raise ValueError("basis coordinate scale must be positive")
     for bounds in (coordinate.canonical_support, coordinate.physical_support):
         if (
             not isinstance(bounds, tuple)
@@ -308,25 +285,26 @@ def _validate_record_geometry(request, geometry):
             or not all(isinstance(v, numbers.Real) for v in bounds)
             or not bounds[0] < bounds[1]
         ):
-            raise ValueError("malformed G3 coordinate support")
+            raise ValueError("malformed basis coordinate support")
     if coordinate.physical_support != (request.lower, request.upper):
-        raise ValueError("G3 coordinate support disagrees with request")
+        raise ValueError("basis coordinate support disagrees with request")
     if coordinate.support_kind != _support_kind(coordinate.physical_support):
-        raise ValueError("G3 coordinate support kind disagrees with physical support")
-    if not np.array_equal(
-        coordinate.canonical_support,
-        coordinate.to_canonical(coordinate.physical_support),
+        raise ValueError(
+            "basis coordinate support kind disagrees with physical support"
+        )
+    if (
+        tuple(coordinate.canonical_support)
+        != _CANONICAL_SUPPORT[coordinate.support_kind]
     ):
-        raise ValueError("G3 canonical support disagrees with coordinate transform")
+        raise ValueError("basis canonical support disagrees with its support kind")
     for side in ("lower", "upper"):
-        required = []
-        if math.isinf(getattr(request, side)):
-            required.extend((side + "_location", side + "_steepness"))
         term = getattr(request, side + "_tail")
-        if term is not None and term.kind in {"soft_power", "exponential"}:
-            required.append(side + ("_delta" if term.kind == "soft_power" else "_rate"))
-        if any(getattr(geometry, name) is None for name in required):
-            raise ValueError(f"malformed G3 geometry: unresolved {side} parameters")
+        if (
+            term is not None
+            and term.kind == "exponential"
+            and getattr(geometry, side + "_rate") is None
+        ):
+            raise ValueError(f"malformed basis geometry: unresolved {side} rate")
     for field in dataclasses.fields(geometry):
         if field.name == "coordinate":
             continue
@@ -338,9 +316,9 @@ def _validate_record_geometry(request, geometry):
             or not isinstance(value, numbers.Real)
             or not math.isfinite(value)
         ):
-            raise ValueError(f"malformed G3 geometry {field.name}")
-        if not field.name.endswith("location") and value <= 0:
-            raise ValueError(f"G3 geometry {field.name} must be positive")
+            raise ValueError(f"malformed basis geometry {field.name}")
+        if value <= 0:
+            raise ValueError(f"basis geometry {field.name} must be positive")
 
 
 def _check_suppressed(suppressed, /):
@@ -398,8 +376,33 @@ def _check_on_face(model, theta, suppressed, /):
 # ---------------------------------------------------------------------------
 
 
+def _runtime_form(model, theta, location, /):
+    """``(model, theta, gauge)`` in recurrence coordinates placed at ``location``.
+
+    ``gauge`` is the constant the form adds to the canonical potential.
+
+    Parameters
+    ----------
+    model : _BasisModel
+        Canonical basis (a face model allowed).
+    theta : numpy.ndarray
+        Its coefficients.
+    location : tuple of float or None
+        ``(center, spread)`` of the law in user units; ``None`` keeps the
+        canonical form.
+    """
+    if location is None:
+        return model, theta, 0.0
+    runtime = _polynomial_coordinates(model, start=theta, location=location)
+    plan = runtime.polynomial_coordinates
+    if plan is None:
+        return model, theta, 0.0
+    beta = np.ascontiguousarray(plan.from_canonical(theta), dtype=np.float64)
+    return runtime, beta, plan.gauge_value(beta)
+
+
 class _BasisPotential:
-    """Normalized potential of one fitted G3 component.
+    """Normalized potential of one fitted basis component.
 
     Parameters
     ----------
@@ -415,35 +418,52 @@ class _BasisPotential:
         Infinite ends whose leading tail functional the fit's face fixes at
         zero.  The potential then evaluates the exact face model
         (``basis._face_model``): ``model`` and ``theta`` become the face basis
-        and its coefficients, ``parent`` keeps the compiled basis (G3-049).
+        and its coefficients, ``parent`` keeps the compiled basis.
+    location : tuple of float or None
+        The law's ``(center, spread)`` in user units.  When given, the
+        potential is evaluated in recurrence coordinates of the same span
+        placed there (``coordinates._polynomial_coordinates``): ``model`` and
+        ``theta`` are that form.  Canonical monomials cancel badly when the
+        law sits far from the coordinate origin (data far from a half-line's
+        endpoint); the recurrence form evaluates the same polynomial without
+        that loss.  The two forms differ by the constant ``gauge``
+        (evaluated form minus canonical), which ``log_z`` (always the
+        normalizer of the evaluated form) absorbs; it can be ~1e6 against a
+        potential of ~10, so it is never subtracted pointwise.
+        ``canonical_model``/``canonical_theta`` keep the durable form, whose
+        normalizer is ``log_z_model + gauge``.
     """
 
     MAX_ORDER = 4
 
-    def __init__(self, model, theta, log_z, /, log_z_model=None, suppressed=()):
+    def __init__(
+        self, model, theta, log_z, /, log_z_model=None, suppressed=(), location=None
+    ):
         """Bind the component (see class docstring)."""
 
         self.suppressed = _check_suppressed(suppressed)
         self.parent = model
         theta = np.ascontiguousarray(theta, dtype=np.float64)
         model, free = _face_model(model, self.suppressed)
-        self.model = model
-        self.theta = np.ascontiguousarray(theta[list(free)]).copy()
+        self.canonical_model = model
+        self.canonical_theta = np.ascontiguousarray(theta[list(free)]).copy()
+        self.location = None if location is None else tuple(map(float, location))
+        self.model, self.theta, self.gauge = _runtime_form(
+            model, self.canonical_theta, self.location
+        )
         self.log_z = float(log_z)
         # ``log Z`` over the basis support; ``log_z`` is over the active
         # support (they differ after a truncation).
         self.log_z_model = self.log_z if log_z_model is None else float(log_z_model)
         self.active = (float(model.request.lower), float(model.request.upper))
-        self.kernel = BasisKernel(model)
+        self.kernel = BasisKernel(self.model)
         coordinate = model.geometry.coordinate
         self.c = float(coordinate.center)
         self.h = float(coordinate.scale)
         self.lower = float(model.request.lower)
         self.upper = float(model.request.upper)
-        self.canonical_support = (
-            (self.lower - self.c) / self.h,
-            (self.upper - self.c) / self.h,
-        )
+        # Exact by definition (the physical ends map onto it).
+        self.canonical_support = tuple(map(float, coordinate.canonical_support))
         self._context = None
 
     def _inside(self, x, /):
@@ -454,7 +474,7 @@ class _BasisPotential:
         x : array_like
             Evaluation points.
         """
-        # Closed at finite ends (G1): a potential without an endpoint log is
+        # Closed at finite ends: a potential without an endpoint log is
         # finite there; with one it is +inf, from the basis itself.
         x = np.asarray(x, dtype=np.float64)
         return np.isfinite(x) & (x >= self.lower) & (x <= self.upper)
@@ -481,12 +501,12 @@ class _BasisPotential:
     def neg_log(self, x, shift, scale, n, /):
         """Normalized potential (or derivative) in a public affine coordinate.
 
-        G1 ``_potential_oriented_affine_eval`` contract for the presentation
-        ``x = shift + scale u`` of the basis's user units ``u``: order ``n``
+        For the presentation ``x = shift + scale u`` of the basis's user
+        units ``u``, order ``n``
         returns ``d^n/dx^n`` of the public negative log density; outside the
         support ``inf`` for ``n = 0`` and ``nan`` otherwise.  ``u`` is formed
         as ``(x - shift) / scale`` (exact without a presentation): through
-        the fitting coordinate it would carry the centre's rounding, which
+        the fitting coordinate it would carry the center's rounding, which
         swamps points within 1e-15 of a finite end at zero.
 
         Parameters
@@ -506,7 +526,7 @@ class _BasisPotential:
         n = int(n)
         if n > self.MAX_ORDER:
             raise ValueError(
-                f"G3 potentials provide derivatives up to order {self.MAX_ORDER}"
+                f"basis potentials provide derivatives up to order {self.MAX_ORDER}"
             )
         scale = float(scale)
         if not math.isfinite(scale) or scale == 0.0:
@@ -534,6 +554,9 @@ class _BasisPotential:
     def potential_z(self, z, n=0, /):
         """Normalized internal-coordinate potential (``expect`` callable).
 
+        Evaluated at the canonical points themselves, never rounded through
+        user units (a support a few ulps wide stays resolved).
+
         Parameters
         ----------
         z : array_like
@@ -541,7 +564,29 @@ class _BasisPotential:
         n : int
             Derivative order.
         """
-        return self.neg_log(z, -self.c / self.h, 1.0 / self.h, n)
+        n = int(n)
+        if n > self.MAX_ORDER:
+            raise ValueError(
+                f"basis potentials provide derivatives up to order {self.MAX_ORDER}"
+            )
+        zz = np.asarray(z, dtype=np.float64)
+        scalar = zz.ndim == 0
+        flat = np.atleast_1d(zz).reshape(-1)
+        lo, hi = self.canonical_support
+        inside = np.isfinite(flat) & (flat >= lo) & (flat <= hi)
+        out = np.full(flat.shape, np.inf if n == 0 else np.nan)
+        if np.any(inside):
+            values = potential_z(
+                self.kernel, self.theta, np.ascontiguousarray(flat[inside]), n
+            )[n]
+            if n == 0:
+                values = values + self.log_z - math.log(self.h)
+            out[inside] = np.where(
+                np.isfinite(values), values, np.inf if n == 0 else np.nan
+            )
+        out[np.isnan(flat)] = np.nan
+        out = out.reshape(zz.shape)
+        return float(out) if scalar else out
 
     def log_mass(self, lower, upper, /):
         """``log P(lower < X < upper)`` in user units (exact, log space).
@@ -588,7 +633,7 @@ class _BasisPotential:
         normalizer call resolves the short consecutive pieces, each to
         ``rel_tol`` relative to itself, instead of every long row from the
         end.  The pieces are positive, so their compensated running sum
-        (``_log_cumsum``) keeps that relative accuracy (G3-050).
+        (``_log_cumsum``) keeps that relative accuracy.
 
         Parameters
         ----------
@@ -726,11 +771,49 @@ def _bisect(f, a, b, /, *, tol):
     return 0.5 * (a + b)
 
 
+_LOCATION_NODES = np.polynomial.legendre.leggauss(256)
+
+
+def _law_location(pot, /):
+    """``(mean, standard deviation)`` of a fitted law in user units.
+
+    A fixed 256-node Gauss-Legendre rule over the mass window, weighted by
+    ``exp(q(mode) - q)``: the canonical potential can be too rough near the
+    packing limit for an adaptive rule to converge, and the location only
+    places the runtime coordinates (``None`` when unusable).
+
+    Parameters
+    ----------
+    pot : _BasisPotential
+        Fitted potential in canonical form (``log_z`` unused).
+    """
+    mode_z, window = _mode_and_window(pot, float(LOG_THRESH))
+    lo, hi = (float(v) for v in window)
+    if not (math.isfinite(lo) and math.isfinite(hi) and lo < hi):
+        return None
+    nodes, weights = _LOCATION_NODES
+    z = 0.5 * (hi - lo) * nodes + 0.5 * (hi + lo)
+    with np.errstate(over="ignore", invalid="ignore"):
+        q = np.asarray(pot.potential_z(z, 0), dtype=np.float64)
+        finite = np.isfinite(q)
+        if not np.any(finite):
+            return None
+        w = np.where(finite, weights * np.exp(np.min(q[finite]) - q), 0.0)
+    total = float(np.sum(w))
+    if not (math.isfinite(total) and total > 0.0):
+        return None
+    mean_z = float(np.sum(w * z)) / total
+    var_z = float(np.sum(w * (z - mean_z) ** 2)) / total
+    if not (math.isfinite(mean_z) and math.isfinite(var_z) and var_z > 0.0):
+        return None
+    return pot.c + pot.h * mean_z, pot.h * math.sqrt(var_z)
+
+
 def _mode_and_window(pot, threshold, /):
     """Internal-coordinate mode and mass window of a fitted convex potential.
 
-    G1 ``_q_window_and_mode`` contract: the mode minimizes ``q``; the window
-    is where ``q - q(mode) <= threshold`` (clipped to the support).  The
+    The mode minimizes ``q``; the window is where ``q - q(mode) <=
+    threshold`` (clipped to the support).  The
     fitted potential is convex on the support (shape verdict of the fit), so
     ``q'`` is monotone and each search is a bracket and bisection.
 
@@ -854,8 +937,8 @@ def _amplitude_standard_errors(model, theta, information, face_basis, n_eff, /):
     return out
 
 
-def _canonical_raw_moment(pot, anchor_z, k, /, *, potential=None):
-    """``E[z^k]`` by G1's vectorized expectation engine (breakpoint ``anchor_z``).
+def _canonical_raw_moment(pot, anchor_z, k, /):
+    """``E[z^k]`` by the vectorized expectation engine (breakpoint ``anchor_z``).
 
     Parameters
     ----------
@@ -871,7 +954,7 @@ def _canonical_raw_moment(pot, anchor_z, k, /, *, potential=None):
         return 1.0
     return float(
         expect_vectorized(
-            pot.potential_z if potential is None else potential,
+            pot.potential_z,
             np.asarray(pot.canonical_support, dtype=np.float64),
             lambda z: np.asarray(z, dtype=np.float64) ** k,
             points=[anchor_z],
@@ -889,46 +972,51 @@ def _canonical_moments(pot, mode_z, /):
     mode_z : float
         Canonical mode (breakpoint).
     """
-    evaluator = None
-    if abs(pot.c / pot.h) > 16777216.0:
-        # Physical-coordinate round-trips lose significant bits here.  The
-        # spectral density's compiled fitting-coordinate basis already
-        # evaluates the same model without that loss; use it for raw moments.
-        lo, hi = pot.canonical_support
-        density = density_spec(
-            [
-                (
-                    pot.kernel,
-                    pot.theta,
-                    lo,
-                    hi,
-                    pot.log_z - math.log(pot.h),
-                    0.0,
-                    1.0,
-                    1.0,
-                    1.0,
-                    -np.inf,
-                    np.inf,
-                )
-            ],
-            view=False,
+    return np.array([_canonical_raw_moment(pot, mode_z, k) for k in range(5)])
+
+
+def _canonical_central_moments(pot, mode_z, z_mom, /):
+    """``E[(z - mean)^k]``, ``k = 2, 3, 4``, integrated about the mean.
+
+    Forming them from raw moments cancels when the law sits far from the
+    coordinate origin (data far from a half-line's endpoint: ``z = 1 +-
+    0.008`` lost eight digits of the kurtosis).  The integrand is taken in
+    units of the raw moments' standard deviation (a scale only), since the
+    expectation engine's tolerances are absolute: unscaled, a third moment
+    of 5e-7 kept seven digits and a law 3e7 wide did not converge.
+
+    Parameters
+    ----------
+    pot : _BasisPotential
+        Fitted potential.
+    mode_z : float
+        Canonical mode (breakpoint).
+    z_mom : numpy.ndarray
+        Canonical raw moments ``E[z^k]``, ``k = 0..4``.
+    """
+    mean_z = float(z_mom[1])
+    scale = math.sqrt(abs(float(z_mom[2]) - mean_z * mean_z))
+    if not (math.isfinite(scale) and scale > 0.0):
+        raise RuntimeError("the fitted law has no positive variance")
+    support = np.asarray(pot.canonical_support, dtype=np.float64)
+    return [
+        scale**k
+        * float(
+            expect_vectorized(
+                pot.potential_z,
+                support,
+                lambda z, k=k: (
+                    ((np.asarray(z, dtype=np.float64) - mean_z) / scale) ** k
+                ),
+                points=sorted({mode_z, mean_z}),
+            )
         )
-
-        def evaluator(z, order=0):
-            if order != 0:
-                raise ValueError(
-                    "moment integrator requires the density, not derivatives"
-                )
-            with np.errstate(divide="ignore", invalid="ignore"):
-                return -np.log(density.pdf(z))
-
-    return np.array(
-        [_canonical_raw_moment(pot, mode_z, k, potential=evaluator) for k in range(5)]
-    )
+        for k in (2, 3, 4)
+    ]
 
 
 def _spectral_state(pot, mode_z, std_z, /):
-    """G1's compiled spectral CDF/PPF over the G3 density (packed fields).
+    """The compiled spectral CDF/PPF over the basis density (packed fields).
 
     Parameters
     ----------
@@ -946,7 +1034,7 @@ def _spectral_state(pot, mode_z, std_z, /):
     """
 
     zs = pot.canonical_support
-    amps, _ = _log_amplitudes(pot.model, pot.theta)
+    amps, _ = _log_amplitudes(pot.canonical_model, pot.canonical_theta)
     density = density_spec(
         [
             (
@@ -977,8 +1065,7 @@ def _spectral_state(pot, mode_z, std_z, /):
     defect = abs(float(cdf.total_mass) - 1.0)
     if not defect <= 1e-9:
         raise RuntimeError(
-            f"spectral CDF mass {cdf.total_mass!r} disagrees with the G3 "
-            "normalizer's Z"
+            f"spectral CDF mass {cdf.total_mass!r} disagrees with the normalizer's Z"
         )
     state = dict(pack_cdf_state(cdf))
     try:
@@ -1005,7 +1092,7 @@ def _pack_basis_state(
     face_rank=None,
     suppressed=None,
 ):
-    """Pack one fitted G3 component for public evaluation.
+    """Pack one fitted basis component for public evaluation.
 
     Parameters
     ----------
@@ -1031,7 +1118,7 @@ def _pack_basis_state(
     Returns
     -------
     numpy.void
-        Structured fitted-state scalar (G1 runtime fields plus the G3
+        Structured fitted-state scalar (runtime fields plus the basis
         record).
 
     Raises
@@ -1049,10 +1136,11 @@ def _pack_basis_state(
         )
     suppressed = _check_suppressed(suppressed)
     _check_on_face(model, theta, suppressed)
-    pot = _BasisPotential(model, theta, 0.0, suppressed=suppressed)
+    location = _law_location(_BasisPotential(model, theta, 0.0, suppressed=suppressed))
+    pot = _BasisPotential(model, theta, 0.0, suppressed=suppressed, location=location)
     state = _basis_state(_NormalizerContext(pot.model), pot.theta)
     if state.status != "proper":
-        raise RuntimeError("cannot pack a non-normalizable G3 fit")
+        raise RuntimeError("cannot pack a non-normalizable basis fit")
     pot.log_z = pot.log_z_model = float(state.log_z)
     mode_z, window = _mode_and_window(pot, float(LOG_THRESH))
     z_mom = _canonical_moments(pot, mode_z)
@@ -1067,7 +1155,9 @@ def _pack_basis_state(
             "cannot represent fitted raw moments at this data scale; rescale the "
             "observations to a numerically moderate range and refit"
         ) from exc
-    z_stats = _stats_from_raw_moments(*map(float, z_mom[1:5]))
+    z_stats = _stats_from_centered_moments(
+        float(z_mom[1]), *_canonical_central_moments(pot, mode_z, z_mom)
+    )
     spectral, _, ppf = _spectral_state(pot, mode_z, z_stats["std"])
     z_median = float(ppf.ppf(0.5)) if ppf is not None else math.nan
     raw = np.full(int(MAX_CACHED_MOMENTS), np.nan)
@@ -1094,23 +1184,27 @@ def _pack_basis_state(
         evaluations = int(result.objective_evaluations)
         sub = int(result.subproblem_iterations)
         bound = float(result.final_decrease_bound)
-        shape = (
-            "nonnegative"
-            if result.final_separation is None
-            else str(result.final_separation.status)
-        )
+        shape, shape_tau = _shape_record(result)
     else:
         errors = np.full(2, np.nan)
         status, nll, shape = "rebuilt", math.nan, "unavailable"
+        shape_tau = math.nan
         iterations = evaluations = sub = 0
         bound = math.nan
     data = {
         "basis_model": np.str_(_model_record(model, suppressed)),
         "basis_theta": theta.copy(),
-        "basis_log_z": float(state.log_z),
-        "basis_log_z_model": float(state.log_z),
+        "basis_log_z": pot.log_z,
+        "basis_log_z_model": pot.log_z,
+        # The durable normalizer: of the canonical potential over the basis
+        # support, independent of the runtime form.
+        "basis_log_z_canonical": pot.log_z + pot.gauge,
+        "basis_location": np.asarray(
+            (math.nan, math.nan) if location is None else location, dtype=np.float64
+        ),
         "basis_log_z_rel_error": float(state.rel_error),
         "basis_shape": np.array(shape, dtype="<U32"),
+        "basis_shape_tau": float(shape_tau),
         "basis_n_face": np.int64(n_face),
         "bulk_degree": np.int64(model.request.bulk_degree),
         "boundary_amplitudes": amps,
@@ -1147,6 +1241,22 @@ def _pack_basis_state(
     return _structured_scalar(data)
 
 
+def _shape_record(result, /):
+    """``(verdict, tau)`` of a fit's final curvature search.
+
+    A fit without a final search has no verdict: ``"unverified"``.
+
+    Parameters
+    ----------
+    result : _BasisNewtonResult or None
+        The fit (or a mixture's joint polish).
+    """
+    separation = None if result is None else result.final_separation
+    if separation is None:
+        return "unverified", math.nan
+    return str(separation.status), float(separation.threshold)
+
+
 def _private_face_rank(face_basis, private, /):
     """Rank of a face basis restricted to the private (non-log) rows.
 
@@ -1165,7 +1275,7 @@ def _private_face_rank(face_basis, private, /):
 
 
 def _is_basis_state(struct, /):
-    """Whether a packed component state is a G3 basis state.
+    """Whether a packed component state is a basis state.
 
     Parameters
     ----------
@@ -1176,13 +1286,25 @@ def _is_basis_state(struct, /):
     return "basis_model" in names
 
 
-def _potential_of(struct, /):
-    """``_BasisPotential`` of a packed G3 state (recompiled from its record).
+def _stored_location(struct, /):
+    """The runtime-coordinate location of a packed state, or ``None``.
 
     Parameters
     ----------
     struct : numpy.void
-        Packed G3 component state.
+        Packed basis component state.
+    """
+    location = np.asarray(struct["basis_location"], dtype=np.float64)
+    return tuple(map(float, location)) if np.all(np.isfinite(location)) else None
+
+
+def _potential_of(struct, /):
+    """``_BasisPotential`` of a packed basis state (recompiled from its record).
+
+    Parameters
+    ----------
+    struct : numpy.void
+        Packed basis component state.
     """
     model, suppressed = _model_from_record(struct["basis_model"])
     pot = _BasisPotential(
@@ -1191,21 +1313,22 @@ def _potential_of(struct, /):
         float(struct["basis_log_z"]),
         log_z_model=float(struct["basis_log_z_model"]),
         suppressed=suppressed,
+        location=_stored_location(struct),
     )
     pot.active = tuple(map(float, struct["support"]))
     return pot
 
 
 # ---------------------------------------------------------------------------
-# Tail rates and exp-space quantities (G1 ``analytics`` roles)
+# Tail rates and exp-space quantities
 # ---------------------------------------------------------------------------
 
 
 def _tail_rate(pot, mu_eff, sigma_eff, side, /):
     """Limiting absolute public-coordinate potential slope toward ``side``.
 
-    G1 ``_tail_rate_from_geometry`` contract: ``inf`` at a finite endpoint
-    and for superlinear growth; a linear tail has its slope.  The G3 leading
+    ``inf`` at a finite endpoint and for superlinear growth; a linear tail
+    has its slope.  The leading
     slope atom (``basis_tails._growth_verdict``) is ``C zeta^b e^{r zeta}``
     in outward fitting units: growing (``b > 0`` or ``r > 0``) means
     ``inf``, constant (``b = r = 0``) the slope ``C / h`` per user unit.
@@ -1231,7 +1354,9 @@ def _tail_rate(pot, mu_eff, sigma_eff, side, /):
     if math.isfinite(end):
         return math.inf
     verdict = _growth_verdict(
-        _build_tail_model(pot.model, model_side, order=1), pot.model, pot.theta
+        _build_tail_model(pot.canonical_model, model_side, order=1),
+        pot.canonical_model,
+        pot.canonical_theta,
     )
     lead = verdict.slope
     if verdict.status != "proper" or lead.lead_power is None:
@@ -1269,7 +1394,7 @@ def _view_root(f, lo, hi, x0, scale, /):
 def _log_exp_moment(neg_log, support, rate, k, x0, scale, /):
     """``log E[exp(k X)]`` for the public potential ``neg_log(x, n)``.
 
-    Saddle-shifted (G1 ``_log_raw_moment_exp``): with ``x*`` the minimizer
+    Saddle-shifted: with ``x*`` the minimizer
     of ``V(x) - k x``, ``log E = k x* - V(x*) - log h + log I`` where ``I``
     integrates ``h exp(-(V(x) - V(x*) - k (x - x*)))``.  The peak ``h`` is
     the height of a normal law of the tilted curvature at ``x*``, which the
@@ -1321,9 +1446,17 @@ def _log_exp_moment(neg_log, support, rate, k, x0, scale, /):
             return v - k
         return v
 
+    # A remote saddle leaves order-one local exponents as differences of
+    # huge potential values, which carry their rounding: the integral cannot
+    # resolve beyond it (a 5e10 saddle has exponent noise near 1e-5).
+    noise = 8.0 * np.finfo(np.float64).eps * (abs(v_star) + abs(k * star))
     total = float(
         expect_vectorized(
-            tilted, support, lambda x: np.ones_like(np.asarray(x, float)), points=[star]
+            tilted,
+            support,
+            lambda x: np.ones_like(np.asarray(x, float)),
+            points=[star],
+            noise=noise,
         )
     )
     if not (math.isfinite(total) and total > 0.0):
@@ -1404,7 +1537,7 @@ def _exp_log_mode(neg_log, support, x0, scale, /):
 
 
 def _fit_metadata(states, n_face, errors, p_values, /):
-    """Model metadata of fitted G3 states (``fitted_state._model_metadata``).
+    """Model metadata of fitted basis states (``fitted_state._model_metadata``).
 
     Parameters
     ----------
@@ -1434,7 +1567,7 @@ def _fit_metadata(states, n_face, errors, p_values, /):
 
 
 def _pack_basis_fit(fit, n_eff, /):
-    """``(weights, states, fit_metadata)`` of a single G3 fit.
+    """``(weights, states, fit_metadata)`` of a single basis fit.
 
     Parameters
     ----------
@@ -1462,11 +1595,11 @@ def _pack_basis_fit(fit, n_eff, /):
 
 
 def _pack_basis_mixture(fit, n_eff, /, boundary_p_values=(math.nan, math.nan)):
-    """``(weights, states, fit_metadata)`` of a G3 mixture fit.
+    """``(weights, states, fit_metadata)`` of a basis mixture fit.
 
     Each component is packed from its coefficients; its private face rank is
     the rank of its private rows of the joint face, so the model dimension
-    is the joint face's (G1 counting).  Solver records are the mixture's:
+    is the joint face's.  Solver records are the mixture's:
     status, EM plus polish iterations and the joint shape verdict.  The
     shared amplitudes' standard errors come from the joint observed
     information on the face.
@@ -1504,11 +1637,7 @@ def _pack_basis_mixture(fit, n_eff, /, boundary_p_values=(math.nan, math.nan)):
                 var = float(cov[coord, coord])
                 if var > 1e-14 * max(1.0, abs(float(fit.thetas[0][i]))) ** 2:
                     errors[j] = math.sqrt(var)
-    shape = (
-        "nonnegative"
-        if fit.result is None or fit.result.final_separation is None
-        else str(fit.result.final_separation.status)
-    )
+    shape, shape_tau = _shape_record(fit.result)
     states = []
     for k, (model, theta) in enumerate(zip(fit.models, fit.thetas, strict=True)):
         private = [i for i, c in enumerate(model.columns) if not c.nonnegative]
@@ -1536,6 +1665,7 @@ def _pack_basis_mixture(fit, n_eff, /, boundary_p_values=(math.nan, math.nan)):
             math.nan if fit.result is None else float(fit.result.final_decrease_bound)
         )
         state["basis_shape"] = shape
+        state["basis_shape_tau"] = shape_tau
         state["boundary_standard_errors"] = errors
         states.append(state)
     metadata = _fit_metadata(

@@ -1,11 +1,11 @@
-"""G3 Stage 4a: constraint rows, their 1x1-block cone description, cold start.
+"""Constraint rows, their 1x1-block cone description, cold start.
 
 Defining properties: row bookkeeping (unit norm, duplicate directions merged,
-invalid rows rejected); structural rows per support/log/tail category; the G1
+invalid rows rejected); structural rows per support/log/tail category; the
 interior-point solver on the description agrees with exact solutions (single
 half-space projection in closed form, exhaustive active sets on small
 problems) and returns strictly interior points; the cold start is strictly
-interior, proper and converged along its ray (G1's predicted-decrease
+interior, proper and converged along its ray (the predicted-decrease
 criterion).
 """
 
@@ -270,7 +270,7 @@ def test_column_scales_leave_solutions_unchanged_and_flatten_rows():
 
 
 def test_nearly_parallel_rows_do_not_spoil_a_certified_endpoint():
-    """Regression (G3-050): cuts restricted to a leader face are nearly parallel.
+    """Regression: cuts restricted to a leader face are nearly parallel.
 
     Rows differing by 1e-14 gave ``B`` a singular value the range complement
     treated as null but ``B^+`` inverted: the endpoint reconstruction turned
@@ -324,3 +324,68 @@ def test_interior_direction_with_cuts_is_strictly_interior():
         rows = _empty(d).merged(a, "cut")
         w = _interior_direction(rows)
         assert np.min(rows.slack(w)) > 0.0
+
+
+GROWTH_SPECS = [
+    spec
+    for lt, ut in itertools.product(
+        (None, Polynomial(1), Polynomial(3), SoftPower(1.5), Exponential(0.7)),
+        repeat=2,
+    )
+    for spec in (
+        BasisSpec(bulk_degree=2, lower_tail=lt, upper_tail=ut, expansion="full"),
+        BasisSpec(bulk_degree=3, lower_tail=lt, upper_tail=ut, expansion="minimal"),
+    )
+] + [
+    BasisSpec(support=(0.0, math.inf), bulk_degree=2, log_lower=True),
+    BasisSpec(
+        support=(-math.inf, 0.0),
+        bulk_degree=2,
+        log_upper=True,
+        lower_tail=Exponential(2.0),
+    ),
+]
+
+
+@pytest.mark.parametrize("spec", GROWTH_SPECS, ids=lambda s: "")
+def test_growth_rows_are_the_exact_outward_leading_slope(spec):
+    # The growth row is the amplitude of the leading term of q: far out, the
+    # outward slope dq/dzeta has the sign of row . theta, and its ratio to the
+    # leading function's own slope tends to row . theta.
+    import mpmath as mp
+    from _basis_oracle import BasisOracle
+
+    lo, up = spec.support
+    model = _model(
+        spec,
+        (
+            NORMAL
+            if math.isinf(lo) and math.isinf(up)
+            else (HALF + lo if math.isinf(up) else up - HALF)
+        ),
+    )
+    rows = _structural_rows(model)
+    growth = rows.rows[[k == "growth" for k in rows.kinds]]
+    # (Both ends may share one leading functional, which then merges.)
+    assert 1 <= growth.shape[0] <= len(model.asymptotics)
+    oracle = BasisOracle(model, units="z", max_order=1)
+    rng = np.random.default_rng(GROWTH_SPECS.index(spec))
+    for entry in model.asymptotics:
+        lead = np.array([float(v) for v in entry.leading.row_exact])
+        assert any(np.allclose(lead / np.linalg.norm(lead), g) for g in growth)
+        sign = 1.0 if entry.side == "upper" else -1.0
+        exponential = entry.target_order[0] > 1
+        zeta = 1e3 if exponential else 1e12
+        unit = lead / float(lead @ lead)
+        for _ in range(4):
+            theta = rng.normal(size=model.n_coefficients)
+            theta[[i for i, c in enumerate(model.columns) if c.nonnegative]] = 0.0
+            theta += (rng.choice([-1.0, 1.0]) - float(lead @ theta)) * unit
+            target = float(lead @ theta)
+            with mp.workdps(80 + (int(zeta) if exponential else 0)):
+                q1 = oracle.potential(theta, sign * zeta, 1)[0]
+                u1 = oracle.potential(unit, sign * zeta, 1)[0]
+                ratio = float(q1 / u1)
+                outward = float(sign * q1)
+            assert np.sign(outward) == np.sign(target)
+            assert ratio == pytest.approx(target, rel=1e-2)

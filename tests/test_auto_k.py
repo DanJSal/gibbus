@@ -388,3 +388,39 @@ def test_screen_accuracy_is_separate_from_final_refinement(monkeypatch):
     assert refined and all(o is policy for o in refined)
     assert result.diagnostics["screen_degrees"] == AUTO_LC_VALIDATION_DEGREES
     assert result.diagnostics["screen_newton_tolerance"] == AUTO_LC_SWEEP_NEWTON_TOL
+
+
+def test_auto_k_selects_through_one_sided_censoring():
+    # A right-censored bimodal sample: the upper component holds most of the
+    # censored rows, whose single cutpoint makes its responsibility-weighted
+    # landmarks coincide.  Its coordinate falls back to the pooled one rather
+    # than aborting the selection.
+    rng = np.random.default_rng(1)
+    x = np.r_[rng.normal(0.0, 1.0, 160), rng.normal(4.0, 0.7, 140)]
+    cut = float(np.quantile(x, 0.8))
+    rows = np.c_[x, x]
+    rows[x > cut] = [cut, np.inf]
+    model = Distribution().fit(rows, n_components="auto", rng=1)
+    assert model.n_components == 2
+    assert model.fit_diagnostics["converged"]
+    assert all(c["shape"] == "verified" for c in model.fit_diagnostics["components"])
+    # The censored rows' fitted mass is their observed share.
+    np.testing.assert_allclose(model.sf(cut), np.mean(x > cut), atol=0.02)
+
+
+def test_upward_screen_stops_above_the_modes_at_a_worse_count():
+    rng = np.random.default_rng(0)
+    x = np.r_[rng.normal(-3.0, 0.6, 300), rng.normal(3.0, 0.6, 300)]
+    model = Distribution().fit(x, n_components="auto", rng=0)
+    s = model.selection_diagnostics
+    assert model.n_components == 2 and s["kde_modes"] == 2
+    screened = {row["n_components"] for row in s["screening_scores"]}
+    stop = s["screen_stopped_at"]
+    # The stop is the first count above the modes that screened worse.
+    assert stop == max(screened) and stop > s["kde_modes"]
+    best = {
+        k: min(r["bic"] for r in s["screening_scores"] if r["n_components"] == k)
+        for k in screened
+    }
+    assert best[stop] > best[stop - 1]
+    assert stop < 2 * s["kde_modes"]

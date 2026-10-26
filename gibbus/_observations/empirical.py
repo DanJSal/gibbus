@@ -1,8 +1,7 @@
 """Canonical observation weights and Kish effective counts.
 
-G1 owner retained (G3-031); G1's power-moment sufficient statistics are
-replaced by the basis statistics of ``_fit.basis_objective``.  Weights are
-validated, normalized to sum to one and summarized once here for every
+The likelihood's sufficient statistics are the basis statistics of
+``_fit.basis_objective``.  Weights are validated, normalized to sum to one and summarized once here for every
 point and interval likelihood.
 """
 

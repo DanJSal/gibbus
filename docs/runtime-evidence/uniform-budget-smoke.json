@@ -1,8 +1,0 @@
-[
-  {
-    "seed": 91,
-    "family": "uniform",
-    "seconds": 2.0003265139998803,
-    "error": "FitTimeoutError('fit exceeded max_fit_seconds=2 (2.000 seconds elapsed; Newton run)')"
-  }
-]

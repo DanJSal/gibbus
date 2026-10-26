@@ -118,9 +118,10 @@ than a property read. Replicates that fail — a resample can omit enough of a
 mode's support that its component degenerates — are counted and reported; past
 `BOOTSTRAP_MAX_FAILURE_FRACTION` of the total the run raises rather than
 reporting a band built from a biased remnant.
+
 ## Fit and Selection Diagnostics
 
-`Distribution.fit_diagnostics` distinguishes component geometry/feasibility from joint mixture convergence. Shared boundary amplitudes, standard errors, automatic-selection p-values, and weak-identification flags are reported once in the model-level `shared_boundary` record. Their errors use joint observed information, accounting for private component parameters and mixture weights, rather than independent component fits. A zero-face amplitude has no ordinary interior standard error; an unresolved positive direction has infinite uncertainty. `converged_approximately` remains distinct from `converged`, with its certified remaining-decrease bound reported. An `uncertified` return emits a `RuntimeWarning` unless warning suppression was requested; its shape verdict remains visible in diagnostics. Treat `converged=False` as a reason to inspect the diagnostics before using the fit quantitatively.
+`Distribution.fit_diagnostics` distinguishes component geometry/feasibility from joint mixture convergence. Shared boundary amplitudes, standard errors, automatic-selection p-values, and weak-identification flags are reported once in the model-level `shared_boundary` record. Their errors use joint observed information, accounting for private component parameters and mixture weights, rather than independent component fits. A zero-face amplitude has no ordinary interior standard error; an unresolved positive direction has infinite uncertainty. `converged_approximately` remains distinct from `converged`, with its certified remaining-decrease bound reported. Each component record carries the numerical shape verdict `shape`: `"verified"` means `q'' >= 0` held within the threshold `shape_tau` over the whole support, `"violated"` that it did not, and `"unverified"` that the search could not resolve. A fit whose shape is not verified returns the status `unverified` and emits a `RuntimeWarning` unless warning suppression was requested. Treat `converged=False` as a reason to inspect the diagnostics before using the fit quantitatively.
 
 ```python
 d = c.fit_diagnostics
@@ -128,7 +129,7 @@ if not d["converged"]:
     print(d)
 ```
 
-`Distribution.selection_diagnostics` is `None` for the default single-component fit and whenever `n_components` is an explicit integer. After opt-in automatic selection it records the KDE proposal, whether screening was subsampled, the selected component count/BIC, and the candidate-score trace. This is the audit trail to retain when automatic *K* is scientifically material.
+`Distribution.selection_diagnostics` is `None` for the default single-component fit and whenever `n_components` is an explicit integer. After opt-in automatic selection it records the KDE proposal, whether screening was subsampled, where the upward screen stopped (`screen_stopped_at`), the selected component count/BIC, and the candidate-score trace. This is the audit trail to retain when automatic *K* is scientifically material.
 
 ```python
 s = c.selection_diagnostics
@@ -147,7 +148,7 @@ A property (not a method) returning a `dict` that describes how well the CDF/PPF
 |-----|------|---------|
 | `scope` | `str` | `"component"` for `K == 1`, `"mixture"` for `K > 1` — which representation these numbers describe. |
 | `refinement_capped` | `bool` | Refinement stopped on the depth or panel budget rather than on tolerance. This reports the *mechanism* and fires readily, including on ordinary shapes where one sliver of a panel hits the depth limit against a boundary singularity. It is not a severity signal. |
-| `uncertified_mass` | `float` | Share of probability under panels that failed tolerance. This is a failure-exposure measure, not an accuracy ranking; `0.0` means every panel met its internal certification criteria. |
+| `uncertified_mass` | `float` | Share of probability under panels that failed tolerance. This is a failure-exposure measure, not an accuracy ranking; `0.0` means every panel met its internal certification criteria. Panel tolerances include the density's own rounding floor, so a high-degree potential whose terms cancel converges at that floor (and reports it in `worst_panel_error`) rather than as uncertified. |
 | `mass_defect` | `float` | Departure of total integrated mass from 1. |
 | `worst_panel_error` | `float` | Largest local error estimate among certified panels, converted to probability/CDF units. |
 | `error_estimate` | `float` | Conservative overall CDF-health estimate combining `mass_defect`, `uncertified_mass`, and the largest certified local panel error. |

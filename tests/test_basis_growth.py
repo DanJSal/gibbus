@@ -1,8 +1,9 @@
-"""G3 Stage 3a: first-derivative tail bounds and exact properness.
+"""First-derivative tail bounds and exact properness.
 
-Checked against analytic high-precision ``q`` and ``q'``: a ``proper`` end
-has ``dq/dzeta >= bound(zeta)`` beyond its cutoff (so ``q`` grows at least
-linearly there), and an ``improper`` end has eventually non-increasing ``q``.
+Checked against the independent high-precision oracle of ``_basis_oracle``:
+a ``proper`` end has ``dq/dzeta >= bound(zeta)`` beyond its cutoff (so ``q``
+grows at least linearly there), and an ``improper`` end has eventually
+non-increasing ``q``.
 """
 
 import math
@@ -10,65 +11,26 @@ import math
 import mpmath as mp
 import numpy as np
 import pytest
+from _basis_oracle import BasisOracle
 from test_basis_construction import _compile_quiet
-from test_basis_tails import TAIL_SPECS, _mp, _thetas
+from test_basis_tails import TAIL_SPECS, _thetas
 
 from gibbus import BasisSpec, Exponential, Polynomial
 from gibbus._model.basis_tails import _build_tail_model, _growth_verdict, _tail_verdict
 
+_ORACLES = {}
+
 
 def _oracle(model, theta, x):
-    """Analytic ``(q, q')`` in user units at the current mpmath precision."""
-    g, req = model.geometry, model.request
-    c, h = mp.mpf(g.center), mp.mpf(g.scale)
-    x = mp.mpf(x)
-
-    def tanh_parts(alpha, loc, sign):
-        u = sign * mp.mpf(alpha) * (x - mp.mpf(loc))
-        return mp.tanh(u), sign * mp.mpf(alpha) * mp.sech(u) ** 2
-
-    tl = (
-        tanh_parts(g.lower_steepness, g.lower_location, 1)
-        if g.lower_location is not None
-        else (1, 0)
+    """High-precision ``(q, q')`` in user units at the current precision."""
+    key = id(model)
+    if key not in _ORACLES:
+        _ORACLES[key] = (model, BasisOracle(model, max_order=1))
+    oracle = _ORACLES[key][1]
+    return (
+        oracle.potential(theta, x, 0, dps=mp.mp.dps)[0],
+        oracle.potential(theta, x, 1, dps=mp.mp.dps)[0],
     )
-    tu = (
-        tanh_parts(g.upper_steepness, g.upper_location, -1)
-        if g.upper_location is not None
-        else (1, 0)
-    )
-
-    def f(fn):
-        if fn.kind == "monomial":
-            n = fn.degree
-            z = (x - c) / h
-            return z**n, (n * z ** (n - 1) / h if n >= 1 else 0)
-        if fn.kind == "log":
-            if fn.side == "lower":
-                d = x - mp.mpf(req.lower)
-                return -mp.log(d), -1 / d
-            d = mp.mpf(req.upper) - x
-            return -mp.log(d), 1 / d
-        if fn.kind == "exponential":
-            lam = mp.mpf(fn.rate) * (-1 if fn.side == "lower" else 1)
-            v = mp.exp(lam * (x - mp.mpf(fn.location)))
-            return v, lam * v
-        a = mp.mpf(fn.power) / 2
-        s = (x - c) ** 2 + mp.mpf(fn.delta)
-        return s**a / h ** (2 * a), 2 * a * (x - c) * s ** (a - 1) / h ** (2 * a)
-
-    q = q1 = mp.mpf(0)
-    for coef, column in zip(theta, model.columns, strict=True):
-        if coef == 0.0:
-            continue
-        for j, gate in column.terms:
-            a0, a1, a2 = (_mp(v) for v in gate)
-            g0 = a0 + a1 * tl[0] + a2 * tu[0]
-            g1 = a1 * tl[1] + a2 * tu[1]
-            v, d1 = f(model.functions[j])
-            q += mp.mpf(float(coef)) * v * g0
-            q1 += mp.mpf(float(coef)) * (d1 * g0 + v * g1)
-    return q, q1
 
 
 def _dps(rate, zeta):
@@ -152,11 +114,12 @@ def test_exponential_tail_with_negative_amplitude_is_improper():
     model = _compile_quiet(BasisSpec(bulk_degree=2, lower_tail=Exponential(0.7)))
     labels = [c.label for c in model.columns]
     theta = np.zeros(model.n_coefficients)
-    theta[labels.index("expL")] = -1.0
-    theta[labels.index("x^2")] = 1.0
+    # expL (-1 + tL) = -2 expL W_L: a positive coefficient is a negative amplitude.
+    theta[labels.index("expL*(-1+tL)")] = 1.0
+    theta[labels.index("z^2")] = 1.0
     tail = _build_tail_model(model, "lower", order=1)
     assert _growth_verdict(tail, model, theta).status == "improper"
-    theta[labels.index("expL")] = 1.0
+    theta[labels.index("expL*(-1+tL)")] = -1.0
     assert _growth_verdict(tail, model, theta).status == "proper"
 
 

@@ -106,10 +106,10 @@ def test_bounded_fit_survives_support_only_256_ulps_wide():
 
 
 def test_endpoint_concentrated_bounded_fit_keeps_explicit_lower_boundary_basis():
-    """Formerly open item OI-E2-2 (beta(0.02, 2), Fisher condition 2.5e37).
+    """Endpoint-concentrated beta data with Fisher condition 2.5e37.
 
     The fit certifies since a shape-rejected trial step is shortened by an
-    exact ratio test instead of halved (G3-060).
+    exact ratio test instead of halved.
     """
     rng = np.random.default_rng(91)
     x = np.clip(

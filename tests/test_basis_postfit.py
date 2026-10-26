@@ -1,7 +1,7 @@
-"""G3 Stage 5 Phase D: post-fit queries and persistence of G3 fits (G3-046).
+"""Post-fit queries and persistence of basis fits.
 
 Defining properties: a durable basis record recompiles to the same basis;
-fitted G3 components answer every public query as the closed form of the
+fitted components answer every public query as the closed form of the
 family they represent (normal, exponential, truncated normal, two-normal
 mixture); the spectral CDF's mass is the normalizer's ``Z``; serialization
 round-trips bitwise through the cache and to quadrature accuracy through a
@@ -116,18 +116,18 @@ def test_normal_fit_answers_queries_as_the_normal(normal):
     )
     assert comp.neg_log(mu, 2) == pytest.approx(1.0 / sd**2, rel=1e-12)
     assert comp.tail_rate("upper") == math.inf
-    # The numerical margin (G3-047): the constant curvature of a normal.
+    # The numerical margin: the constant curvature of a normal.
     assert comp.log_concavity_margin() == pytest.approx(1.0 / sd**2, rel=1e-12)
     with pytest.raises(ValueError, match="up to order 4"):
         comp.neg_log(0.0, 5)
 
 
 def test_log_concavity_margin_on_a_finite_support():
-    """A finite end is approached in ``x``, not by ultratail inversion (G3-059).
+    """A finite end is approached in ``x``, not by ultratail inversion.
 
     The ``1e-300`` lower quantile of this bounded fit is not representable,
-    and the margin used to raise from it.  The margin is the curvature
-    minimum, which a dense independent grid locates.
+    so the margin uses the curvature minimum, which a dense independent
+    grid locates.
     """
     x = stats.cosine.rvs(size=500, random_state=0)
     d = Distribution().fit(x, basis=BasisSpec(support=(-np.pi, np.pi), bulk_degree=2))
@@ -216,10 +216,10 @@ def test_mixture_queries_are_weighted_component_sums(mixture):
 
 def test_round_trip_through_the_cache_is_bitwise(mixture, tmp_path):
     d, _, _ = mixture
-    path = tmp_path / "g3.npy"
+    path = tmp_path / "model.npy"
     np.save(path, d.data)
     loaded = Distribution(np.load(path, allow_pickle=False))
-    assert int(d.data["format_version"]) == 2
+    assert int(d.data["format_version"]) == 1
     xs = np.linspace(-8.0, 10.0, 37)
     np.testing.assert_array_equal(loaded.pdf(xs), d.pdf(xs))
     np.testing.assert_array_equal(loaded.cdf(xs), d.cdf(xs))
@@ -328,3 +328,25 @@ def test_tiny_bounded_spectral_density_preserves_endpoint_log_and_mass():
         config=_SpectralCDFOptions(),
     )
     assert abs(float(cdf.total_mass) - 1.0) < 1e-9
+
+
+def test_tail_rates_follow_orientation_and_presentation():
+    # An upper-bounded linear tail is the reflection of a lower-bounded one:
+    # both report the exponential MLE rate on their infinite side, and a
+    # presentation scale divides it.
+    y = np.random.default_rng(1).exponential(0.5, 3000)
+    mle = 1.0 / float(np.mean(y))
+    upper = Distribution().fit(
+        -y, basis=BasisSpec(support=(-math.inf, 0.0), bulk_degree=1, log_upper=False)
+    )
+    lower = Distribution().fit(
+        y, basis=BasisSpec(support=(0.0, math.inf), bulk_degree=1, log_lower=False)
+    )
+    assert upper.tail_rate("lower") == pytest.approx(mle, rel=1e-8)
+    assert upper.tail_rate("upper") == math.inf
+    assert lower.tail_rate("upper") == pytest.approx(
+        upper.tail_rate("lower"), rel=1e-10
+    )
+    assert lower.tail_rate("lower") == math.inf
+    moved = upper.transform(mu=1.0, sigma=4.0, pullback=False, inplace=False)
+    assert moved.tail_rate("lower") == pytest.approx(mle / 4.0, rel=1e-8)

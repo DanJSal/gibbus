@@ -1,23 +1,19 @@
-"""Shared-support mixtures of G3 basis densities (Stage 5 Phase C, G3-045).
+"""Shared-support mixtures of basis densities.
 
-G1 owners replaced: ``_fit/natural_mixture.py`` (``_ComponentProblem``,
-``_coupled_m_step``, ``_polish``, ``_run_natural_em``), ``_fit/
-mixture_geometry.py`` (``_MixtureNaturalMap``, ``_MixtureFace``) and the
-compiled objectives of ``_fit/_shared_mixture_kernels.pyx``.  Retained from
-G1: the three phases (SQUAREM-accelerated EM, joint Newton polish of the
-observed likelihood with the saddle-free metric, one verifying EM step),
-private component shapes with one shared variable per enabled endpoint log
-amplitude, the EM surrogate as the M-step objective, and the multistart
-search with its initializers and soundness guards.
+Three phases: SQUAREM-accelerated EM, a joint Newton polish of the observed
+likelihood with the saddle-free metric, and one verifying EM step.
+Components have private shapes with one shared variable per enabled
+endpoint log amplitude; the EM surrogate is the M-step objective; a
+multistart search with initializers and soundness guards picks the fit.
 
-**Coordinates (G3-047, amending the pooled default of G3-043(a)).**  Each
-component is compiled in its own responsibility-weighted coordinate and
-geometry, fixed by its start (G1: a narrow or remote component in a pooled
-coordinate needs coefficients of order ``(scale ratio)^2`` and loses its
-digits to cancellation); a component is a coefficient block ``theta_k``
-of the stacked bases (``basis_newton._Blocks``).  The endpoint log columns
-are joint coordinates shared by every block (G1's shared physical
-amplitudes); all other columns, including tail columns, are private.
+**Coordinates.**  Each component is compiled in its own
+responsibility-weighted coordinate and geometry, fixed by its start (a
+narrow or remote component in a pooled coordinate needs coefficients of
+order ``(scale ratio)^2`` and loses its digits to cancellation); a
+component is a coefficient block ``theta_k`` of the stacked bases
+(``basis_newton._Blocks``).  The endpoint log columns are joint coordinates
+shared by every block (shared physical amplitudes); all other columns,
+including tail columns, are private.
 The joint polish appends ``K - 1`` logits (``pi_K`` the reference), which
 are in no block and unconstrained.
 
@@ -27,7 +23,7 @@ Newton loop and Python evaluations).  The coupled M-step is the EM surrogate
 is the observed NLL ``-sum_i w_i log sum_k pi_k p_k(row_i)`` with
 complete-data information ``G`` and missing information ``M`` (label
 uncertainty plus the within-row covariances of interval rows); the Newton
-metric is G1's saddle-free metric of ``G`` and ``M``.
+metric is the saddle-free metric of ``G`` and ``M``.
 """
 
 import dataclasses
@@ -40,9 +36,11 @@ from scipy.stats import chi2
 from .._defaults import (
     AUTO_K_MAX,
     AUTO_LC_MIN_COMPONENT_N,
+    AUTO_LC_SCREEN_STOP_ABOVE_MODES,
     AUTO_LC_SWEEP_EM_MAX_ITER,
     AUTO_LC_SWEEP_NEWTON_TOL,
     BOUNDARY_ALPHA,
+    CURVATURE_SEARCH_OPTIONS,
     EM_MIN_EFFECTIVE_DISTINCT_N,
     NUMERIC_FAILURES,
     SUPPRESSED_WARNINGS,
@@ -82,7 +80,6 @@ from .basis_selection import (
 from .boundary import _effective_n, _select_boundary_terms
 from .budget import _check_fit_time
 from .conic_newton import _CONVERGED, _NewtonOptions
-from .curvature_search import _CurvatureOptions
 from .degree import _DegreeSelectionConfig
 from .inputs import _normalize_basis_inputs, _prepare_component_selection_policy
 from .mixture import (
@@ -98,7 +95,7 @@ from .mixture import (
 
 @dataclass(frozen=True)
 class _EMOptions:
-    """Immutable EM scheduling policy for one mixture fit (G1 record).
+    """Immutable EM scheduling policy for one mixture fit.
 
     Parameters
     ----------
@@ -120,7 +117,7 @@ class _EMOptions:
 
 @dataclass(frozen=True)
 class _MixtureSearchOptions:
-    """Immutable multistart search policy for one mixture fit (G1 record).
+    """Immutable multistart search policy for one mixture fit.
 
     Parameters
     ----------
@@ -133,7 +130,7 @@ class _MixtureSearchOptions:
         Number of best explorations run to convergence.  One: each finalist
         costs a full EM and joint polish (a third of mixture fit time), and
         a second finalist changed no selected component count over 122
-        paired benchmark fits (G3-060).
+        paired benchmark fits.
     """
 
     treatments: tuple = ("raw", "sharpened")
@@ -179,11 +176,11 @@ def _resolve_em_options(em_options, /):
 
 
 class _PointMixtureEstimabilityFailure(RuntimeError):
-    """Expected rejection of a singular point-mixture candidate (G1)."""
+    """Expected rejection of a singular point-mixture candidate."""
 
 
 def _check_point_estimability(rows, observation_weights, responsibilities, /):
-    """Reject the singular one-location boundary of point-mixture likelihood (G1).
+    """Reject the singular one-location boundary of point-mixture likelihood.
 
     Parameters
     ----------
@@ -344,11 +341,6 @@ class _MixtureObjective:
         self.intervals = "rows" in data
         self._evaluator = None
 
-    @property
-    def coefficient_convex(self):
-        """Whether the fixed coefficient objective is convex."""
-        return self.kind == KIND_MSTEP and not self.intervals
-
     def coordinate_observations(self, block):
         """Per-component observations used to rebuild point statistics directly."""
         if self.intervals:
@@ -443,7 +435,7 @@ class _MixtureObjective:
                 np.eye(self.blocks.n),
                 self.blocks.index,
                 (nblocks, self.options or _NormalizerOptions()),
-                ([(None, None)] * self.blocks.count, _CurvatureOptions()),
+                ([(None, None, None)] * self.blocks.count, CURVATURE_SEARCH_OPTIONS),
                 kind,
                 data,
             )
@@ -588,13 +580,13 @@ def _mstep_objective(models, data, responsibilities, /, options=None):
 
 
 # ---------------------------------------------------------------------------
-# EM, polish and verification (G1 ``_run_natural_em``)
+# EM, polish and verification
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class _MixtureState:
-    """An evaluated mixture iterate (G1 ``_EMState``).
+    """An evaluated mixture iterate.
 
     Parameters
     ----------
@@ -622,7 +614,7 @@ class _MixtureState:
 
 @dataclass(frozen=True)
 class _MixtureFit:
-    """A fitted mixture (G1 ``_NaturalMixtureFit`` role).
+    """A fitted mixture.
 
     Parameters
     ----------
@@ -635,7 +627,7 @@ class _MixtureFit:
     log_likelihood : float
         Observed log likelihood per unit weight.
     status : str
-        G1 ladder of the joint polish (``em_only`` if it did not finish).
+        Status of the joint polish (``em_only`` if it did not finish).
     responsibilities : numpy.ndarray
         Final ``r_ik``.
     face : tuple
@@ -684,7 +676,7 @@ class _MixtureProblem:
     data : _MixtureRows
         Observations.
     options : _NewtonOptions
-        G1 Newton policy of every M-step and polish.
+        Newton policy of every M-step and polish.
     """
 
     def __init__(self, models, data, options, /):
@@ -704,6 +696,9 @@ class _MixtureProblem:
         self._phis = None if data.intervals else _phis(self.models, data)
         self._contexts = _contexts(self.models)
         self._faces = {}
+        # Latest canonical curvature cuts of each component's M-step (key
+        # ``None``: the coupled M-step), seeding the next one (``_cut_rows``).
+        self._cuts = {}
 
     def logits(self, log_weights, /):
         """Logits of log weights (``pi_K`` the reference).
@@ -772,8 +767,8 @@ class _MixtureProblem:
         """Component refits to the EM surrogate of ``responsibilities``.
 
         Coupled over the shared log columns (``KIND_MSTEP`` on the stacked
-        blocks, G1 ``_coupled_m_step``); otherwise one independent single
-        fit per component, as G1 does when no amplitude is shared.  Warm
+        blocks); otherwise one independent single fit per component, when
+        no amplitude is shared.  Warm
         started from ``previous`` and its face when given.
 
         Parameters
@@ -793,7 +788,7 @@ class _MixtureProblem:
         data, k = self.data, self.k
         r = np.asarray(responsibilities, dtype=np.float64)
         if not data.intervals and k > 1:
-            # G1 checks every M-step: EM can drive a component onto one
+            # Every M-step is checked: EM can drive a component onto one
             # observed location, where the point likelihood is singular.
             _check_point_estimability(data.x[:, None], data.weights, r)
         wr = data.weights[:, None] * r
@@ -811,7 +806,9 @@ class _MixtureProblem:
                 blocks=self.blocks,
                 start=start,
                 start_face=face,
+                start_cuts=self._cuts.get(None),
             )
+            self._cuts[None] = _cut_rows(result)
             new_face = (
                 result.face.suppressed,
                 tuple(labels[i] for i in result.face.zero_logs),
@@ -846,7 +843,13 @@ class _MixtureProblem:
                     tuple((0, side) for b, side in face[0] if b == comp),
                     (),
                 )
-            result = _solve_basis(objective, options=self.options, **kwargs)
+            result = _solve_basis(
+                objective,
+                options=self.options,
+                start_cuts=self._cuts.get(comp),
+                **kwargs,
+            )
+            self._cuts[comp] = _cut_rows(result)
             theta[self.blocks.index[comp]] = result.params
             suppressed += [(comp, side) for _, side in result.face.suppressed]
             statuses.append(result.status)
@@ -898,6 +901,18 @@ class _MixtureProblem:
         return np.asarray(x[:n]), eta - lse
 
 
+def _cut_rows(result, /):
+    """Canonical curvature cut rows of a solve, shape ``(k, d)``.
+
+    Parameters
+    ----------
+    result : _BasisNewtonResult
+        Completed solve.
+    """
+    rows = result.rows
+    return rows.rows[[kind == "cut" for kind in rows.kinds]]
+
+
 def _stack(state, /):
     """Coefficients and log weights of a state as one vector (SQUAREM).
 
@@ -910,7 +925,7 @@ def _stack(state, /):
 
 
 def _em_phase(problem, state, max_steps, tolerance, accelerate, history, /):
-    """SQUAREM-accelerated EM until the likelihood stalls (G1 ``_em_phase``).
+    """SQUAREM-accelerated EM until the likelihood stalls.
 
     Parameters
     ----------
@@ -949,7 +964,7 @@ def _em_phase(problem, state, max_steps, tolerance, accelerate, history, /):
             # SQUAREM (scheme S3).  alpha = -1 reproduces the second EM step;
             # steeper extrapolations are tried first, halved toward it, and
             # one is kept only if its stabilizing EM step beats two plain EM
-            # steps, so the iteration stays monotone (G1).
+            # steps, so the iteration stays monotone.
             x0 = _stack(state)
             step = _stack(state1) - x0
             curvature = _stack(state2) - 2.0 * (x0 + step) + x0
@@ -987,9 +1002,9 @@ def _em_phase(problem, state, max_steps, tolerance, accelerate, history, /):
 class _EMExploration:
     """The first EM phase of a fit, kept so a finalist can continue it.
 
-    A finalist used to restart from the same responsibilities and recompute
-    this phase exactly before polishing (G3-059 profile: 39% of a 490 s
-    automatic-count fit).  Continuing is exact when the finalist's first
+    Restarting a finalist from the same responsibilities would recompute
+    this phase exactly before polishing (39% of a 490 s automatic-count fit
+    in a profile).  Continuing is exact when the finalist's first
     phase extends this one (``extends``): EM is deterministic, and the phase
     loop carries only the iterate, its step count and the history.
 
@@ -1079,7 +1094,7 @@ def _run_em(
     start=None,
     resume=None,
 ):
-    """Fit a mixture from initial responsibilities: EM, polish, verify (G1).
+    """Fit a mixture from initial responsibilities: EM, polish, verify.
 
     Parameters
     ----------
@@ -1088,15 +1103,14 @@ def _run_em(
     responsibilities : numpy.ndarray
         Initial ``r_ik``, shape ``(R, K)``.
     em_options : _EMOptions or None
-        G1 EM schedule.
+        EM schedule.
     polish : bool
         ``False`` runs one EM phase only (status ``em_only``).
     initialization : str
         Label recorded in the fit.
     start : _MixtureState or None
         Evaluated state to continue from instead of an M-step from
-        ``responsibilities`` (warm refits after a span grows, G1
-        ``_continue_natural_mixture``).
+        ``responsibilities`` (warm refits after a span grows).
     resume : _EMExploration or None
         First EM phase already run on ``problem`` from ``responsibilities``
         (multistart exploration); the fit continues it, exactly as if the
@@ -1119,8 +1133,7 @@ def _run_em(
     if resume is not None:
         if start is not None or not resume.extends(em):
             raise ValueError(
-                "resume must be a first EM phase that em_options extends, "
-                "without start"
+                "resume must be a first EM phase that em_options extends, without start"
             )
         state, history = resume.state, list(resume.history)
         em_steps, rounds, need_em = int(resume.steps), 1, False
@@ -1165,7 +1178,11 @@ def _run_em(
             * np.finfo(float).eps
             * max(1.0, abs(polished_ll), abs(state.log_likelihood))
         )
-        if polished_ll < state.log_likelihood - roundoff:
+        # Two shape-constrained optima (the M-steps' and the polish's) are
+        # each verified within the curvature threshold on their own cut sets,
+        # so they agree only to the accuracy floor.
+        floor = max(roundoff, float(options.accuracy_floor))
+        if polished_ll < state.log_likelihood - floor:
             status = "em_only"
             break
         theta, log_weights = problem.split(result.params)
@@ -1179,12 +1196,17 @@ def _run_em(
         if status not in _CONVERGED:
             need_em = True
             continue
-        # Verification: one EM step from the polished point (G1).
+        # Verification: one EM step from the polished point.
         verified = problem.em_map(state)
         em_steps += 1
-        if verified.log_likelihood - polished_ll <= max(
-            float(result.final_decrease_bound), options.certified_tolerance
+        climb = verified.log_likelihood - polished_ll
+        if climb <= max(
+            float(result.final_decrease_bound), options.certified_tolerance, roundoff
         ):
+            break
+        if climb <= floor:
+            # Within the accuracy floor: converged, but not to the certificate.
+            status = "converged_approximately"
             break
         # EM still climbs: the polish sat on the wrong face.
         state = verified
@@ -1216,15 +1238,15 @@ def _run_em(
 
 
 # ---------------------------------------------------------------------------
-# Multistart fit (G1 ``_fit_natural_mixture``)
+# Multistart fit
 # ---------------------------------------------------------------------------
 
 
 def _mixture_data(inputs, /):
     """Rows of a mixture fit and the expansion from merged to original rows.
 
-    Interval rows are merged exactly (summed weights), as G1 groups
-    duplicate rows; point rows are kept.
+    Interval rows are merged exactly (summed weights), grouping duplicate
+    rows; point rows are kept.
 
     Parameters
     ----------
@@ -1235,7 +1257,7 @@ def _mixture_data(inputs, /):
     -------
     tuple
         ``(data, inverse, representatives)``: ``_MixtureRows``, the merged
-        row of each original row (``None`` for points) and G1's initializer
+        row of each original row (``None`` for points) and the initializer
         representatives per original row.
     """
 
@@ -1283,11 +1305,10 @@ def _merge_responsibilities(r, w, inverse, size, /):
 
 
 def _sound(fit, data, /):
-    """G1 soundness: converged, and point components determined by enough points.
+    """Soundness: converged, and point components determined by enough points.
 
-    G1 ``natural_mixture._needs_wider_search`` (negated): a point component
-    resting on at most its coefficient count plus two effective distinct
-    locations is not determined by the data.
+    A point component resting on at most its coefficient count plus two
+    effective distinct locations is not determined by the data.
 
     Parameters
     ----------
@@ -1326,7 +1347,7 @@ class _Prepared:
 
 
 def _prepare(spec, samples, weights, /):
-    """G1 input rules, the pooled-data basis builder and the mixture rows.
+    """Input rules, the pooled-data basis builder and the mixture rows.
 
     Parameters
     ----------
@@ -1371,7 +1392,7 @@ def _recompile(model, /, **changes):
 def _component_models(prepared, specs, posterior, /):
     """One basis per component in its own responsibility-weighted coordinate.
 
-    G1 fits each component in the coordinate of its responsibility-weighted
+    Each component is fitted in the coordinate of its responsibility-weighted
     data, which keeps a narrow or remote component's potential well
     conditioned (a pooled coordinate needs coefficients of order
     ``(scale ratio)^2`` and loses digits to cancellation).  ``posterior``
@@ -1393,92 +1414,18 @@ def _component_models(prepared, specs, posterior, /):
     )
 
 
-def _retry_lower_degree(problem, start, final_em, label, spec, /):
-    """Retry an unconverged fixed-degree mixture from its nearest lower degree.
-
-    The lower fit uses the same responsibility-derived coordinates as the
-    target fit. Its coefficients and active face are lifted into the target
-    degree before the target EM phase and joint polish are resumed.
-
-    Parameters
-    ----------
-    problem : _MixtureProblem
-        Failed target-degree mixture problem.
-    start : numpy.ndarray
-        Target exploration's initial responsibilities on merged rows.
-    final_em : _EMOptions
-        Final EM policy.
-    label : str
-        Initialization label retained in diagnostics.
-    spec : BasisSpec
-        Public basis request used to enumerate admissible degrees.
-
-    Returns
-    -------
-    _MixtureFit or None
-        Retried target-degree fit, or ``None`` when no smaller admissible
-        degree exists.
-    """
-    target = int(spec.bulk_degree)
-    smaller = [int(degree) for degree in _bulk_degrees(spec) if int(degree) < target]
-    if not smaller:
-        return None
-    lower = max(smaller)
-    lower_models = tuple(
-        _recompile(model, bulk_degree=lower) for model in problem.models
-    )
-    lower_problem = _MixtureProblem(lower_models, problem.data, problem.options)
-    explore_em = _EMOptions()
-    lower_fit = _run_em(
-        lower_problem,
-        start,
-        em_options=explore_em,
-        polish=False,
-        initialization=f"{label}/degree={lower}",
-    )
-
-    theta, log_weights, face = _lifted_point(lower_fit, problem.models)
-    lifted_state = problem.evaluate(theta, log_weights, face)
-    history = [lifted_state.log_likelihood]
-    state, steps, settled = _em_phase(
-        problem,
-        lifted_state,
-        explore_em.max_steps,
-        explore_em.tolerance,
-        explore_em.accelerate,
-        history,
-    )
-    exploration = _EMExploration(state, tuple(history), steps, settled, explore_em)
-    retry_label = f"{label}/lower-degree-retry"
-    if exploration.extends(final_em):
-        return _run_em(
-            problem,
-            None,
-            em_options=final_em,
-            initialization=retry_label,
-            resume=exploration,
-        )
-    return _run_em(
-        problem,
-        None,
-        em_options=final_em,
-        initialization=retry_label,
-        start=exploration.state,
-    )
-
-
 def _multistart(
     prepared, specs, rng, responsibilities, search, final_em, options, /, grow=None
 ):
-    """G1's multistart over initializers for concrete component ``specs``.
+    """Multistart over initializers for concrete component ``specs``.
 
     Every initializer candidate is explored by EM alone with raw and
     sharpened responsibilities; the ``finalists`` best explorations are run
     to convergence (continuing their exploration phase when ``final_em``
     extends it, ``_EMExploration``) and, with automatic selection, grown
-    (``grow``, G1 grows every finalist); a sound fit outranks an unsound
+    (``grow``, every finalist grows); a sound fit outranks an unsound
     one, then the higher score: the log likelihood, BIC-penalized by the
-    free parameters when finalists grow to different sizes (G1).  A lone
+    free parameters when finalists grow to different sizes.  A lone
     valley seed whose best fit is unsound widens the search to the other
     families.
 
@@ -1572,7 +1519,7 @@ def _multistart(
                     failure = exc
                     continue
                 except NUMERIC_FAILURES as exc:
-                    _reraise_if_debug(exc, f"G3 mixture EM from {label}", routine=True)
+                    _reraise_if_debug(exc, f"mixture EM from {label}", routine=True)
                     failure = exc
                     continue
                 explored.append(
@@ -1580,7 +1527,6 @@ def _multistart(
                 )
         explored.sort(key=lambda item: -item[0])
         best = None
-        best_retry_input = None
         for _, label, problem, start, exploration in explored[
             : max(1, int(search.finalists))
         ]:
@@ -1592,36 +1538,11 @@ def _multistart(
                 failure = exc
                 continue
             except NUMERIC_FAILURES as exc:
-                _reraise_if_debug(exc, f"G3 mixture fit from {label}", routine=True)
+                _reraise_if_debug(exc, f"mixture fit from {label}", routine=True)
                 failure = exc
                 continue
             if best is None or rank(fit) > rank(best):
                 best = fit
-                best_retry_input = (problem, start, label)
-        fixed_degree = (
-            grow is None
-            and all(isinstance(spec.bulk_degree, (int, np.integer)) for spec in specs)
-            and len({int(spec.bulk_degree) for spec in specs}) == 1
-        )
-        if (
-            fixed_degree
-            and best is not None
-            and best.status not in _CONVERGED
-            and best_retry_input is not None
-        ):
-            problem, start, label = best_retry_input
-            try:
-                retry = _retry_lower_degree(problem, start, final_em, label, specs[0])
-            except _PointMixtureEstimabilityFailure as exc:
-                failure = exc
-            except NUMERIC_FAILURES as exc:
-                _reraise_if_debug(
-                    exc, f"G3 lower-degree mixture retry from {label}", routine=True
-                )
-                failure = exc
-            else:
-                if retry is not None and rank(retry) > rank(best):
-                    best = retry
         return best, failure
 
     generator = (
@@ -1680,7 +1601,7 @@ def _expanded(fit, prepared, /):
 
 
 # ---------------------------------------------------------------------------
-# Selection inside a mixture (G1 ``mixture_degree``; Phase C5)
+# Selection inside a mixture
 # ---------------------------------------------------------------------------
 
 
@@ -1712,7 +1633,7 @@ def _lifted_point(fit, models, /):
 
 
 class _StalledRefit(RuntimeError):
-    """A growth candidate's M-step did not converge (G3-047)."""
+    """A growth candidate's M-step did not converge."""
 
 
 def _refit(fit, models, data, options, em_options, /, *, strict=False):
@@ -1752,14 +1673,13 @@ def _refit(fit, models, data, options, em_options, /, *, strict=False):
 def _mixture_span_diagnostic(fit, comp, larger, data, config, label, /):
     """Score test of component ``comp`` in ``larger`` at the fitted mixture.
 
-    G1 owner adapted: ``mixture_degree._joint_omitted_statistic_diagnostic``
-    (efficient score in the joint coordinates with every other parameter,
+    The efficient score in the joint coordinates (with every other parameter,
     the shared amplitudes and the logits as nuisance; observed information
     ``G - M`` of the joint likelihood).  The test itself is the single fits'
     ``basis_selection._score_test``: statistics are the joint coordinates,
     the probes the component's coefficients in ``larger`` and the nuisance
     every other coordinate plus its lifted current span; per-row values are
-    the joint scores, with G3's point policy for point rows and G1's
+    the joint scores, with the point policy for point rows and the
     interval policy (no guards) for merged interval rows.
 
     Parameters
@@ -1773,7 +1693,7 @@ def _mixture_span_diagnostic(fit, comp, larger, data, config, label, /):
     data : _MixtureRows
         Observations.
     config : _DegreeSelectionConfig
-        G1 selection policy.
+        Selection policy.
     label : str
         Name of the tested extension.
 
@@ -1820,7 +1740,7 @@ def _mixture_span_diagnostic(fit, comp, larger, data, config, label, /):
 
 @dataclass(frozen=True)
 class _MixtureStep:
-    """One automatic decision inside a mixture (G1 degree-growth history).
+    """One automatic decision inside a mixture (degree-growth history).
 
     Parameters
     ----------
@@ -1844,14 +1764,14 @@ class _MixtureStep:
 def _grow(
     fit, spec, prepared, config, options, em_options, /, *, degree, span, growable=None
 ):
-    """Per-component growth of a fitted mixture (G1 ``_fit_shared_degree_growth``).
+    """Per-component growth of a fitted mixture.
 
     Degree (``bulk_degree="auto"``): each component starts at the minimum
     admissible degree; the component whose next probe block (the degree
     ``d + probe_block_size`` minimal span) has the smallest supported p-value
     in the joint diagnostic grows to its next admissible degree by a warm
-    lifted refit, which must not lose likelihood (G1).  Span
-    (``expansion="auto"``, G3-035/044): per component a joint gate of its
+    lifted refit, which must not lose likelihood.  Span
+    (``expansion="auto"``): per component a joint gate of its
     full span; if one rejects, the one-slot extension (``_grow_basis``) with
     the smallest p-value over the rejecting components is refitted and kept
     only if its likelihood ratio also rejects.
@@ -1863,7 +1783,7 @@ def _grow(
         spans.
     growable : tuple of bool or None
         Components whose degree is automatic (default all); the others keep
-        their requested degree (G1 per-component degree policies).
+        their requested degree (per-component degree policies).
 
     Returns
     -------
@@ -1923,7 +1843,7 @@ def _grow(
                     break
             if untestable is not None:
                 # As the single-fit ladder: the growth ends at the fitted
-                # degrees, recorded (G3-049).
+                # degrees, recorded.
                 steps.append(
                     _MixtureStep("degree", tuple(diagnostics), None, failure=untestable)
                 )
@@ -1943,7 +1863,7 @@ def _grow(
                     fit, tuple(models), data, options, em_options, strict=True
                 )
             except _StalledRefit as exc:
-                # As the single-fit ladder (G3-047): a rung whose warm refit
+                # As the single-fit ladder: a rung whose warm refit
                 # does not converge ends the growth at the converged smaller
                 # degree, recorded.  (A log-concave component spanning two of
                 # three modes grew to degree 10, where each M-step took 15-65
@@ -1972,7 +1892,6 @@ def _grow(
             )
             fit, current[comp] = candidate, new_degree
     if span:
-
         while True:
             gates = []
             try:
@@ -2123,20 +2042,19 @@ def _fit_mixture_auto(
 ):
     """Fit a ``k``-component mixture, resolving every ``"auto"`` field.
 
-    Order (as single fits, G1): per-component degree growth with every
+    Order (as single fits): per-component degree growth with every
     automatic endpoint log enabled (``_grow``, each multistart finalist
-    grown, BIC-ranked); G1's backward elimination of automatic shared log
+    grown, BIC-ranked); backward elimination of automatic shared log
     terms (``_select_boundary_terms``: one-sided likelihood ratio at the same
     degrees, the reduced fit from the larger fit's responsibilities, then
     the growth rerun with the final terms); finally per-component span
-    growth.  One component is the single fit (``basis_selection._fit_basis``,
-    G1: "cold K = 1 runs the standalone selector").
+    growth.  One component is the single fit (``basis_selection._fit_basis``).
 
     ``responsibilities`` (original rows), when given, replace the
-    initializer candidates of every multistart (G1 refinement of a screened
+    initializer candidates of every multistart (refinement of a screened
     component count).  ``degrees`` gives one policy per component (an
-    integer, or ``"auto"`` to grow from the lowest admissible degree; G1
-    ``component_options``) in place of ``spec.bulk_degree``.
+    integer, or ``"auto"`` to grow from the lowest admissible degree; the
+    public ``component_options``) in place of ``spec.bulk_degree``.
 
     Parameters
     ----------
@@ -2155,7 +2073,7 @@ def _fit_mixture_auto(
     degrees : tuple or None
         One degree policy per component.
     config : _DegreeSelectionConfig or None
-        G1 selection policy.
+        Selection policy.
     search_options : _MixtureSearchOptions or None
         Multistart policy.
     em_options : _EMOptions or None
@@ -2253,12 +2171,12 @@ def _fit_mixture_auto(
 
 
 # ---------------------------------------------------------------------------
-# Component count (G1 ``_api.selection.select_n_components``; Phase C6)
+# Component count
 # ---------------------------------------------------------------------------
 
 
 class _CandidateRejected(RuntimeError):
-    """A component-count candidate the BIC search does not score (G1)."""
+    """A component-count candidate the BIC search does not score."""
 
 
 class _ComponentSelectionError(RuntimeError):
@@ -2285,7 +2203,7 @@ class _ComponentSelection:
     boundary_p_values : tuple of float
         Its endpoint-log likelihood-ratio p-values.
     diagnostics : dict
-        G1's search record: screens, refinements, admissions.
+        Search record: screens, refinements, admissions.
     """
 
     n_components: int
@@ -2309,24 +2227,23 @@ def _select_components(
     em_options=None,
     options=None,
 ):
-    """Select the component count by G1's staged shared BIC search.
+    """Select the component count by a staged shared BIC search.
 
-    G1 owner: ``_api.selection.select_n_components`` (with
-    ``_propose_n_components`` and ``_prepare_component_selection_policy``),
-    moved to the fitting layer over G3 mixture fits.  Retained from G1: the
-    KDE mode proposal and count ceiling; shared screens of ``K = 1 ..
-    initial_hi`` at every screening degree with every automatic endpoint log
+    Steps: the KDE mode proposal and count ceiling; shared screens of ``K = 1 ..
+    initial_hi`` (stopping above the mode proposal at the first count whose
+    best screen BIC is worse than its predecessor's,
+    ``AUTO_LC_SCREEN_STOP_ABOVE_MODES``) at every screening degree with every automatic endpoint log
     enabled (``K = 1`` a single fit, ``K > 1`` a short unaccelerated EM from
     each initializer's sharpened responsibilities, no polish); the BIC
     ``-2 n_eff LL + dim log n_eff`` on the face dimension, rejecting a
     component below ``AUTO_LC_MIN_COMPONENT_N`` effective rows and an
     interval fit saturating the censored likelihood with excess parameters;
-    admission of each degree's winner and neighbours, refinement under the
+    admission of each degree's winner and neighbors, refinement under the
     request's actual policies (``_fit_mixture_auto`` from the best screen's
     responsibilities) and opening the refined winner's edge until closed;
     purpose-indexed random streams; optional stratified subsampling with the
     mean likelihood extrapolated to the full effective size.  The search is
-    heuristic, not globally certified (G1).  With a subsample the winner is
+    heuristic, not globally optimal.  With a subsample the winner is
     refitted on all rows from its screen's responsibilities.
 
     Parameters
@@ -2336,9 +2253,9 @@ def _select_components(
     samples, weights : array_like
         Observations and observation weights.
     k_max : int or None
-        Largest count considered (G1 ``AUTO_K_MAX`` when ``None``).
+        Largest count considered (``AUTO_K_MAX`` when ``None``).
     subsample : str, int or bool
-        G1 selection-sample policy.
+        Selection-sample policy.
     rng : int or numpy.random.Generator
         Randomness of the proposal, initializers and refinements.
 
@@ -2489,7 +2406,7 @@ def _select_components(
                     )
             except NUMERIC_FAILURES as exc:
                 _reraise_if_debug(
-                    exc, f"G3 K screen initialization K={count}", routine=True
+                    exc, f"K screen initialization K={count}", routine=True
                 )
                 screens[count] = dict.fromkeys(degrees)
                 screening_scores.extend(
@@ -2511,12 +2428,12 @@ def _select_components(
                     fitted = screen_fit(count, degree, name, resp)
                     bic = score(fitted)
                 except _CandidateRejected as exc:
-                    # Expected control flow, not a numerical fallback (G1).
+                    # Expected control flow, not a numerical fallback.
                     failures.append(f"{type(exc).__name__}: {exc}")
                     continue
                 except failures_caught as exc:
                     _reraise_if_debug(
-                        exc, f"G3 K screen K={count}, d={degree}", routine=True
+                        exc, f"K screen K={count}, d={degree}", routine=True
                     )
                     failures.append(f"{type(exc).__name__}: {exc}")
                     continue
@@ -2541,8 +2458,21 @@ def _select_components(
                 }
             )
 
+    def screen_bic(count):
+        values = [e["bic"] for e in screens[count].values() if e is not None]
+        return min(values) if values else math.inf
+
+    screen_stop = None
     for count in range(1, initial_hi + 1):
         screen(count)
+        if (
+            AUTO_LC_SCREEN_STOP_ABOVE_MODES
+            and count > max(k_modes, 1)
+            and math.isfinite(screen_bic(count - 1))
+            and screen_bic(count) > screen_bic(count - 1)
+        ):
+            screen_stop = count
+            break
     for degree in degrees:
         viable = [
             (entries[degree]["bic"], count)
@@ -2588,7 +2518,7 @@ def _select_components(
             )
             return
         except failures_caught as exc:
-            _reraise_if_debug(exc, f"G3 K refinement K={count}", routine=True)
+            _reraise_if_debug(exc, f"K refinement K={count}", routine=True)
             scores.append(
                 record
                 | {"bic": None, "status": f"failed:{type(exc).__name__}"}
@@ -2630,8 +2560,8 @@ def _select_components(
         "subsample_size": int(policy.subsample_size),
         "full_sample_size": int(n_rows),
         "subsampled": sub_idx is not None,
-        # G1 key: the selected candidate is the returned fit (no full-data
-        # refit after a subsampled selection).
+        # The selected candidate is the returned fit only without a
+        # subsample; a subsampled winner is refitted on every row.
         "reuse_selected_fit": sub_idx is None,
         "score_effective_n": effective_n,
         "selection_sample_effective_n": float(sample_effective_n),
@@ -2642,6 +2572,9 @@ def _select_components(
         ),
         "screen_boundary_enabled": enabled,
         "screen_degrees": degrees,
+        # The count at which a worse screen BIC above the mode proposal ended
+        # the upward sweep (``None``: every count to the ceiling was screened).
+        "screen_stopped_at": screen_stop,
         "screen_newton_tolerance": float(screen_options.certified_tolerance),
         "screening_scores": tuple(screening_scores),
         "scores": tuple(scores),

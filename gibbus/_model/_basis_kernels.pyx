@@ -1,49 +1,61 @@
 # cython: language_level=3
 # distutils: define_macros=NPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION
 
-"""Compiled G3 basis kernels: column table, evaluation, enclosures, tail verdicts.
-
-G1 owner replaced: the evaluation role of ``_model/_state_kernels.pyx``
-(``_q0``/``_q1``/``_q2`` and ``_polyval_vec``) for the G3 column basis.
+"""Compiled basis kernels: column table, evaluation, enclosures, curvature, tails.
 
 * ``BasisKernel`` -- the flat column table of one compiled ``_BasisModel``
   (functions, gated terms, the exact map ``full = M theta`` and its gate-limit
-  rows, geometry), built once per model.
+  rows, the family constants and the curvature atoms), built once per model.
 * ``eval_point`` / ``potential_point`` -- ``Phi`` and ``q`` with ``x``
-  derivatives to order four.  Gates use the cancellation-free lower/upper
-  forms of ``basis_eval``.
+  derivatives to order four.  Each gate ``alpha_0 + alpha_1 t_L + alpha_2 t_U``
+  is evaluated in the exact partition form ``g_L W_L + kappa W_C + g_U W_U``
+  (the gate's lower, central and upper limits times the nonnegative weights
+  ``W_L = 1 - G_L``, ``W_U = 1 - G_U``, ``W_C = G_L + G_U - 1``), so an exactly
+  suppressed limit contributes an exact zero and the rest are products of
+  accurately computed small factors.
 * ``basis_enclosure_cell`` / ``potential_enclosure_cell`` -- outward-rounded
   interval enclosures over a cell: every arithmetic result widened by a
   relative ``4u`` plus one ulp, every transcendental by ``8u`` plus one ulp
   (``8 n u`` for integer powers ``n``), exact zeros kept exact.  Numerical
-  evidence (G3-028), not an arbitrary-precision certificate.
+  evidence, not an arbitrary-precision certificate.  Soft-power derivative
+  enclosures beyond order two are the whole line (valid, uninformative).
+* ``curvature_scaled`` / ``curvature_rows`` -- the structured scaled curvature
+  ``H = q'' / ||pieces||`` with an error bound and the exact scale, from any
+  ``z`` in binary64 range, and its theta-free per-atom rows (``R``, ``N``).
 * ``TailKernel`` / ``tail_verdict`` -- the sign of ``d^k q / d zeta^k`` beyond
   a cutoff from coefficient-linear asymptotic atoms (``basis_tails``).
 
 The module must be built without floating-point contraction (``setup.py``
 passes ``-ffp-contract=off``): the rounding margins assume one rounding per
-operation.
+operation, and the double-double primitives of the curvature kernel must not
+be fused.
 """
 
 import numpy as np
 from fractions import Fraction
 cimport numpy as cnp
 from libc.stdint cimport uint64_t
-from libc.string cimport memcpy
+from libc.stdlib cimport malloc, free
+from libc.string cimport memcpy, memset
 
 from libc.math cimport (
     INFINITY,
     NAN,
     sqrt,
     exp,
+    erfc,
+    expm1,
     fabs,
     fabsl,
+    fma,
+    frexp,
+    ilogb,
     isfinite,
+    isinf,
     isnan,
     log,
     log1p,
     pow,
-    tanh,
 )
 from libc.float cimport LDBL_EPSILON
 
@@ -73,7 +85,7 @@ cdef inline Iv _polynomial_curvature_point(
     cdef int degree, j, col, max_degree = 0, map_count, unit_col
     cdef long double eps = <long double>LDBL_EPSILON
     cdef long double scale, e, p0, p1, p2, p3, mag, coeff_mag
-    cdef long double slot_lo, slot_hi, mapped, mapped_abs, mapped_error, term_ld
+    cdef long double slot_lo, slot_hi
     cdef double map_value, unit_sign
     cdef LongIv z, acc, coeff, nxt
     cdef Iv slot, out
@@ -101,35 +113,18 @@ cdef inline Iv _polynomial_curvature_point(
                 slot = p.slot[3 * j]
                 slot_lo = <long double>slot.lo
                 slot_hi = <long double>slot.hi
-                if t.orth_degree:
-                    mapped = 0.0
-                    mapped_abs = 0.0
-                    mapped_error = 0.0
-                    for col in range(t.d):
-                        term_ld = (<long double>t.cmap[3*j*t.d + col]
-                                   + <long double>t.cmap_low[3*j*t.d + col])
-                        term_ld *= <long double>p.theta[col]
-                        mapped += term_ld
-                        mapped_abs += fabsl(term_ld)
-                        mapped_error += (<long double>2.0 * _U
-                            * fabsl(<long double>t.cmap_low[3*j*t.d + col]
-                                    * <long double>p.theta[col]))
-                    mapped_error += (<long double>(8 * (t.d + 2)) * eps * mapped_abs)
-                    slot_lo = mapped - mapped_error
-                    slot_hi = mapped + mapped_error
-                else:
-                    map_count = 0
-                    unit_col = -1
-                    unit_sign = 0.0
-                    for col in range(t.d):
-                        map_value = t.cmap[3*j*t.d + col]
-                        if map_value != 0.0:
-                            map_count += 1
-                            unit_col = col
-                            unit_sign = map_value
-                    if map_count == 1 and (unit_sign == 1.0 or unit_sign == -1.0):
-                        slot_lo = <long double>unit_sign * <long double>p.theta[unit_col]
-                        slot_hi = slot_lo
+                map_count = 0
+                unit_col = -1
+                unit_sign = 0.0
+                for col in range(t.d):
+                    map_value = t.cmap[3*j*t.d + col]
+                    if map_value != 0.0:
+                        map_count += 1
+                        unit_col = col
+                        unit_sign = map_value
+                if map_count == 1 and (unit_sign == 1.0 or unit_sign == -1.0):
+                    slot_lo = <long double>unit_sign * <long double>p.theta[unit_col]
+                    slot_hi = slot_lo
                 scale = (<long double>degree * <long double>(degree - 1)
                          / (<long double>t.h * <long double>t.h))
                 e = <long double>8.0 * eps * fabsl(scale)
@@ -241,7 +236,7 @@ cdef inline double _next_up(double x) noexcept nogil:
     """``nextafter(x, +inf)`` by stepping the bit pattern (inlined).
 
     The enclosure arithmetic widens every result by one ulp; glibc's
-    ``nextafter`` call was 6.5% of a degree-6 fit (callgrind, G3-050).
+    ``nextafter`` call was a measurable share of a fit.
     """
     cdef uint64_t bits
     if x != x or x == INFINITY:
@@ -357,16 +352,11 @@ cdef inline Iv _fpow_positive(Iv a, double b) noexcept nogil:
     return _widen(phi, plo, _TRANS)
 
 
-cdef inline Iv _tanh_iv(Iv a) noexcept nogil:
-    return _widen(tanh(a.lo), tanh(a.hi), _TRANS)
-
-
-cdef inline Iv _p_iv(Iv a) noexcept nogil:
-    return _widen(2.0 * expit(2.0 * a.lo), 2.0 * expit(2.0 * a.hi), _TRANS)
-
-
-cdef inline Iv _m_iv(Iv a) noexcept nogil:
-    return _widen(2.0 * expit(-2.0 * a.hi), 2.0 * expit(-2.0 * a.lo), _TRANS)
+cdef inline Iv _fpow_positive_zero(Iv a, double b) noexcept nogil:
+    """``a**b`` for ``a >= 0`` and ``b > 0`` (increasing; ``0**b = 0`` exactly)."""
+    cdef double plo = 0.0 if a.lo <= 0.0 else pow(a.lo, b)
+    cdef Iv r = _widen(plo, pow(a.hi, b), _TRANS)
+    return _iv(npmax(r.lo, 0.0), r.hi)
 
 
 cdef inline Iv _log_iv(Iv a) noexcept nogil:
@@ -380,6 +370,74 @@ cdef inline Iv _exp_iv(Iv a) noexcept nogil:
 # --------------------------------------------------------------------------
 # column table
 # --------------------------------------------------------------------------
+
+# Curvature-atom gate codes: the single gates, the partition weights, and the
+# central weight of two gates.
+cdef enum:
+    GATE_NONE = 0
+    GATE_GL = 1
+    GATE_GU = 2
+    GATE_WL = 3
+    GATE_WU = 4
+    GATE_WC = 5
+
+
+def _curvature_atoms(model, lim_low, lim_mid, lim_up):
+    """Curvature atoms ``(function, gate code, coefficient row)`` of a model.
+
+    Each function enters ``q`` as ``f (g_L W_L + kappa W_C + g_U W_U)`` with
+    coefficient rows ``g_L = a - b + c``, ``kappa = a + b + c`` and
+    ``g_U = a + b - c`` over ``theta``; an ungated function as ``f a``.  On a
+    half-line the missing gate is identically one, so the central weight is the
+    single gate (``W_C = G_U`` or ``G_L``).  Exactly zero rows are omitted.
+
+    Parameters
+    ----------
+    model : _BasisModel
+        Compiled basis.
+    lim_low, lim_mid, lim_up : numpy.ndarray
+        Gate-limit rows per function, shape ``(nf, d)``.
+
+    Returns
+    -------
+    tuple of numpy.ndarray
+        ``(fn, gate, rows)`` with shapes ``(A,)``, ``(A,)`` and ``(A, d)``.
+    """
+    request = model.request
+    lower_gate, upper_gate = request.lower_infinite, request.upper_infinite
+    exact = model.coefficient_map_exact
+    cmap = np.asarray(model.coefficient_map, dtype=np.float64)
+    fns, gates, rows = [], [], []
+    for j in range(len(model.functions)):
+        slots = exact[3 * j : 3 * j + 3]
+        if not any(v for slot in slots for v in slot):
+            continue
+        gated = any(v for v in slots[1]) or any(v for v in slots[2])
+        if not gated:
+            fns.append(j)
+            gates.append(GATE_NONE)
+            rows.append(cmap[3 * j])
+            continue
+        if lower_gate and upper_gate:
+            pieces = (
+                (GATE_WL, lim_low[j]), (GATE_WC, lim_mid[j]), (GATE_WU, lim_up[j])
+            )
+        elif upper_gate:
+            pieces = ((GATE_GU, lim_mid[j]), (GATE_WU, lim_up[j]))
+        else:
+            pieces = ((GATE_GL, lim_mid[j]), (GATE_WL, lim_low[j]))
+        for code, row in pieces:
+            if np.any(row != 0.0):
+                fns.append(j)
+                gates.append(code)
+                rows.append(row)
+    d = model.n_coefficients
+    return (
+        np.array(fns, dtype=np.intc),
+        np.array(gates, dtype=np.intc),
+        np.array(rows, dtype=np.float64).reshape(len(rows), d),
+    )
+
 
 cdef class BasisKernel:
     """Flat column table of one compiled ``_BasisModel`` (built once).
@@ -404,10 +462,8 @@ cdef class BasisKernel:
         )
         degree = np.array([f.degree or 0 for f in functions], dtype=np.intc)
         power = np.array([f.power or 0.0 for f in functions], dtype=np.float64)
-        delta = np.array([f.delta or 0.0 for f in functions], dtype=np.float64)
         rate = np.array([f.rate or 0.0 for f in functions], dtype=np.float64)
-        location = np.array([f.location or 0.0 for f in functions], dtype=np.float64)
-        starts, fns, g0, g1, g2, glow, gup = [0], [], [], [], [], [], []
+        starts, fns, g0, g1, g2, glow, gmid, gup = [0], [], [], [], [], [], [], []
         log_cols = {"lower": [], "upper": []}
         for col, column in enumerate(model.columns):
             first = functions[column.terms[0][0]]
@@ -419,6 +475,7 @@ cdef class BasisKernel:
                 g1.append(float(gate[1]))
                 g2.append(float(gate[2]))
                 glow.append(float(gate[0] - gate[1] + gate[2]))
+                gmid.append(float(gate[0] + gate[1] + gate[2]))
                 gup.append(float(gate[0] + gate[1] - gate[2]))
             starts.append(len(fns))
         for s in ("lower", "upper"):
@@ -439,31 +496,62 @@ cdef class BasisKernel:
         orth_reference = np.zeros(1) if plan is None else np.ascontiguousarray(plan.reference)
         orth_recurrence = np.zeros((1, 3)) if plan is None else plan.recurrence
         orth_map = np.zeros((1, d)) if plan is None else plan.polynomial_map
+        # Exact gate-limit rows per function (small rationals: exact in binary64
+        # whenever the map entries are).
+        exact = model.coefficient_map_exact
+        lim_rows = []
+        for signs in ((1, -1, 1), (1, 1, 1), (1, 1, -1)):
+            lim_rows.append(np.array(
+                [[float(sum(sg * exact[3 * j + k][col] for k, sg in enumerate(signs)))
+                  for col in range(d)] for j in range(nf)],
+                dtype=np.float64,
+            ).reshape(nf, d))
+        lim_low, lim_mid, lim_up = (np.ascontiguousarray(r) for r in lim_rows)
         ma, mb, mc = cmap[0::3], cmap[1::3], cmap[2::3]
-        lim_low = np.ascontiguousarray(ma + -1.0 * mb + 1.0 * mc)
-        lim_up = np.ascontiguousarray(ma + 1.0 * mb + -1.0 * mc)
         absrow = np.abs(ma) + np.abs(mb) + np.abs(mc)
         lim_low_abs = np.ascontiguousarray(np.where(lim_low != 0.0, absrow, 0.0))
+        lim_mid_abs = np.ascontiguousarray(np.where(lim_mid != 0.0, absrow, 0.0))
         lim_up_abs = np.ascontiguousarray(np.where(lim_up != 0.0, absrow, 0.0))
         nonneg = np.array([bool(c.nonnegative) for c in model.columns], dtype=np.intc)
         fn_used = np.zeros(nf, dtype=np.intc)
         fn_used[np.unique(np.array(fns, dtype=np.intc))] = 1
+        atom_fn, atom_gate, atom_row = _curvature_atoms(model, lim_low, lim_mid, lim_up)
+        # Per-atom parameter: soft-power exponent, canonical rate, or the exact
+        # canonical endpoint of a log (0 or +-1 by construction of z).
+        z_lower, z_upper = geometry.coordinate.canonical_support
+        atom_par = np.array(
+            [
+                functions[j].power if functions[j].kind == "soft_power"
+                else functions[j].rate if functions[j].kind == "exponential"
+                else (z_lower if functions[j].side == "lower" else z_upper)
+                if functions[j].kind == "log" else 0.0
+                for j in atom_fn
+            ],
+            dtype=np.float64,
+        )
         arrays = dict(
-            kind=kind, side=side, degree=degree, power=power, delta=delta,
-            rate=rate, location=location,
+            kind=kind, side=side, degree=degree, power=power, rate=rate,
             col_start=np.array(starts, dtype=np.intc),
             term_fn=np.array(fns, dtype=np.intc),
             term_g0=np.array(g0, dtype=np.float64),
             term_g1=np.array(g1, dtype=np.float64),
             term_g2=np.array(g2, dtype=np.float64),
             term_glow=np.array(glow, dtype=np.float64),
+            term_gmid=np.array(gmid, dtype=np.float64),
             term_gup=np.array(gup, dtype=np.float64),
             cmap=cmap, cmap_low=cmap_low, orth_degree=orth_degree,
             orth_fn=orth_fn, orth_norm=orth_norm, orth_reference=orth_reference,
             orth_recurrence=orth_recurrence, orth_map=orth_map,
-            lim_low=lim_low, lim_up=lim_up,
-            lim_low_abs=lim_low_abs, lim_up_abs=lim_up_abs, nonneg=nonneg,
-            fn_used=fn_used,
+            lim_low=lim_low, lim_mid=lim_mid, lim_up=lim_up,
+            lim_low_abs=lim_low_abs, lim_mid_abs=lim_mid_abs, lim_up_abs=lim_up_abs,
+            nonneg=nonneg, fn_used=fn_used,
+            atom_fn=(np.ascontiguousarray(atom_fn) if atom_fn.size
+                     else np.zeros(1, np.intc)),
+            atom_gate=(np.ascontiguousarray(atom_gate) if atom_gate.size
+                       else np.zeros(1, np.intc)),
+            atom_par=np.ascontiguousarray(atom_par) if atom_par.size else np.zeros(1),
+            atom_row=(np.ascontiguousarray(atom_row) if atom_row.size
+                      else np.zeros((1, max(d, 1)))),
         )
         self._keep = arrays
         self.t.nf = nf
@@ -472,20 +560,21 @@ cdef class BasisKernel:
         self.t.side = <const int*> cnp.PyArray_DATA(arrays["side"])
         self.t.degree = <const int*> cnp.PyArray_DATA(arrays["degree"])
         self.t.power = <const double*> cnp.PyArray_DATA(arrays["power"])
-        self.t.delta = <const double*> cnp.PyArray_DATA(arrays["delta"])
         self.t.rate = <const double*> cnp.PyArray_DATA(arrays["rate"])
-        self.t.location = <const double*> cnp.PyArray_DATA(arrays["location"])
         self.t.col_start = <const int*> cnp.PyArray_DATA(arrays["col_start"])
         self.t.term_fn = <const int*> cnp.PyArray_DATA(arrays["term_fn"])
         self.t.term_g0 = <const double*> cnp.PyArray_DATA(arrays["term_g0"])
         self.t.term_g1 = <const double*> cnp.PyArray_DATA(arrays["term_g1"])
         self.t.term_g2 = <const double*> cnp.PyArray_DATA(arrays["term_g2"])
         self.t.term_glow = <const double*> cnp.PyArray_DATA(arrays["term_glow"])
+        self.t.term_gmid = <const double*> cnp.PyArray_DATA(arrays["term_gmid"])
         self.t.term_gup = <const double*> cnp.PyArray_DATA(arrays["term_gup"])
         self.t.cmap = <const double*> cnp.PyArray_DATA(arrays["cmap"])
         self.t.cmap_low = <const double*> cnp.PyArray_DATA(arrays["cmap_low"])
+        if plan is not None and plan.degree > 64:
+            raise ValueError("recurrence coordinates support degrees up to 64")
         self.t.orth_degree = 0 if plan is None else plan.degree
-        self.t.polynomial_point = all(
+        self.t.polynomial_point = plan is None and all(
             functions[index].kind in ("monomial", "log") and not gate[1] and not gate[2]
             for column in model.columns for index, gate in column.terms
         )
@@ -499,8 +588,10 @@ cdef class BasisKernel:
         self.t.orth_norm = <const double*> cnp.PyArray_DATA(arrays["orth_norm"])
         self.t.orth_reference = <const double*> cnp.PyArray_DATA(arrays["orth_reference"])
         self.t.lim_low = <const double*> cnp.PyArray_DATA(arrays["lim_low"])
+        self.t.lim_mid = <const double*> cnp.PyArray_DATA(arrays["lim_mid"])
         self.t.lim_up = <const double*> cnp.PyArray_DATA(arrays["lim_up"])
         self.t.lim_low_abs = <const double*> cnp.PyArray_DATA(arrays["lim_low_abs"])
+        self.t.lim_mid_abs = <const double*> cnp.PyArray_DATA(arrays["lim_mid_abs"])
         self.t.lim_up_abs = <const double*> cnp.PyArray_DATA(arrays["lim_up_abs"])
         self.t.nonneg = <const int*> cnp.PyArray_DATA(arrays["nonneg"])
         self.t.fn_used = <const int*> cnp.PyArray_DATA(arrays["fn_used"])
@@ -508,35 +599,52 @@ cdef class BasisKernel:
         self.t.h = float(geometry.scale)
         self.t.lower = float(request.lower)
         self.t.upper = float(request.upper)
-        self.t.has_l = geometry.lower_location is not None
-        self.t.has_u = geometry.upper_location is not None
-        self.t.xl = float(geometry.lower_location) if self.t.has_l else 0.0
-        self.t.al = float(geometry.lower_steepness) if self.t.has_l else 0.0
-        self.t.xu = float(geometry.upper_location) if self.t.has_u else 0.0
-        self.t.au = float(geometry.upper_steepness) if self.t.has_u else 0.0
-        if self.t.has_l and self.t.has_u:
-            self.t.mid = 0.5 * (self.t.xl + self.t.xu)
-        elif self.t.has_l:
-            self.t.mid = self.t.xl
-        elif self.t.has_u:
-            self.t.mid = self.t.xu
-        else:
-            self.t.mid = INFINITY
+        # Canonical support ends: exact by definition (-1, 0 or 1), so a
+        # canonical node's distance to a finite end is not rounded through
+        # the physical coordinate.
+        self.t.zlower = float(geometry.coordinate.canonical_support[0])
+        self.t.zupper = float(geometry.coordinate.canonical_support[1])
+        self.t.has_l = bool(geometry.has_lower_gate)
+        self.t.has_u = bool(geometry.has_upper_gate)
+        self.t.gate_s = float(geometry.gate_sharpness)
+        self.t.root = int(geometry.soft_power_root)
         self.t.log_col_lower = log_cols["lower"][0] if log_cols["lower"] else -1
         self.t.log_col_upper = log_cols["upper"][0] if log_cols["upper"] else -1
+        self.t.natom = int(atom_fn.size)
+        self.t.atom_fn = <const int*> cnp.PyArray_DATA(arrays["atom_fn"])
+        self.t.atom_gate = <const int*> cnp.PyArray_DATA(arrays["atom_gate"])
+        self.t.atom_par = <const double*> cnp.PyArray_DATA(arrays["atom_par"])
+        self.t.atom_row = <const double*> cnp.PyArray_DATA(arrays["atom_row"])
 
     @property
     def n_coefficients(self):
         """Number of columns ``d``."""
         return self.t.d
 
+    @property
+    def atom_rows(self):
+        """Coefficient rows of the curvature atoms over ``theta``, ``(A, d)``."""
+        return np.array(self._keep["atom_row"][: self.t.natom], dtype=np.float64)
+
+    @property
+    def atoms(self):
+        """``(function index, gate code)`` of every curvature atom."""
+        return tuple(
+            (int(self._keep["atom_fn"][i]), int(self._keep["atom_gate"][i]))
+            for i in range(self.t.natom)
+        )
+
 
 # --------------------------------------------------------------------------
 # point evaluation
 # --------------------------------------------------------------------------
 
+cdef double _SQRT1_2 = 0.70710678118654752440
+cdef double _INV_SQRT_2PI = 0.39894228040143267794
+
+
 cdef inline double scaled_z(const BasisTable* t, double x) noexcept nogil:
-    """``(x - c) / h`` without avoidable overflow (G1 ``_safe_scaled_difference``)."""
+    """``(x - c) / h`` without avoidable overflow (as ``coords``)."""
     cdef double out = (x - t.c) / t.h
     cdef double mag
     if not isfinite(out) and isfinite(x):
@@ -550,41 +658,178 @@ cdef enum:
     _ZP = 64
 
 
-cdef inline void _tanh_point(
-    double u, double c, int order, double* tv
+cdef inline void _gaussian_jet(
+    double w, double s, double sign, int order, double* out
 ) noexcept nogil:
-    """``tv = [t, p, m, t', t'', t''', t'''']`` for ``t = tanh(u)``, ``u' = c``."""
-    cdef double p = 2.0 * expit(2.0 * u)
-    cdef double m = 2.0 * expit(-2.0 * u)
-    cdef double t, w, t2
-    tv[1] = p
-    tv[2] = m
-    if order == 0:
-        return
-    t = tanh(u)
-    w = p * m
-    t2 = t * t
-    tv[0] = t
-    tv[3] = c * w
-    tv[4] = -2.0 * (c * c) * t * w
-    tv[5] = -2.0 * (c * c * c) * w * (1.0 - 3.0 * t2)
-    tv[6] = 8.0 * (c * c * c * c) * t * w * (2.0 - 3.0 * t2)
+    """``out[k] = sign s**k phi^(k-1)(w)`` for ``1 <= k <= order``.
+
+    ``phi^(j)(w) = (-1)**j He_j(w) phi(w)`` with the probabilists' Hermite
+    polynomials ``He_0..He_3``.
+    """
+    cdef double phi = _INV_SQRT_2PI * exp(-0.5 * w * w)
+    cdef double he[4]
+    cdef double sk = sign
+    cdef int k
+    he[0] = 1.0
+    he[1] = w
+    he[2] = w * w - 1.0
+    he[3] = w * (w * w - 3.0)
+    for k in range(1, order + 1):
+        sk = sk * s
+        out[k] = sk * (he[k - 1] if (k - 1) % 2 == 0 else -he[k - 1]) * phi
 
 
-cdef inline void _flat_point(double* tv) noexcept nogil:
-    tv[0] = 1.0
-    tv[1] = 2.0
-    tv[2] = 0.0
-    tv[3] = 0.0
-    tv[4] = 0.0
-    tv[5] = 0.0
-    tv[6] = 0.0
+cdef inline void _gate_point(
+    const BasisTable* t, double z, int order, double* wl, double* wu, double* wc
+) noexcept nogil:
+    """``z`` derivatives of the partition weights ``W_L``, ``W_U``, ``W_C``.
+
+    ``W_L = Phi(-s (z + 1))`` and ``W_U = Phi(s (z - 1))`` are evaluated with
+    ``erfc``, accurate down to underflow; ``W_C = 1 - W_L - W_U`` is the
+    difference of a gate and the far partition weight (``G_U - W_L`` for
+    ``z >= 0``, ``G_L - W_U`` below), free of cancellation.  A missing gate is
+    identically one (its partition weight zero).
+    """
+    cdef double s = t.gate_s
+    cdef double w = s * (z + 1.0)
+    cdef double v = s * (z - 1.0)
+    cdef double gl, gu
+    cdef int k
+    for k in range(order + 1):
+        wl[k] = 0.0
+        wu[k] = 0.0
+        wc[k] = 0.0
+    gl = 1.0
+    gu = 1.0
+    if t.has_l:
+        wl[0] = 0.5 * erfc(w * _SQRT1_2)
+        gl = 0.5 * erfc(-w * _SQRT1_2)
+        _gaussian_jet(w, s, -1.0, order, wl)
+    if t.has_u:
+        wu[0] = 0.5 * erfc(-v * _SQRT1_2)
+        gu = 0.5 * erfc(v * _SQRT1_2)
+        _gaussian_jet(v, s, 1.0, order, wu)
+    if t.has_l and t.has_u:
+        wc[0] = gu - wl[0] if z >= 0.0 else gl - wu[0]
+    elif t.has_u:
+        wc[0] = gu
+    elif t.has_l:
+        wc[0] = gl
+    else:
+        wc[0] = 1.0
+    for k in range(1, order + 1):
+        wc[k] = -wl[k] - wu[k]
+
+
+cdef inline void _tps_mul(
+    const double* a, const double* b, double* out, int n
+) noexcept nogil:
+    """Truncated Taylor product ``out = a b`` (coefficients ``0..n``)."""
+    cdef int k, i
+    cdef double acc
+    for k in range(n + 1):
+        acc = 0.0
+        for i in range(k + 1):
+            acc = acc + a[i] * b[k - i]
+        out[k] = acc
+
+
+cdef inline void _tps_pow(
+    const double* a, double p, double* out, int n
+) noexcept nogil:
+    """Truncated Taylor power ``out = a**p`` for ``a[0] > 0``.
+
+    ``k a_0 out_k = sum_{j=1..k} (p j - (k - j)) a_j out_{k-j}``.
+    """
+    cdef int k, j
+    cdef double acc
+    out[0] = pow(a[0], p)
+    for k in range(1, n + 1):
+        acc = 0.0
+        for j in range(1, k + 1):
+            acc = acc + (p * j - (k - j)) * a[j] * out[k - j]
+        out[k] = acc / (k * a[0])
+
+
+cdef inline double _binom(double q, int k) noexcept nogil:
+    """Generalized binomial coefficient ``q (q - 1) ... (q - k + 1) / k!``."""
+    cdef double out = 1.0
+    cdef int i
+    for i in range(k):
+        out = out * (q - i) / (i + 1)
+    return out
+
+
+cdef void _soft_power_point(
+    double z, double p, int root, int order, double* f
+) noexcept nogil:
+    """``f[k] = d^k/dz^k A(z)**p``, ``A = (1 + z**m)**(1/m) - 1``, ``k <= order``.
+
+    Taylor arithmetic in ``z``.  Below ``|z| = 1`` the identity
+    ``A = z**m / D`` with ``D = sum_{i<m} R**i`` and ``R = (1 + z**m)**(1/m)``
+    gives ``A**p = |z|**(m p) D**(-p)``: the power factor has closed-form
+    Taylor coefficients (no ``0 * inf`` at the origin, where every derivative
+    of order ``<= 4 < m p`` vanishes) and ``D`` is smooth and near ``m``.
+    Above, ``R = |z| (1 + z**-m)**(1/m)`` avoids overflow of ``z**m`` and
+    ``A >= 2**(1/m) - 1`` is bounded away from zero.
+    """
+    cdef int _k
+    cdef double c0[5]
+    cdef double c1[5]
+    cdef double c2[5]
+    cdef double c3[5]
+    cdef double az = fabs(z)
+    cdef double sg = -1.0 if z < 0.0 else 1.0
+    cdef double q, fact
+    cdef int k, n = order
+    for k in range(5):
+        c0[k] = 0.0
+        c1[k] = 0.0
+        c2[k] = 0.0
+        c3[k] = 0.0
+    if az < 1.0:
+        q = root * p
+        # c0: |z0 + d|**q;  c1: 1 + (z0 + d)**m;  R = c1**(1/m).
+        for k in range(n + 1):
+            c0[k] = _binom(q, k) * pow(az, q - k) * (sg if k % 2 == 1 else 1.0)
+        for k in range(min(n, root) + 1):
+            c1[k] = _binom(<double> root, k) * pow(z, <double> (root - k))
+        c1[0] += 1.0
+        _tps_pow(c1, 1.0 / root, c2, n)
+        # D = 1 + R + ... + R**(m-1) by Horner: D = 1 + R (1 + R (...)).
+        for k in range(n + 1):
+            c3[k] = 0.0
+        c3[0] = 1.0
+        for _k in range(root - 1):
+            _tps_mul(c3, c2, c1, n)
+            for k in range(n + 1):
+                c3[k] = c1[k]
+            c3[0] += 1.0
+        _tps_pow(c3, -p, c1, n)
+        _tps_mul(c0, c1, c2, n)
+    else:
+        # c0: (z0 + d)**-m;  R = |z| (1 + c0)**(1/m);  A = R - 1.
+        for k in range(n + 1):
+            c0[k] = _binom(-<double> root, k) * pow(z, <double> (-root - k))
+        c0[0] += 1.0
+        _tps_pow(c0, 1.0 / root, c1, n)
+        c3[0] = az
+        c3[1] = sg
+        _tps_mul(c3, c1, c0, n)
+        c0[0] -= 1.0
+        _tps_pow(c0, p, c2, n)
+    fact = 1.0
+    for k in range(n + 1):
+        if k > 0:
+            fact = fact * k
+        f[k] = fact * c2[k]
 
 
 cdef void _function_point(
     const BasisTable* t,
     int j,
-    double x,
+    double dlower,
+    double dupper,
     double z,
     const double* zp,
     int order,
@@ -592,12 +837,13 @@ cdef void _function_point(
 ) noexcept nogil:
     """``f[0..order]``: ``x`` derivatives of function ``j``.
 
-    ``zp[i] = z**i`` for ``i < _ZP`` (higher monomial powers use ``pow``).
+    ``dlower``/``dupper`` are the point's distances to the finite ends in
+    user units (endpoint logs); ``zp[i] = z**i`` for ``i < _ZP`` (higher
+    monomial powers use ``pow``).
     """
     cdef int k, n
     cdef double h = t.h
-    cdef double dist, inv, lam, base, a, s, z2, dz, ih
-    cdef double v[5]
+    cdef double dist, inv, lam, base, ih
     if t.kind[j] == FN_MONOMIAL:
         n = t.degree[j]
         f[0] = zp[n] if n < _ZP else pow(z, n)
@@ -613,10 +859,10 @@ cdef void _function_point(
         return
     if t.kind[j] == FN_LOG:
         if t.side[j] == SIDE_LOWER:
-            dist = x - t.lower
+            dist = dlower
             inv = -1.0 / dist
         else:
-            dist = t.upper - x
+            dist = dupper
             inv = 1.0 / dist
         f[0] = -log(dist)
         # d^k/dx^k of -log(dist): (k - 1)! inv**k
@@ -626,38 +872,35 @@ cdef void _function_point(
             f[k] = base
         return
     if t.kind[j] == FN_EXP:
+        # Centered at the own gate: exp(lam (z - 1)) or exp(-lam (z + 1)).
         lam = t.rate[j]
         if t.side[j] == SIDE_LOWER:
-            base = exp(-lam * (x - t.location[j]))
+            base = exp(-lam * (z + 1.0))
             lam = -lam
         else:
-            base = exp(lam * (x - t.location[j]))
+            base = exp(lam * (z - 1.0))
         f[0] = base
         for k in range(1, order + 1):
-            base = base * lam
+            base = base * lam / h
             f[k] = base
         return
-    a = 0.5 * t.power[j]
-    dz = t.delta[j] / (h * h)
-    s = z * z + dz
-    z2 = z * z
-    v[0] = pow(s, a)
-    if order == 0:
-        f[0] = v[0]
-        return
-    v[1] = 2.0 * a * z * pow(s, a - 1.0)
-    v[2] = 2.0 * a * pow(s, a - 1.0) + 4.0 * a * (a - 1.0) * z2 * pow(s, a - 2.0)
-    v[3] = (
-        12.0 * a * (a - 1.0) * z * pow(s, a - 2.0)
-        + 8.0 * a * (a - 1.0) * (a - 2.0) * z * z2 * pow(s, a - 3.0)
-    )
-    v[4] = (
-        12.0 * a * (a - 1.0) * pow(s, a - 2.0)
-        + 48.0 * a * (a - 1.0) * (a - 2.0) * z2 * pow(s, a - 3.0)
-        + 16.0 * a * (a - 1.0) * (a - 2.0) * (a - 3.0) * z2 * z2 * pow(s, a - 4.0)
-    )
+    _soft_power_point(z, t.power[j], t.root, order, f)
+    ih = 1.0
+    for k in range(1, order + 1):
+        ih = ih / h
+        f[k] = f[k] * ih
+
+
+cdef inline void _gate_jet(
+    double glow, double gmid, double gup, const double* wl, const double* wu,
+    const double* wc, double ih, int order, double* g
+) noexcept nogil:
+    """``x`` derivatives of one gate ``g_L W_L + kappa W_C + g_U W_U``."""
+    cdef int k
+    cdef double scale = 1.0
     for k in range(order + 1):
-        f[k] = v[k] / pow(h, k)
+        g[k] = (glow * wl[k] + gmid * wc[k] + gup * wu[k]) * scale
+        scale = scale * ih
 
 
 cdef void eval_point(
@@ -667,35 +910,46 @@ cdef void eval_point(
 
     ``fwork`` holds ``5 nf`` doubles.
     """
+    _eval_point(t, x - t.lower, t.upper - x, scaled_z(t, x),
+                (x - t.orth_origin) / t.orth_scale if t.orth_degree else 0.0,
+                order, fwork, out)
+
+
+cdef void eval_point_z(
+    const BasisTable* t, double z, int order, double* fwork, double* out
+) noexcept nogil:
+    """``eval_point`` at the canonical point ``z``, never rounded to user units.
+
+    The endpoint distances are ``h (z - z_L)`` and ``h (z_U - z)``, and the
+    recurrence argument ``((c - origin) + h z) / scale``: on a support a few
+    ulps wide the physical point ``c + h z`` would quantize the density.
+    """
+    _eval_point(t, t.h * (z - t.zlower), t.h * (t.zupper - z), z,
+                ((t.c - t.orth_origin) + t.h * z) / t.orth_scale
+                if t.orth_degree else 0.0,
+                order, fwork, out)
+
+
+cdef void _eval_point(
+    const BasisTable* t, double dlower, double dupper, double z, double argument,
+    int order, double* fwork, double* out
+) noexcept nogil:
+    """``eval_point`` from the point's end distances, ``z`` and recurrence argument."""
     cdef int d = t.d
     cdef int j, k, i, col, term, n
-    cdef double z = scaled_z(t, x)
-    cdef double tl[7]
-    cdef double tu[7]
+    cdef double wl[5]
+    cdef double wu[5]
+    cdef double wc[5]
     cdef double g[5]
     cdef double zp[_ZP]
-    cdef double a1, a2, acc
-    cdef bint lower_side = x < t.mid
-    cdef bint gated, need_l = False, need_u = False
+    cdef double a0, a1, a2, acc, rk, rate = 0.0
+    cdef double ih = 1.0 / t.h
+    cdef bint gated
     cdef int nmax = 0
-    cdef double argument
-    for term in range(t.col_start[d]):
-        if t.term_g1[term] != 0.0:
-            need_l = True
-        if t.term_g2[term] != 0.0:
-            need_u = True
-    if t.has_l and need_l:
-        _tanh_point(t.al * (x - t.xl), t.al, order, tl)
-    else:
-        _flat_point(tl)
-    if t.has_u and need_u:
-        _tanh_point(t.au * (t.xu - x), -t.au, order, tu)
-    else:
-        _flat_point(tu)
+    _gate_point(t, z, order, wl, wu, wc)
     for k in range((order + 1) * d):
         out[k] = 0.0
     if t.orth_degree:
-        argument = (x - t.orth_origin) / t.orth_scale
         for k in range(order + 1):
             fwork[k] = 1.0 if k == 0 else 0.0
         for n in range(t.orth_degree):
@@ -709,23 +963,21 @@ cdef void eval_point(
             if t.orth_column_degree[col] == 0:
                 continue
             for n in range(t.orth_degree + 1):
+                a0 = t.orth_map[3*n*d+col]
                 a1 = t.orth_map[(3*n+1)*d+col]
                 a2 = t.orth_map[(3*n+2)*d+col]
                 if a1 == 0.0 and a2 == 0.0:
-                    acc = t.orth_map[3*n*d+col]
-                    if acc != 0.0:
+                    if a0 != 0.0:
                         for k in range(order + 1):
-                            out[k*d+col] += fwork[5*n+k] * acc / pow(t.orth_scale,k)
+                            out[k*d+col] += fwork[5*n+k] * a0 / pow(t.orth_scale, k)
                     continue
-                if lower_side:
-                    g[0] = (t.orth_map[3*n*d+col] - a1 + a2) + a1 * tl[1] - a2 * tu[2]
-                else:
-                    g[0] = (t.orth_map[3*n*d+col] + a1 - a2) - a1 * tl[2] + a2 * tu[1]
-                for k in range(order):
-                    g[k+1] = a1 * tl[3+k] + a2 * tu[3+k]
+                _gate_jet(a0 - a1 + a2, a0 + a1 + a2, a0 + a1 - a2, wl, wu, wc, ih,
+                          order, g)
                 for k in range(order + 1):
                     for i in range(k + 1):
-                        out[k*d+col] += _comb(k,i) * fwork[5*n+i] / pow(t.orth_scale,i) * g[k-i]
+                        if g[k - i] != 0.0 and fwork[5*n+i] != 0.0:
+                            out[k*d+col] += (_comb(k, i) * fwork[5*n+i]
+                                             / pow(t.orth_scale, i) * g[k-i])
     for j in range(t.nf):
         if t.fn_used[j] and t.kind[j] == FN_MONOMIAL and t.degree[j] > nmax:
             nmax = t.degree[j]
@@ -736,7 +988,7 @@ cdef void eval_point(
         zp[i] = zp[i - 1] * z
     for j in range(t.nf):
         if t.fn_used[j]:
-            _function_point(t, j, x, z, zp, order, &fwork[5 * j])
+            _function_point(t, j, dlower, dupper, z, zp, order, &fwork[5 * j])
     for col in range(d):
         for term in range(t.col_start[col], t.col_start[col + 1]):
             j = t.term_fn[term]
@@ -745,20 +997,32 @@ cdef void eval_point(
             a1 = t.term_g1[term]
             a2 = t.term_g2[term]
             gated = a1 != 0.0 or a2 != 0.0
-            if lower_side:
-                g[0] = t.term_glow[term] + a1 * tl[1] - a2 * tu[2]
-            else:
-                g[0] = t.term_gup[term] - a1 * tl[2] + a2 * tu[1]
-            for k in range(order):
-                g[k + 1] = a1 * tl[3 + k] + a2 * tu[3 + k]
+            if gated:
+                _gate_jet(t.term_glow[term], t.term_gmid[term], t.term_gup[term],
+                          wl, wu, wc, ih, order, g)
+            if t.kind[j] == FN_EXP:
+                rate = (t.rate[j] if t.side[j] == SIDE_UPPER else -t.rate[j]) * ih
             for k in range(order + 1):
-                if gated:
+                if gated and t.kind[j] == FN_EXP and isinf(fwork[5 * j]):
+                    # Overflowed exponential: f^(i) = f r**i exactly, so factor
+                    # f out and keep the sign of the finite Leibniz sum.
+                    acc = 0.0
+                    rk = 1.0
+                    for i in range(k + 1):
+                        acc = acc + _comb(k, i) * rk * g[k - i]
+                        rk = rk * rate
+                    if acc != 0.0:
+                        out[k * d + col] += fwork[5 * j] * acc
+                elif gated:
+                    # An exactly zero factor (an underflowed gate derivative)
+                    # contributes nothing, even beside an overflowed function.
                     acc = 0.0
                     for i in range(k + 1):
-                        acc = acc + _comb(k, i) * fwork[5 * j + i] * g[k - i]
+                        if g[k - i] != 0.0 and fwork[5 * j + i] != 0.0:
+                            acc = acc + _comb(k, i) * fwork[5 * j + i] * g[k - i]
                     out[k * d + col] += acc
                 else:
-                    out[k * d + col] += fwork[5 * j + k] * g[0]
+                    out[k * d + col] += fwork[5 * j + k] * t.term_g0[term]
 
 
 cdef void potential_point(
@@ -774,15 +1038,36 @@ cdef void potential_point(
 
     ``fwork`` holds ``5 nf`` doubles, ``colwork`` ``(order + 1) d``.
     """
-    cdef int d = t.d
+    eval_point(t, x, order, fwork, colwork)
+    _contract(t, theta, order, colwork, q)
+
+
+cdef void potential_point_z(
+    const BasisTable* t,
+    const double* theta,
+    double z,
+    int order,
+    double* fwork,
+    double* colwork,
+    double* q,
+) noexcept nogil:
+    """``potential_point`` at the canonical point ``z`` (``eval_point_z``)."""
+    eval_point_z(t, z, order, fwork, colwork)
+    _contract(t, theta, order, colwork, q)
+
+
+cdef inline void _contract(
+    const BasisTable* t, const double* theta, int order, const double* colwork,
+    double* q
+) noexcept nogil:
+    """``q[k] = sum_c theta_c colwork[k d + c]`` over columns with ``theta_c != 0``."""
     cdef int k, col
     cdef double acc
-    eval_point(t, x, order, fwork, colwork)
     for k in range(order + 1):
         acc = 0.0
-        for col in range(d):
+        for col in range(t.d):
             if theta[col] != 0.0:
-                acc = acc + colwork[k * d + col] * theta[col]
+                acc = acc + colwork[k * t.d + col] * theta[col]
         q[k] = acc
 
 
@@ -790,41 +1075,160 @@ cdef void potential_point(
 # cell enclosures
 # --------------------------------------------------------------------------
 
-cdef inline void _tanh_cell(Iv u, double c, int order, Iv* tv) noexcept nogil:
-    """``tv = [t, p, m, t', ..., t^(order)]`` enclosures over ``u``."""
-    cdef Iv t, p, m, w, t2
-    t = _tanh_iv(u)
-    p = _p_iv(u)
-    m = _m_iv(u)
-    t = _iv(npmax(t.lo, -1.0), npmin(t.hi, 1.0))
-    p = _iv(npmax(p.lo, 0.0), npmin(p.hi, 2.0))
-    m = _iv(npmax(m.lo, 0.0), npmin(m.hi, 2.0))
-    w = _mul(p, m)
-    w = _iv(npmax(w.lo, 0.0), npmin(w.hi, 1.0))
-    t2 = _ipow(t, 2)
-    tv[0] = t
-    tv[1] = p
-    tv[2] = m
+cdef inline Iv _whole() noexcept nogil:
+    return _iv(-INFINITY, INFINITY)
+
+
+cdef inline Iv _phi_iv(Iv w) noexcept nogil:
+    """Enclosure of the standard normal density over ``w``."""
+    cdef double near, far
+    if w.lo <= 0.0 <= w.hi:
+        near = 0.0
+    else:
+        near = npmin(fabs(w.lo), fabs(w.hi))
+    far = npmax(fabs(w.lo), fabs(w.hi))
+    return _widen(_INV_SQRT_2PI * exp(-0.5 * far * far),
+                  _INV_SQRT_2PI * exp(-0.5 * near * near), _TRANS)
+
+
+cdef inline Iv _ncdf_iv(Iv w) noexcept nogil:
+    """Enclosure of ``Phi(w) = erfc(-w / sqrt 2) / 2`` (increasing) over ``w``."""
+    cdef Iv r = _widen(
+        0.5 * erfc(-w.lo * _SQRT1_2), 0.5 * erfc(-w.hi * _SQRT1_2), _TRANS
+    )
+    return _iv(npmax(r.lo, 0.0), npmin(r.hi, 1.0))
+
+
+cdef inline void _gaussian_cell(
+    Iv w, double s, double sign, int order, Iv* out
+) noexcept nogil:
+    """``out[k]`` encloses ``sign s**k phi^(k-1)(w)`` for ``1 <= k <= order``."""
+    cdef Iv phi = _phi_iv(w)
+    cdef Iv he
+    cdef double sk = sign
+    cdef int k
+    for k in range(1, order + 1):
+        sk = sk * s
+        if k == 1:
+            he = _iv(1.0, 1.0)
+        elif k == 2:
+            he = _neg(w)
+        elif k == 3:
+            he = _add_const(_ipow(w, 2), -1.0)
+        else:
+            he = _neg(_mul(w, _add_const(_ipow(w, 2), -3.0)))
+        out[k] = _scale(sk, _mul(he, phi))
+
+
+cdef inline void _gate_cell(
+    const BasisTable* t, Iv z, int order, Iv* wl, Iv* wu, Iv* wc
+) noexcept nogil:
+    """Enclosures of the partition weights and their ``z`` derivatives."""
+    cdef double s = t.gate_s
+    cdef Iv w = _scale(s, _add_const(z, 1.0))
+    cdef Iv v = _scale(s, _add_const(z, -1.0))
+    cdef Iv gl, gu
+    cdef int k
+    for k in range(order + 1):
+        wl[k] = _iv(0.0, 0.0)
+        wu[k] = _iv(0.0, 0.0)
+        wc[k] = _iv(0.0, 0.0)
+    gl = _iv(1.0, 1.0)
+    gu = _iv(1.0, 1.0)
+    if t.has_l:
+        wl[0] = _ncdf_iv(_neg(w))
+        gl = _ncdf_iv(w)
+        _gaussian_cell(w, s, -1.0, order, wl)
+    if t.has_u:
+        wu[0] = _ncdf_iv(v)
+        gu = _ncdf_iv(_neg(v))
+        _gaussian_cell(v, s, 1.0, order, wu)
+    if t.has_l and t.has_u:
+        wc[0] = _add(gu, _neg(wl[0])) if z.lo + z.hi >= 0.0 else _add(gl, _neg(wu[0]))
+        wc[0] = _iv(npmax(wc[0].lo, 0.0), npmin(wc[0].hi, 1.0))
+    elif t.has_u:
+        wc[0] = gu
+    elif t.has_l:
+        wc[0] = gl
+    else:
+        wc[0] = _iv(1.0, 1.0)
+    for k in range(1, order + 1):
+        wc[k] = _neg(_add(wl[k], wu[k]))
+
+
+cdef inline double _soft_r(double m, int root) noexcept nogil:
+    """``R(m) = (1 + m**root)**(1/root)`` for ``m >= 0`` without overflow."""
+    if m <= 1.0:
+        return pow(1.0 + pow(m, root), 1.0 / root)
+    return m * pow(1.0 + pow(m, -root), 1.0 / root)
+
+
+cdef void _soft_power_cell(Iv z, double p, int root, int order, Iv* f) noexcept nogil:
+    """Enclosures of ``d^k/dz^k A**p`` over ``z`` for ``k <= order``.
+
+    ``A**p = |z|**(m p) D**-p``, ``(A**p)' = sgn(z) p |z|**(m p - 1) D**(1-p)
+    R**(1-m)`` and ``(A**p)'' = p (p - 1) |z|**(m p - 2) D**(2-p) R**(2-2m)
+    + p (m - 1) |z|**(m p - 2) D**(1-p) R**(1-2m)`` follow from ``A = z**m / D``,
+    ``A' = sgn(z) |z|**(m-1) R**(1-m)`` and ``A'' = (m-1) |z|**(m-2)
+    R**(1-2m)``; every factor is a positive power of a positive monotone
+    quantity, so the enclosures are tight and finite at the origin.  Orders
+    three and four are the whole line.
+
+    For ``|z| >= 1`` the bounded forms ``A' = sgn(z) u**(m-1)`` and
+    ``A'' = (m - 1) u**(m-2) R**(-m-1)`` with ``u = |z| / R`` in ``(0, 1]`` and
+    ``A = R - 1 >= 2**(1/m) - 1`` avoid overflow of ``|z|**(m p)``.
+    """
+    cdef int _k
+    cdef double lo = npmin(fabs(z.lo), fabs(z.hi))
+    cdef double hi = npmax(fabs(z.lo), fabs(z.hi))
+    cdef double q = root * p
+    cdef Iv m, r, dd_, t1, t2, a, u
+    cdef int k
+    if z.lo <= 0.0 <= z.hi:
+        lo = 0.0
+    m = _iv(lo, hi)
+    r = _widen(_soft_r(lo, root), _soft_r(hi, root), _TRANS)
+    if lo >= 1.0:
+        a = _add_const(r, -1.0)
+        a = _iv(npmax(a.lo, 0.0), a.hi)
+        u = _widen(pow(1.0 + pow(lo, -root), -1.0 / root),
+                   pow(1.0 + pow(hi, -root), -1.0 / root), _TRANS)
+        u = _iv(u.lo, npmin(u.hi, 1.0))
+        f[0] = _fpow_positive(a, p)
+        if order >= 1:
+            t1 = _scale(p, _mul(_fpow_positive(a, p - 1.0), _ipow(u, root - 1)))
+            f[1] = t1 if z.lo >= 0.0 else _neg(t1)
+        if order >= 2:
+            t1 = _mul(_fpow_positive(a, p - 2.0), _ipow(u, 2 * root - 2))
+            t2 = _mul(_mul(_fpow_positive(a, p - 1.0), _ipow(u, root - 2)),
+                      _fpow_positive(r, -1.0 - root))
+            f[2] = _add(_scale(p * (p - 1.0), t1), _scale(p * (root - 1.0), t2))
+        for k in range(3, order + 1):
+            f[k] = _whole()
+        return
+    # D = (R**m - 1) / A is 1 + R + ... + R**(m-1), increasing in |z|.
+    dd_ = _iv(1.0, 1.0)
+    for _k in range(root - 1):
+        dd_ = _add_const(_mul(dd_, r), 1.0)
+    f[0] = _mul(_fpow_positive_zero(m, q), _fpow_positive(dd_, -p))
     if order >= 1:
-        tv[3] = _scale(c, w)
+        t1 = _mul(_mul(_fpow_positive_zero(m, q - 1.0), _fpow_positive(dd_, 1.0 - p)),
+                  _fpow_positive(r, 1.0 - root))
+        t1 = _scale(p, t1)
+        if z.lo >= 0.0:
+            f[1] = t1
+        elif z.hi <= 0.0:
+            f[1] = _neg(t1)
+        else:
+            f[1] = _iv(-t1.hi, t1.hi)
     if order >= 2:
-        tv[4] = _scale(-2.0 * pow(c, 2), _mul(t, w))
-    if order >= 3:
-        tv[5] = _scale(-2.0 * pow(c, 3), _mul(w, _add_const(_scale(-3.0, t2), 1.0)))
-    if order >= 4:
-        tv[6] = _scale(
-            8.0 * pow(c, 4), _mul(_mul(t, w), _add_const(_scale(-3.0, t2), 2.0))
-        )
-
-
-cdef inline void _flat_cell(Iv* tv) noexcept nogil:
-    tv[0] = _iv(1.0, 1.0)
-    tv[1] = _iv(2.0, 2.0)
-    tv[2] = _iv(0.0, 0.0)
-    tv[3] = _iv(0.0, 0.0)
-    tv[4] = _iv(0.0, 0.0)
-    tv[5] = _iv(0.0, 0.0)
-    tv[6] = _iv(0.0, 0.0)
+        t1 = _mul(_mul(_fpow_positive_zero(m, q - 2.0), _fpow_positive(dd_, 2.0 - p)),
+                  _fpow_positive(r, 2.0 - 2.0 * root))
+        t2 = _mul(_mul(_fpow_positive_zero(m, q - 2.0), _fpow_positive(dd_, 1.0 - p)),
+                  _fpow_positive(r, 1.0 - 2.0 * root))
+        f[2] = _add(_scale(p * (p - 1.0), t1), _scale(p * (root - 1.0), t2))
+    for k in range(3, order + 1):
+        f[k] = _whole()
 
 
 cdef void _function_cell(
@@ -833,9 +1237,9 @@ cdef void _function_cell(
     """Enclosures ``f[0..order]`` of function ``j`` over the cell ``x``."""
     cdef int k, n
     cdef double h = t.h
-    cdef double lam, rate, a, dz
+    cdef double lam, rate
     cdef double signs[5]
-    cdef Iv d, arg, base, z2, z3, z4, s
+    cdef Iv d, arg, base
     if t.kind[j] == FN_MONOMIAL:
         n = t.degree[j]
         for k in range(order + 1):
@@ -869,68 +1273,43 @@ cdef void _function_cell(
     if t.kind[j] == FN_EXP:
         lam = t.rate[j]
         if t.side[j] == SIDE_LOWER:
-            arg = _scale(-lam, _add_const(x, -t.location[j]))
-            rate = -lam
+            arg = _scale(-lam, _add_const(z, 1.0))
+            rate = -lam / h
         else:
-            arg = _scale(lam, _add_const(x, -t.location[j]))
-            rate = lam
+            arg = _scale(lam, _add_const(z, -1.0))
+            rate = lam / h
         base = _exp_iv(arg)
         for k in range(order + 1):
             f[k] = _scale(pow(rate, k), base)
         return
-    a = 0.5 * t.power[j]
-    dz = t.delta[j] / (h * h)
-    z2 = _ipow(z, 2)
-    s = _add_const(z2, dz)
-    s = _iv(npmax(s.lo, dz), s.hi)  # s >= dz > 0 exactly
-    f[0] = _fpow_positive(s, a)
-    if order >= 1:
-        f[1] = _scale(2.0 * a, _mul(z, _fpow_positive(s, a - 1.0)))
-    if order >= 2:
-        f[2] = _add(
-            _scale(2.0 * a, _fpow_positive(s, a - 1.0)),
-            _scale(4.0 * a * (a - 1.0), _mul(z2, _fpow_positive(s, a - 2.0))),
-        )
-    if order >= 3:
-        z3 = _ipow(z, 3)
-        f[3] = _add(
-            _scale(12.0 * a * (a - 1.0), _mul(z, _fpow_positive(s, a - 2.0))),
-            _scale(
-                8.0 * a * (a - 1.0) * (a - 2.0), _mul(z3, _fpow_positive(s, a - 3.0))
-            ),
-        )
-    if order >= 4:
-        z4 = _ipow(z, 4)
-        f[4] = _add(
-            _add(
-                _scale(12.0 * a * (a - 1.0), _fpow_positive(s, a - 2.0)),
-                _scale(
-                    48.0 * a * (a - 1.0) * (a - 2.0),
-                    _mul(z2, _fpow_positive(s, a - 3.0)),
-                ),
-            ),
-            _scale(
-                16.0 * a * (a - 1.0) * (a - 2.0) * (a - 3.0),
-                _mul(z4, _fpow_positive(s, a - 4.0)),
-            ),
-        )
-    for k in range(order + 1):
+    _soft_power_cell(z, t.power[j], t.root, order, f)
+    for k in range(1, order + 1):
         f[k] = _scale(1.0 / pow(h, k), f[k])
 
 
 cdef inline void _cell_setup(
-    const BasisTable* t, double lo, double hi, int top, Iv* x, Iv* z, Iv* tl, Iv* tu
+    const BasisTable* t, double lo, double hi, int top, Iv* x, Iv* z, Iv* wl, Iv* wu,
+    Iv* wc
 ) noexcept nogil:
+    """Cell ``x``, its ``z`` image and the partition weights in ``x`` derivatives."""
+    cdef int k
+    cdef double ih = 1.0 / t.h
+    cdef double scale = 1.0
     x[0] = _iv(lo, hi)
     z[0] = _scale(1.0 / t.h, _add_const(x[0], -t.c))
-    if t.has_l:
-        _tanh_cell(_scale(t.al, _add_const(x[0], -t.xl)), t.al, top, tl)
-    else:
-        _flat_cell(tl)
-    if t.has_u:
-        _tanh_cell(_scale(-t.au, _add_const(x[0], -t.xu)), -t.au, top, tu)
-    else:
-        _flat_cell(tu)
+    _gate_cell(t, z[0], top, wl, wu, wc)
+    for k in range(1, top + 1):
+        scale = scale * ih
+        wl[k] = _scale(scale, wl[k])
+        wu[k] = _scale(scale, wu[k])
+        wc[k] = _scale(scale, wc[k])
+
+
+cdef inline Iv _gate_cell_jet(
+    Iv glow, Iv gmid, Iv gup, const Iv* wl, const Iv* wu, const Iv* wc, int k
+) noexcept nogil:
+    """Enclosure of the ``k``-th derivative of ``g_L W_L + kappa W_C + g_U W_U``."""
+    return _add(_add(_mul(glow, wl[k]), _mul(gmid, wc[k])), _mul(gup, wu[k]))
 
 
 cdef void basis_enclosure_cell(
@@ -949,16 +1328,16 @@ cdef void basis_enclosure_cell(
     """
     cdef int d = t.d
     cdef int j, k, i, col, term
-    cdef Iv x, z, total, low, up
-    cdef Iv tl[7]
-    cdef Iv tu[7]
+    cdef Iv x, z, total
+    cdef Iv wl[5]
+    cdef Iv wu[5]
+    cdef Iv wc[5]
     cdef Iv g[5]
     cdef Iv acc[5]
     cdef bint have[5]
     cdef double a1, a2
     cdef bint gated
-    cdef bint lower_side = 0.5 * (lo + hi) < t.mid
-    _cell_setup(t, lo, hi, top, &x, &z, tl, tu)
+    _cell_setup(t, lo, hi, top, &x, &z, wl, wu, wc)
     for j in range(t.nf):
         if t.fn_used[j]:
             _function_cell(t, j, x, z, top, &fwork[5 * j])
@@ -975,13 +1354,12 @@ cdef void basis_enclosure_cell(
             a2 = t.term_g2[term]
             gated = a1 != 0.0 or a2 != 0.0
             if gated:
-                low = _add_const(_add(_scale(a1, tl[1]), _scale(-a2, tu[2])),
-                                 t.term_glow[term])
-                up = _add_const(_add(_scale(-a1, tl[2]), _scale(a2, tu[1])),
-                                t.term_gup[term])
-                g[0] = low if lower_side else up
-                for k in range(top):
-                    g[k + 1] = _add(_scale(a1, tl[3 + k]), _scale(a2, tu[3 + k]))
+                for k in range(top + 1):
+                    g[k] = _gate_cell_jet(
+                        _iv(t.term_glow[term], t.term_glow[term]),
+                        _iv(t.term_gmid[term], t.term_gmid[term]),
+                        _iv(t.term_gup[term], t.term_gup[term]), wl, wu, wc, k,
+                    )
             for k in range(top + 1):
                 if gated:
                     total = _scale(_comb(k, 0), _mul(fwork[5 * j], g[k]))
@@ -1002,12 +1380,17 @@ cdef void basis_enclosure_cell(
 
 cdef Py_ssize_t prep_size(const BasisTable* t) noexcept nogil:
     """Doubles needed by ``prepare_potential``."""
-    return 10 * t.nf + (5 * t.nf + 1) // 2 + 1
+    return 12 * t.nf + (5 * t.nf + 1) // 2 + 1 + 6 * (t.orth_degree + 1)
 
 
 cdef inline Iv _limit(const double* row, const double* absrow, const double* theta,
-                      int d) noexcept nogil:
-    """Enclosure of one gate-limit functional ``row . theta`` (``_limit_slot``)."""
+                      int d, const int* skip_col) noexcept nogil:
+    """Enclosure of one gate-limit functional ``row . theta`` (``_limit_slot``).
+
+    Columns with ``skip_col[col]`` set (recurrence columns of a monomial
+    function, enclosed in their own form) are left out; ``skip_col`` may be
+    NULL.
+    """
     cdef double v = 0.0
     cdef double a = 0.0
     cdef double b = 0.0
@@ -1015,6 +1398,8 @@ cdef inline Iv _limit(const double* row, const double* absrow, const double* the
     cdef bint any_nz = False
     cdef int col
     for col in range(d):
+        if skip_col != NULL and skip_col[col]:
+            continue
         part = row[col] * theta[col]
         if part != 0.0:
             any_nz = True
@@ -1025,6 +1410,147 @@ cdef inline Iv _limit(const double* row, const double* absrow, const double* the
         return _iv(0.0, 0.0)
     cdef double e = (d + 2) * _U * a + 2.0 * _U * b
     return _iv(_next_down(v - e), _next_up(v + e))
+
+
+cdef void _prepare_orth(
+    const BasisTable* t, const double* theta, PotentialPrep* p
+) noexcept nogil:
+    """Recurrence coefficients of q per gate-limit combination, with bounds.
+
+    ``orth_beta[L (n + 1) + n']`` encloses ``sum_c m_L[n', c] theta_c`` over the
+    recurrence columns, where ``m_L`` combines the slot maps as the gate
+    limits do (low ``a0 - a1 + a2``, mid ``a0 + a1 + a2``, up ``a0 + a1 -
+    a2``); the bound covers the rounded map entries and the summation.
+    """
+    cdef int d = t.d, N = t.orth_degree, n, col, L
+    cdef double a0, a1, a2, m, v, acc, gated_mag
+    cdef double sg1[3]
+    cdef double sg2[3]
+    sg1[0] = -1.0
+    sg1[1] = 1.0
+    sg1[2] = 1.0
+    sg2[0] = 1.0
+    sg2[1] = 1.0
+    sg2[2] = -1.0
+    gated_mag = 0.0
+    for L in range(3):
+        for n in range(N + 1):
+            v = 0.0
+            acc = 0.0
+            for col in range(d):
+                if t.orth_column_degree[col] == 0 or theta[col] == 0.0:
+                    continue
+                a0 = t.orth_map[3 * n * d + col]
+                a1 = t.orth_map[(3 * n + 1) * d + col]
+                a2 = t.orth_map[(3 * n + 2) * d + col]
+                if L == 0:
+                    gated_mag += fabs(a1 * theta[col]) + fabs(a2 * theta[col])
+                m = a0 + sg1[L] * a1 + sg2[L] * a2
+                v += m * theta[col]
+                acc += (fabs(a0) + fabs(a1) + fabs(a2)) * fabs(theta[col])
+            if acc != 0.0:
+                p.orth_on = 1
+                acc = (d + 4) * 2.0 * _U * acc
+                p.orth_beta[L * (N + 1) + n] = _iv(_next_down(v - acc), _next_up(v + acc))
+            else:
+                p.orth_beta[L * (N + 1) + n] = _iv(0.0, 0.0)
+    p.orth_gated = gated_mag != 0.0
+    if p.orth_on:
+        p.all_zero = 0
+
+
+cdef enum:
+    _OMAX = 64
+
+
+cdef void _orth_cell(
+    const BasisTable* t, const PotentialPrep* p, double lo, double hi, int top,
+    const Iv* wl, const Iv* wu, const Iv* wc, Iv* acc, bint* have
+) noexcept nogil:
+    """Add the recurrence-coordinate polynomial part of ``q^(k)`` over a cell.
+
+    Each limit combination's polynomial is expanded in Taylor form about the
+    cell midpoint ``u_m`` (``u = (x - origin) / scale``): its exact jets come
+    from the three-term recurrence on the point ``u_m``, and the remainder
+    over ``|u - u_m| <= r`` is bounded by the jets' magnitudes, so no
+    monomial cancellation and no interval recurrence over a wide ``u``
+    enters.  Gated parts combine with the partition weights by Leibniz.
+    """
+    cdef int N = t.orth_degree, n, k, j, L, i, nL
+    cdef double xm = 0.5 * lo + 0.5 * hi
+    cdef double r = 0.5 * hi - 0.5 * lo
+    cdef double sc = t.orth_scale
+    cdef double ru, fact, tail, mag, pw
+    cdef Iv um, a, b, c, term
+    cdef Iv prev[_OMAX + 1]
+    cdef Iv cur[_OMAX + 1]
+    cdef Iv nxt[_OMAX + 1]
+    cdef Iv J[3][_OMAX + 1]
+    cdef Iv poly[3][5]
+    cdef Iv total
+    um = _scale(1.0 / sc, _add_const(_iv(xm, xm), -t.orth_origin))
+    um = _widen(um.lo, um.hi, _ARITH)
+    ru = _next_up(_next_up(r / fabs(sc)) * (1.0 + 4.0 * _U))
+    nL = 3 if p.orth_gated else 1
+    for L in range(3):
+        for k in range(N + 1):
+            J[L][k] = _iv(0.0, 0.0)
+    # Jets P_n^(k)(u_m) by the recurrence, accumulated into each combination.
+    for k in range(N + 1):
+        prev[k] = _iv(0.0, 0.0)
+        cur[k] = _iv(0.0, 0.0)
+    cur[0] = _iv(1.0, 1.0)
+    for n in range(N + 1):
+        for L in range(nL):
+            b = p.orth_beta[(1 if nL == 1 else L) * (N + 1) + n]
+            if _zero(b):
+                continue
+            for k in range(n + 1):
+                J[L][k] = _add(J[L][k], _mul(b, cur[k]))
+        if n == N:
+            break
+        a = _iv(t.orth_recurrence[3 * n], t.orth_recurrence[3 * n])
+        b = _iv(t.orth_recurrence[3 * n + 1], t.orth_recurrence[3 * n + 1])
+        c = _iv(t.orth_recurrence[3 * n + 2], t.orth_recurrence[3 * n + 2])
+        for k in range(n + 2):
+            term = _mul(_add(_mul(a, um), b), cur[k]) if k <= n else _iv(0.0, 0.0)
+            if k >= 1:
+                term = _add(term, _scale(<double> k, _mul(a, cur[k - 1])))
+            if n >= 1 and k <= n - 1:
+                term = _add(term, _scale(-1.0, _mul(c, prev[k])))
+            nxt[k] = term
+        for k in range(n + 2):
+            prev[k] = cur[k]
+            cur[k] = nxt[k]
+    # Taylor enclosure of each x-derivative over the cell.
+    for L in range(nL):
+        for k in range(top + 1):
+            if k > N:
+                poly[L][k] = _iv(0.0, 0.0)
+                continue
+            tail = 0.0
+            fact = 1.0
+            pw = 1.0
+            for j in range(k + 1, N + 1):
+                fact = fact * (j - k)
+                pw = pw * ru
+                mag = npmax(fabs(J[L][j].lo), fabs(J[L][j].hi))
+                tail = tail + mag * pw / fact
+            tail = _next_up(tail * (1.0 + 4.0 * (N + 2) * _U))
+            total = _iv(_next_down(J[L][k].lo - tail), _next_up(J[L][k].hi + tail))
+            poly[L][k] = _scale(1.0 / pow(sc, k), total)
+    for k in range(top + 1):
+        if nL == 1:
+            total = poly[0][k]
+        else:
+            # low, mid, up combinations on W_L, W_C, W_U.
+            total = _iv(0.0, 0.0)
+            for i in range(k + 1):
+                total = _add(total, _scale(_comb(k, i), _add(_add(
+                    _mul(poly[0][i], wl[k - i]), _mul(poly[1][i], wc[k - i])),
+                    _mul(poly[2][i], wu[k - i]))))
+        acc[k] = _add(acc[k], total) if have[0] else total
+    have[0] = True
 
 
 cdef void prepare_potential(
@@ -1042,19 +1568,27 @@ cdef void prepare_potential(
     cdef int s, col, j
     cdef double full, acc, term, err
     cdef bint any_nz
+    cdef const int* skip_col
     p.theta = theta
     p.slot = <Iv*> work
     p.k_low = <Iv*> (work + 6 * nf)
-    p.k_up = <Iv*> (work + 8 * nf)
-    p.slot_zero = <int*> (work + 10 * nf)
+    p.k_mid = <Iv*> (work + 8 * nf)
+    p.k_up = <Iv*> (work + 10 * nf)
+    p.slot_zero = <int*> (work + 12 * nf)
     p.skip = p.slot_zero + 3 * nf
     p.gated = p.skip + nf
+    p.orth_beta = <Iv*> (work + 12 * nf + (5 * nf + 1) // 2 + 1)
+    p.orth_on = 0
+    p.orth_gated = 0
     p.all_zero = 1
     for s in range(3 * nf):
         full = 0.0
         acc = 0.0
         any_nz = False
         for col in range(d):
+            if (t.orth_degree and t.orth_column_degree[col] > 0
+                    and t.kind[s // 3] == FN_MONOMIAL):
+                continue        # enclosed in its recurrence form instead
             term = t.cmap[s * d + col] * theta[col]
             if term != 0.0:
                 any_nz = True
@@ -1073,8 +1607,16 @@ cdef void prepare_potential(
         )
         p.gated[j] = not (p.slot_zero[3 * j + 1] and p.slot_zero[3 * j + 2])
         if p.gated[j]:
-            p.k_low[j] = _limit(&t.lim_low[j * d], &t.lim_low_abs[j * d], theta, d)
-            p.k_up[j] = _limit(&t.lim_up[j * d], &t.lim_up_abs[j * d], theta, d)
+            skip_col = (t.orth_column_degree
+                        if t.orth_degree and t.kind[j] == FN_MONOMIAL else NULL)
+            p.k_low[j] = _limit(&t.lim_low[j * d], &t.lim_low_abs[j * d], theta, d,
+                                skip_col)
+            p.k_mid[j] = _limit(&t.lim_mid[j * d], &t.lim_mid_abs[j * d], theta, d,
+                                skip_col)
+            p.k_up[j] = _limit(&t.lim_up[j * d], &t.lim_up_abs[j * d], theta, d,
+                               skip_col)
+    if t.orth_degree:
+        _prepare_orth(t, theta, p)
 
 
 cdef void potential_enclosure_cell(
@@ -1089,42 +1631,36 @@ cdef void potential_enclosure_cell(
     """``out[k]`` encloses ``q^(k)`` over ``[lo, hi]``, ``k <= top``.
 
     ``q`` is enclosed function by function through ``full = M theta``, one
-    combined gate per function in the lower/upper forms, so coefficients that
+    combined gate per function in the partition form, so coefficients that
     cancel across columns cancel before any interval product
     (``basis_interval._potential_enclosure``).  ``fwork`` holds ``5 nf``
     intervals.
     """
     cdef int j, k, i
-    cdef Iv x, z, total, low, up, ca, cb, cc
-    cdef Iv tl[7]
-    cdef Iv tu[7]
+    cdef Iv x, z, total, ca
+    cdef Iv wl[5]
+    cdef Iv wu[5]
+    cdef Iv wc[5]
     cdef Iv g[5]
     cdef Iv acc[5]
     cdef bint have = False
-    cdef bint lower_side
     cdef Iv* f
     cdef Iv poly
     if p.all_zero:
         for k in range(top + 1):
             out[k] = _iv(0.0, 0.0)
         return
-    lower_side = 0.5 * (lo + hi) < t.mid
     acc[2] = _iv(0.0, 0.0)
-    _cell_setup(t, lo, hi, top, &x, &z, tl, tu)
+    _cell_setup(t, lo, hi, top, &x, &z, wl, wu, wc)
     for j in range(t.nf):
         if p.skip[j]:
             continue
         f = &fwork[5 * j]
         _function_cell(t, j, x, z, top, f)
         ca = p.slot[3 * j]
-        cb = p.slot[3 * j + 1]
-        cc = p.slot[3 * j + 2]
         if p.gated[j]:
-            low = _add(_add(p.k_low[j], _mul(cb, tl[1])), _neg(_mul(cc, tu[2])))
-            up = _add(_add(p.k_up[j], _neg(_mul(cb, tl[2]))), _mul(cc, tu[1]))
-            g[0] = low if lower_side else up
-            for k in range(top):
-                g[k + 1] = _add(_mul(cb, tl[3 + k]), _mul(cc, tu[3 + k]))
+            for k in range(top + 1):
+                g[k] = _gate_cell_jet(p.k_low[j], p.k_mid[j], p.k_up[j], wl, wu, wc, k)
         for k in range(top + 1):
             if (t.polynomial_point and lo == hi and top == 2 and k == 2
                     and t.kind[j] == FN_MONOMIAL and not p.gated[j]):
@@ -1137,6 +1673,8 @@ cdef void potential_enclosure_cell(
                 total = _mul(f[k], ca)
             acc[k] = _add(acc[k], total) if have else total
         have = True
+    if p.orth_on:
+        _orth_cell(t, p, lo, hi, top, wl, wu, wc, acc, &have)
     if t.polynomial_point and lo == hi and top == 2:
         poly = _polynomial_curvature_point(t, p, lo)
         if poly.lo != 0.0 or poly.hi != 0.0:
@@ -1158,7 +1696,7 @@ cdef double endpoint_exclusion(
     double* prepwork,
     Iv* ivwork,
 ) noexcept nogil:
-    """Width of the neighbourhood of a finite endpoint where ``q'' >= threshold``.
+    """Width of the neighborhood of a finite endpoint where ``q'' >= threshold``.
 
     Only an endpoint with an enabled logarithm whose amplitude ``gamma`` is
     positive is excluded (``basis_tails._endpoint_exclusion``).  ``rest``
@@ -1195,11 +1733,1249 @@ cdef double endpoint_exclusion(
 
 
 # --------------------------------------------------------------------------
+# structured scaled curvature
+# --------------------------------------------------------------------------
+#
+# Every curvature atom is ``coef * f(z) * W(z)``: ``f`` a monomial ``z**n``, a
+# soft power ``A**p``, an exponential ``exp(lam (dir z - 1))``, or an endpoint
+# log ``-log|z - e|`` (``q'' = coef / (z - e)**2``), and ``W`` one of the gates
+# ``1, G_L, G_U, W_L, W_U, W_C``.  ``q''`` expands by the Leibniz rule into
+# signed pieces, each a product of single-signed factor-jet terms held in
+# structured log form
+#
+#     log|piece| = -k (s**2 / 2) z**2 + a1 z + rem      (k in {0, 1})
+#
+# with ``a1`` and ``rem`` in double-double, so no piece overflows or
+# underflows, Gaussian, exponential and algebraic magnitudes compare exactly,
+# and huge exponents keep full relative accuracy.  Per point the kernel
+# returns ``H = q'' / ||pieces||_2`` (bounded, smooth, sign exact), an error
+# bound ``err_h`` at the backward-stable level and the exact scale
+# ``log M = -k (s**2/2) z**2 + a1 z + rem + log ||pieces|| / M_ref``.  A fast
+# path (``1e-30 <= |z| <= 1e30``) carries each factor as one structured value
+# times double ratios ``f'/f`` and ``f''/f`` (one ``exp`` per atom); the log
+# path handles every other point.  Both give the same pieces.
+
+cdef double _DD_EPS = 1.1102230246251565e-16
+cdef double _SKIP_LOG = -60.0       # pieces below e**-60 of the reference are dropped
+cdef double _FAST_ZMIN = 1e-30
+cdef double _FAST_ZMAX = 1e30
+cdef double _LN2_HI = 6.93147180369123816490e-01
+cdef double _LN2_LO = 1.90821492927058770002e-10
+
+cdef enum:
+    _MAXP_PER_ATOM = 14     # Leibniz pieces of one atom (6 orders x <= 2 terms)
+    _XPOLY = 0
+    _XSOFT = 1
+    _XEXP = 2
+    _XLOG = 3
+
+
+cdef struct dd:
+    double hi
+    double lo
+
+
+cdef inline dd _dd(double hi, double lo) noexcept nogil:
+    cdef dd r
+    r.hi = hi
+    r.lo = lo
+    return r
+
+
+cdef dd _DD0 = _dd(0.0, 0.0)
+cdef dd _LN2_DD = _dd(0.6931471805599453, 2.3190468138462996e-17)
+cdef dd _HALF_LOG_2PI = _dd(0.9189385332046728, -3.8782941580672414e-17)
+
+
+cdef inline dd _two_sum(double a, double b) noexcept nogil:
+    cdef double s = a + b
+    cdef double bb = s - a
+    return _dd(s, (a - (s - bb)) + (b - bb))
+
+
+cdef inline dd _quick_two_sum(double a, double b) noexcept nogil:
+    cdef double s = a + b
+    return _dd(s, b - (s - a))
+
+
+cdef inline dd _two_prod(double a, double b) noexcept nogil:
+    cdef double p = a * b
+    return _dd(p, fma(a, b, -p))
+
+
+cdef inline dd _dd_neg(dd a) noexcept nogil:
+    return _dd(-a.hi, -a.lo)
+
+
+cdef inline dd _dd_add(dd a, dd b) noexcept nogil:
+    cdef dd s = _two_sum(a.hi, b.hi)
+    cdef dd t = _two_sum(a.lo, b.lo)
+    s.lo += t.hi
+    s = _quick_two_sum(s.hi, s.lo)
+    s.lo += t.lo
+    return _quick_two_sum(s.hi, s.lo)
+
+
+cdef inline dd _dd_add_d(dd a, double b) noexcept nogil:
+    cdef dd s = _two_sum(a.hi, b)
+    s.lo += a.lo
+    return _quick_two_sum(s.hi, s.lo)
+
+
+cdef inline dd _dd_mul_d(dd a, double b) noexcept nogil:
+    cdef dd p = _two_prod(a.hi, b)
+    p.lo += a.lo * b
+    return _quick_two_sum(p.hi, p.lo)
+
+
+cdef inline dd _dd_mul(dd a, dd b) noexcept nogil:
+    cdef dd p = _two_prod(a.hi, b.hi)
+    p.lo += a.hi * b.lo + a.lo * b.hi
+    return _quick_two_sum(p.hi, p.lo)
+
+
+cdef inline dd _log_dd(double x) noexcept nogil:
+    """``log(x)`` for finite ``x > 0`` to about one ulp absolute accuracy."""
+    cdef int e
+    cdef double f = frexp(x, &e)
+    cdef double lf
+    cdef dd r
+    if f < _SQRT1_2:
+        f *= 2.0
+        e -= 1
+    lf = log1p(f - 1.0)                 # f - 1 is exact (Sterbenz)
+    r = _two_sum(<double> e * _LN2_HI, lf)
+    r.lo += <double> e * _LN2_LO
+    return _quick_two_sum(r.hi, r.lo)
+
+
+cdef inline dd _log_of_dd(dd x) noexcept nogil:
+    return _dd_add_d(_log_dd(x.hi), x.lo / x.hi)
+
+
+cdef double _erfcx_pos(double x) noexcept nogil:
+    """``exp(x**2) erfc(x)`` for ``x >= 0`` to a few ulp."""
+    cdef dd x2
+    cdef double t, total, inv
+    cdef int k
+    if x < 25.0:
+        x2 = _two_prod(x, x)
+        return exp(x2.hi) * erfc(x) * (1.0 + x2.lo)
+    # Asymptotic series; term ratios (2k - 1) / (2 x**2) <= 1/1250.
+    t = 1.0
+    total = 1.0
+    inv = 1.0 / (2.0 * x * x)
+    for k in range(1, 13):
+        t *= -(2.0 * k - 1.0) * inv
+        total += t
+    return total / (x * 1.7724538509055160273)
+
+
+# One signed term of a factor jet: sgn * exp(-k (s**2/2) z**2 + a1 z + rem).
+cdef struct term:
+    double sgn
+    int k
+    dd a1
+    dd rem
+    double err
+
+
+# A factor: derivative orders 0..2, each a sum of at most two terms.
+cdef struct factor:
+    int nt[3]
+    term t[3][2]
+
+
+cdef inline term _term(double sgn, int k, dd a1, dd rem, double err) noexcept nogil:
+    cdef term r
+    r.sgn = sgn
+    r.k = k
+    r.a1 = a1
+    r.rem = rem
+    r.err = err
+    return r
+
+
+cdef inline void _factor_one(factor* f) noexcept nogil:
+    memset(f, 0, sizeof(factor))
+    f.nt[0] = 1
+    f.t[0][0] = _term(1.0, 0, _DD0, _DD0, 0.0)
+
+
+cdef struct fam:
+    double s
+    dd s2
+    dd s2half
+    dd logs
+    dd log_s2
+    int m
+    dd log_m1
+
+
+cdef struct ptstate:
+    double z
+    double az
+    double sz
+    int zzero
+    int lz_ok
+    dd Lz
+    dd z2
+    int sp_ok
+    dd logA
+    dd logAp
+    dd logApp
+    int g_ok[4]
+    factor g[4]
+
+
+cdef struct atomc:
+    int xtype
+    int n
+    int gate
+    int dir
+    double par
+    double sgnth
+    double theta
+    dd lth
+    dd logp
+    dd logpm1
+    double sgnpm1
+    dd loglam
+    dd logn
+    dd lognn1
+
+
+cdef struct piece:
+    double sgn
+    int k
+    dd a1
+    dd rem
+    double err
+
+
+cdef inline double _gate_sig(int gi) noexcept nogil:
+    # G_L, G_U, W_L = 1 - G_L, W_U = 1 - G_U as Phi(sig s (z + c)).
+    return 1.0 if gi == 0 or gi == 3 else -1.0
+
+
+cdef inline double _gate_c(int gi) noexcept nogil:
+    return 1.0 if gi == 0 or gi == 2 else -1.0
+
+
+cdef void _softpower_base(ptstate* P, const fam* F) noexcept nogil:
+    cdef int _k
+    cdef int m = F.m
+    cdef double az = P.az
+    cdef double y, l1p, g, aoz, R, D, Rk
+    cdef dd lzr, logR
+    if az >= 1.0:
+        y = pow(az, -<double> m)
+        l1p = log1p(y)
+        lzr = _dd(-l1p / m, 0.0)
+        logR = _dd_add_d(P.Lz, l1p / m)
+        g = expm1(l1p / m)                 # R / |z| - 1
+        aoz = (az - 1.0) / az + g          # A / |z|
+        P.logA = _dd_add(P.Lz, _log_dd(aoz))
+    else:
+        y = pow(az, <double> m)
+        l1p = log1p(y)
+        logR = _dd(l1p / m, 0.0)
+        lzr = _dd_add_d(P.Lz, -l1p / m)
+        R = exp(l1p / m)
+        D = 0.0
+        Rk = 1.0
+        for _k in range(m):
+            D += Rk
+            Rk *= R
+        P.logA = _dd_add(_dd_mul_d(P.Lz, <double> m), _dd_neg(_log_dd(D)))
+    P.logAp = _dd_mul_d(lzr, <double> (m - 1))                       # log|A'|
+    P.logApp = _dd_add(_dd_add(F.log_m1, _dd_mul_d(lzr, <double> (m - 2))),
+                       _dd_neg(_dd_mul_d(logR, <double> (m + 1))))   # log A''
+    P.sp_ok = 1
+
+
+cdef void _gate_single(
+    factor* f, const ptstate* P, const fam* F, double sig, double c
+) noexcept nogil:
+    """Jet of ``Phi(w)``, ``w = sig s (z + c)``, ``c = +-1``."""
+    cdef dd zc = _two_sum(P.z, c)                 # exact z + c
+    cdef double w = sig * F.s * (zc.hi + zc.lo)
+    cdef dd a1 = _dd_mul_d(F.s2, -c)              # -s**2 c
+    cdef dd r0 = _dd_neg(F.s2half)                # -(s**2/2) c**2, c**2 = 1
+    cdef dd rphi, labsw
+    cdef double ph, x, ex
+    memset(f, 0, sizeof(factor))
+    f.nt[0] = 1
+    if w >= -1.0:
+        ph = 0.5 * erfc(-w * _SQRT1_2)
+        f.t[0][0] = _term(1.0, 0, _DD0, _log_dd(ph), 4.0)
+    else:
+        x = -w * _SQRT1_2
+        ex = _erfcx_pos(x)
+        f.t[0][0] = _term(1.0, 1, a1, _dd_add(r0, _log_dd(0.5 * ex)), 6.0)
+    # Order 1: sig s phi(w).
+    rphi = _dd_add(r0, _dd_neg(_HALF_LOG_2PI))
+    f.nt[1] = 1
+    f.t[1][0] = _term(sig, 1, a1, _dd_add(rphi, F.logs), 3.0)
+    # Order 2: -s**2 w phi(w).
+    if zc.hi != 0.0:
+        labsw = _dd_add(F.logs, _log_of_dd(zc if zc.hi > 0 else _dd_neg(zc)))
+        f.nt[2] = 1
+        f.t[2][0] = _term(-1.0 if w > 0 else 1.0, 1, a1,
+                          _dd_add(_dd_add(rphi, F.log_s2), labsw), 4.0)
+
+
+cdef inline const factor* _get_gate(ptstate* P, const fam* F, int gi) noexcept nogil:
+    if not P.g_ok[gi]:
+        _gate_single(&P.g[gi], P, F, _gate_sig(gi), _gate_c(gi))
+        P.g_ok[gi] = 1
+    return &P.g[gi]
+
+
+cdef void _poly_factor(factor* f, const ptstate* P, const atomc* a) noexcept nogil:
+    cdef int n = a.n
+    cdef double sz
+    memset(f, 0, sizeof(factor))
+    if n == 0:
+        _factor_one(f)
+        return
+    if P.zzero:
+        # Only the order-n derivative survives at the origin.
+        if n == 1:
+            f.nt[1] = 1
+            f.t[1][0] = _term(1.0, 0, _DD0, _DD0, 0.0)
+        if n == 2:
+            f.nt[2] = 1
+            f.t[2][0] = _term(1.0, 0, _DD0, _LN2_DD, 0.0)
+        return
+    sz = P.sz
+    f.nt[0] = 1
+    f.t[0][0] = _term(-1.0 if (n & 1) and sz < 0 else 1.0, 0, _DD0,
+                      _dd_mul_d(P.Lz, n), 2.0)
+    f.nt[1] = 1
+    f.t[1][0] = _term(-1.0 if ((n - 1) & 1) and sz < 0 else 1.0, 0, _DD0,
+                      _dd_add(a.logn, _dd_mul_d(P.Lz, n - 1)), 2.0)
+    if n >= 2:
+        f.nt[2] = 1
+        f.t[2][0] = _term(-1.0 if ((n - 2) & 1) and sz < 0 else 1.0, 0, _DD0,
+                          _dd_add(a.lognn1, _dd_mul_d(P.Lz, n - 2)), 2.0)
+
+
+cdef void _softpower_factor(
+    factor* f, ptstate* P, const fam* F, const atomc* a
+) noexcept nogil:
+    cdef double p = a.par
+    cdef double er = 6.0 + 2.0 * fabs(p)
+    cdef int j = 0
+    memset(f, 0, sizeof(factor))
+    if P.zzero:
+        return                  # S, S', S'' vanish at the origin for p > 1/2
+    if not P.sp_ok:
+        _softpower_base(P, F)
+    f.nt[0] = 1
+    f.t[0][0] = _term(1.0, 0, _DD0, _dd_mul_d(P.logA, p), er)
+    f.nt[1] = 1
+    f.t[1][0] = _term(P.sz, 0, _DD0,
+                      _dd_add(_dd_add(a.logp, _dd_mul_d(P.logA, p - 1.0)), P.logAp), er)
+    if a.sgnpm1 != 0.0:
+        f.t[2][j] = _term(a.sgnpm1, 0, _DD0, _dd_add(
+            _dd_add(_dd_add(a.logp, a.logpm1), _dd_mul_d(P.logA, p - 2.0)),
+            _dd_mul_d(P.logAp, 2.0)), er)
+        j += 1
+    f.t[2][j] = _term(1.0, 0, _DD0, _dd_add(
+        _dd_add(a.logp, _dd_mul_d(P.logA, p - 1.0)), P.logApp), er)
+    j += 1
+    f.nt[2] = j
+
+
+cdef void _exp_factor(factor* f, const atomc* a) noexcept nogil:
+    # exp(lam (dir z - 1)): centered at the own gate.
+    cdef double lam = a.par
+    cdef dd a1 = _dd(a.dir * lam, 0.0)
+    cdef dd r = _dd(-lam, 0.0)
+    memset(f, 0, sizeof(factor))
+    f.nt[0] = 1
+    f.t[0][0] = _term(1.0, 0, a1, r, 1.0)
+    f.nt[1] = 1
+    f.t[1][0] = _term(<double> a.dir, 0, a1, _dd_add(r, a.loglam), 2.0)
+    f.nt[2] = 1
+    f.t[2][0] = _term(1.0, 0, a1, _dd_add(r, _dd_mul_d(a.loglam, 2.0)), 2.0)
+
+
+cdef inline void _emit(
+    piece* pc, int* npiece, double sgn, const term* x, const term* y, const term* w,
+    int mult2, const atomc* a
+) noexcept nogil:
+    cdef piece* q = &pc[npiece[0]]
+    cdef dd r
+    npiece[0] += 1
+    q.sgn = sgn * a.sgnth * x.sgn * y.sgn * w.sgn
+    q.k = x.k + y.k + w.k
+    q.a1 = _dd_add(_dd_add(x.a1, y.a1), w.a1)
+    r = _dd_add(_dd_add(x.rem, y.rem), _dd_add(w.rem, a.lth))
+    if mult2:
+        r = _dd_add(r, _LN2_DD)
+    q.rem = r
+    q.err = x.err + y.err + w.err + 1.0
+
+
+cdef void _leibniz(
+    piece* pc, int* npiece, const factor* f0, const factor* f1, const factor* f2,
+    double sgn, const atomc* a
+) noexcept nogil:
+    """Pieces of ``(f0 f1 f2)''``: three second-order and three mixed terms."""
+    cdef int o, i0, i1, i2, a0, b0, c0
+    for o in range(6):
+        if o == 0:
+            i0, i1, i2 = 2, 0, 0
+        elif o == 1:
+            i0, i1, i2 = 0, 2, 0
+        elif o == 2:
+            i0, i1, i2 = 0, 0, 2
+        elif o == 3:
+            i0, i1, i2 = 1, 1, 0
+        elif o == 4:
+            i0, i1, i2 = 1, 0, 1
+        else:
+            i0, i1, i2 = 0, 1, 1
+        for a0 in range(f0.nt[i0]):
+            for b0 in range(f1.nt[i1]):
+                for c0 in range(f2.nt[i2]):
+                    _emit(pc, npiece, sgn, &f0.t[i0][a0], &f1.t[i1][b0],
+                          &f2.t[i2][c0], o >= 3, a)
+
+
+cdef inline double _approx_d(
+    const piece* p, const piece* r, double z, double z2d, double s2h
+) noexcept nogil:
+    """Approximate ``log|p| - log|r|`` (for ordering and skipping)."""
+    cdef int dk = p.k - r.k
+    cdef double t2 = 0.0 if dk == 0 else -<double> dk * s2h * z2d
+    cdef double t1 = (p.a1.hi - r.a1.hi) * z
+    if isinf(t2):
+        return t2
+    if isinf(t1):
+        return t1
+    return t2 + t1 + (p.rem.hi - r.rem.hi)
+
+
+# Fast-path gate.  The value is ``mult * exp(structured part)``.  In the
+# Gaussian branch (``w < -1``) the derivatives are ratios ``r1 = G'/G`` and
+# ``r2 = G''/G`` of the same structure.  In the plain branch (``w >= -1``, the
+# gate is order one) the derivatives ``G' = sig s phi(w)`` and
+# ``G'' = -s**2 w phi(w)`` are carried separately as multipliers ``d1``, ``d2``
+# of the exact structure of ``phi`` (``k = 1``, ``da1``, ``drem``), so they keep
+# their relative accuracy where ``phi`` itself underflows.
+cdef struct gfast:
+    int k
+    dd a1
+    dd rem
+    double mult
+    double r1
+    double r2
+    int plain
+    dd da1
+    dd drem
+    double d1
+    double d2
+
+
+cdef void _gate_fast(
+    gfast* g, const ptstate* P, const fam* F, double sig, double c
+) noexcept nogil:
+    cdef dd zc = _two_sum(P.z, c)
+    cdef dd w = _dd_mul_d(zc, sig * F.s)
+    cdef double wd = w.hi
+    cdef double ratio, x, ex
+    if wd >= -1.0:
+        g.plain = 1
+        g.k = 0
+        g.a1 = _DD0
+        g.rem = _DD0
+        g.mult = 0.5 * erfc(-wd * _SQRT1_2)
+        g.r1 = 0.0
+        g.r2 = 0.0
+        # phi(w) = exp(-(s**2/2) z**2 - s**2 c z - s**2/2) / sqrt(2 pi), c**2 = 1.
+        g.da1 = _dd_mul_d(F.s2, -c)
+        g.drem = _dd_add(_dd_neg(F.s2half), _dd_neg(_HALF_LOG_2PI))
+        g.d1 = sig * F.s
+        g.d2 = -F.s2.hi * wd
+        return
+    g.plain = 0
+    x = -wd * _SQRT1_2
+    ex = _erfcx_pos(x)
+    g.k = 1
+    g.a1 = _dd_mul_d(F.s2, -c)
+    g.rem = _dd_neg(F.s2half)
+    g.mult = 0.5 * ex
+    ratio = 0.79788456080286535588 / ex          # sqrt(2/pi) / erfcx
+    g.r1 = sig * F.s * ratio
+    g.r2 = -F.s2.hi * wd * ratio
+
+
+cdef struct spfast:
+    int ok
+    dd logA
+    double rA1
+    double rA2
+
+
+cdef void _softpower_fast(spfast* S, ptstate* P, const fam* F) noexcept nogil:
+    cdef int _k
+    cdef int m = F.m
+    cdef double az = P.az
+    cdef double A, R, t, gm1, iz2, y, l1p, aoz, D, Rk, q, qm2, Rp
+    if not P.lz_ok:
+        P.Lz = _log_dd(az)
+        P.lz_ok = 1
+    if az >= 1.0:
+        # t = R / |z| = (1 + |z|**-m)**(1/m).
+        if m == 4:
+            iz2 = 1.0 / (az * az)
+            y = iz2 * iz2
+            t = sqrt(sqrt(1.0 + y))
+            gm1 = y / ((1.0 + t) * (1.0 + t * t))       # t - 1, exactly rearranged
+        else:
+            y = pow(az, -<double> m)
+            l1p = log1p(y)
+            t = exp(l1p / m)
+            gm1 = expm1(l1p / m)
+        aoz = (az - 1.0) / az + gm1
+        A = az * aoz
+        R = az * t
+        S.logA = _dd_add(P.Lz, _log_dd(aoz))
+    else:
+        y = 1.0
+        for _k in range(m):
+            y *= az
+        R = sqrt(sqrt(1.0 + y)) if m == 4 else exp(log1p(y) / m)
+        D = 0.0
+        Rk = 1.0
+        for _k in range(m):
+            D += Rk
+            Rk *= R
+        A = y / D
+        S.logA = _dd_add(_dd_mul_d(P.Lz, <double> m), _dd_neg(_log_dd(D)))
+    q = az / R
+    qm2 = 1.0
+    for _k in range(m - 2):
+        qm2 *= q
+    Rp = 1.0
+    for _k in range(m + 1):
+        Rp *= R
+    S.rA1 = P.sz * (qm2 * q) / A                   # A'/A,  A' = sgn(z) q**(m-1)
+    # A''/A with A'' = (m - 1) q**(m-2) R**-(m+1).
+    S.rA2 = ((m - 1) * qm2 / Rp) / A
+    S.ok = 1
+
+
+cdef struct fpieces:
+    double c[8]
+    int n
+
+
+cdef struct curvwork:
+    atomc* atoms
+    piece* pc
+    int* akey_k
+    dd* akey_a1
+    dd* akey_rem
+    double* akey
+    double* aerr
+    fpieces* apc
+
+
+cdef inline void _store_reference(
+    Py_ssize_t ip, int k, dd a1, dd rem, dd hl, int* refk, double* ref_a1,
+    double* ref_rem, double* half_log_norm
+) noexcept nogil:
+    if refk == NULL:
+        return
+    refk[ip] = k
+    ref_a1[2 * ip] = a1.hi
+    ref_a1[2 * ip + 1] = a1.lo
+    ref_rem[2 * ip] = rem.hi
+    ref_rem[2 * ip + 1] = rem.lo
+    half_log_norm[2 * ip] = hl.hi
+    half_log_norm[2 * ip + 1] = hl.lo
+
+
+cdef inline void _store_zero(
+    Py_ssize_t ip, double* H, double* err_h, double* log_m, int* refk,
+    double* ref_a1, double* ref_rem, double* half_log_norm
+) noexcept nogil:
+    H[ip] = 0.0
+    err_h[ip] = 0.0
+    log_m[ip] = -INFINITY
+    _store_reference(ip, 0, _DD0, _dd(-INFINITY, 0.0), _DD0, refk, ref_a1, ref_rem,
+                     half_log_norm)
+
+
+cdef int _fast_group(
+    curvwork* W, int u, int k, dd a1, dd rem, double mult, const double* tv, int nt,
+    double er, double z, double z2d, double s2h
+) noexcept nogil:
+    """Store one fast-path group ``u``: multipliers ``mult tv`` at one structure.
+
+    Returns 0 when a multiplier is not finite or near underflow (the caller
+    then uses the log path).
+    """
+    cdef fpieces* pc = &W.apc[u]
+    cdef double pm = 0.0, v
+    cdef int i
+    pc.n = 0
+    for i in range(nt):
+        if tv[i] != 0.0:
+            v = mult * tv[i]
+            pc.c[pc.n] = v
+            pc.n += 1
+            if fabs(v) > pm:
+                pm = fabs(v)
+    if not isfinite(pm):
+        return 0
+    if pc.n > 0 and not (pm > 1e-280):
+        return 0            # multiplier at or near underflow: use the log path
+    W.akey_k[u] = k
+    W.akey_a1[u] = a1
+    W.akey_rem[u] = rem
+    W.aerr[u] = er
+    if pc.n == 0 or pm == 0.0:
+        pc.n = 0
+        W.akey[u] = -INFINITY
+        return 1
+    # Only the multiplier's own magnitude: groups are compared through their
+    # structural differences (``_fast_d``), never through absolute keys whose
+    # rounding grows with ``z**2``.
+    W.akey[u] = ilogb(pm) * _LN2_HI
+    return 1
+
+
+cdef inline double _fast_d(
+    const curvwork* W, int u, int r, double z, double z2d, double s2h
+) noexcept nogil:
+    """Approximate ``log|group u| - log|group r|`` (as ``_approx_d``)."""
+    cdef int dk = W.akey_k[u] - W.akey_k[r]
+    cdef double t2 = 0.0 if dk == 0 else -<double> dk * s2h * z2d
+    cdef double t1 = (W.akey_a1[u].hi - W.akey_a1[r].hi) * z
+    if isinf(t2):
+        return t2
+    if isinf(t1):
+        return t1
+    return t2 + t1 + (W.akey_rem[u].hi - W.akey_rem[r].hi) + (W.akey[u] - W.akey[r])
+
+
+cdef int _fast_point(
+    Py_ssize_t ip, const atomc* A, int na, const fam* F, ptstate* P,
+    double* H, double* err_h, double* log_m, int* refk, double* ref_a1,
+    double* ref_rem, double* half_log_norm, curvwork* W
+) noexcept nogil:
+    """Fast path at one point; returns 1 if handled, 0 to use the log path."""
+    cdef int _k
+    cdef double z = P.z
+    cdef gfast G[4]
+    cdef int gok[4]
+    cdef spfast S
+    cdef double s2h = F.s2half.hi
+    cdef double z2d = z * z
+    cdef double iz = 1.0 / z
+    cdef int nu = 0, j, nsub, sub, u, k, gi, i, r, dk
+    cdef const atomc* a
+    cdef fpieces* pc
+    cdef dd a1, rem, ze, D, da1, dr, tdd, hl
+    cdef double mult, er, d_, p1, p2, x1, x2a, x2b, g1, g2, p, lam, zn
+    cdef double S_, comp, ss, ea, sc, mag, rel, c, tt, nrm, lref
+    cdef double tv[7]
+    cdef const gfast* g
+    if not (P.az >= _FAST_ZMIN and P.az <= _FAST_ZMAX):
+        return 0
+    gok[0] = gok[1] = gok[2] = gok[3] = 0
+    S.ok = 0
+    for j in range(na):
+        a = &A[j]
+        nsub = 2 if a.gate == GATE_WC else 1
+        for sub in range(nsub):
+            u = nu
+            nu += 1
+            pc = &W.apc[u]
+            pc.n = 0
+            k = 0
+            a1 = _DD0
+            rem = _DD0
+            mult = a.theta
+            er = 4.0
+            if a.xtype == _XLOG:
+                ze = _two_sum(z, -a.par)
+                if ze.hi == 0.0:
+                    return 0
+                d_ = ze.hi + ze.lo
+                pc.c[0] = mult / (d_ * d_)
+                pc.n = 1
+                if not isfinite(pc.c[0]) or not (fabs(pc.c[0]) > 1e-280):
+                    return 0
+                W.akey_k[u] = 0
+                W.akey_a1[u] = _DD0
+                W.akey_rem[u] = _DD0
+                W.aerr[u] = 4.0
+                W.akey[u] = ilogb(pc.c[0]) * _LN2_HI
+                continue
+            p1 = 0.0
+            p2 = 0.0
+            if a.n > 0:
+                zn = z
+                for _k in range(1, a.n):
+                    zn *= z
+                mult *= zn
+                p1 = a.n * iz
+                p2 = <double> a.n * (a.n - 1) * iz * iz
+                er += a.n
+            x1 = 0.0
+            x2a = 0.0
+            x2b = 0.0
+            if a.xtype == _XSOFT:
+                if not S.ok:
+                    _softpower_fast(&S, P, F)
+                p = a.par
+                rem = _dd_mul_d(S.logA, p)
+                x1 = p * S.rA1
+                x2a = p * (p - 1.0) * S.rA1 * S.rA1
+                x2b = p * S.rA2
+                er += 6.0 + 2.0 * fabs(p)
+            elif a.xtype == _XEXP:
+                lam = a.par
+                a1 = _dd(a.dir * lam, 0.0)
+                rem = _dd(-lam, 0.0)
+                x1 = a.dir * lam
+                x2a = lam * lam
+                er += 3.0
+            g1 = 0.0
+            g2 = 0.0
+            gi = -1
+            if a.gate >= GATE_GL and a.gate <= GATE_WU:
+                gi = a.gate - 1
+            elif a.gate == GATE_WC:
+                # W_C = G_U - W_L for z >= 0, G_L - W_U below (exact identities).
+                if z >= 0:
+                    gi = 1 if sub == 0 else 2
+                else:
+                    gi = 0 if sub == 0 else 3
+                if sub == 1:
+                    mult = -mult
+            g = NULL
+            if gi >= 0:
+                if not gok[gi]:
+                    _gate_fast(&G[gi], P, F, _gate_sig(gi), _gate_c(gi))
+                    gok[gi] = 1
+                g = &G[gi]
+                er += 6.0
+            if g != NULL and g.plain:
+                # Value pieces at the atom's own structure ...
+                tv[0] = p2 * g.mult
+                tv[1] = x2a * g.mult
+                tv[2] = x2b * g.mult
+                tv[3] = 2.0 * p1 * x1 * g.mult
+                if not _fast_group(W, u, k, a1, rem, mult, tv, 4, er, z, z2d, s2h):
+                    return 0
+                # ... and derivative pieces at the structure of phi.
+                u = nu
+                nu += 1
+                tv[0] = g.d2
+                tv[1] = 2.0 * p1 * g.d1
+                tv[2] = 2.0 * x1 * g.d1
+                if not _fast_group(W, u, k + 1, _dd_add(a1, g.da1),
+                                   _dd_add(rem, g.drem), mult, tv, 3, er, z, z2d,
+                                   s2h):
+                    return 0
+                continue
+            if g != NULL:
+                k = g.k
+                if g.k:
+                    a1 = _dd_add(a1, g.a1)
+                    rem = _dd_add(rem, g.rem)
+                mult *= g.mult
+                g1 = g.r1
+                g2 = g.r2
+            tv[0] = p2
+            tv[1] = x2a
+            tv[2] = x2b
+            tv[3] = g2
+            tv[4] = 2.0 * p1 * x1
+            tv[5] = 2.0 * p1 * g1
+            tv[6] = 2.0 * x1 * g1
+            if not _fast_group(W, u, k, a1, rem, mult, tv, 7, er, z, z2d, s2h):
+                return 0
+    r = -1
+    for u in range(nu):
+        if W.akey[u] == -INFINITY:
+            continue
+        if r < 0 or _fast_d(W, u, r, z, z2d, s2h) > 0.0:
+            r = u
+    if r < 0:
+        _store_zero(ip, H, err_h, log_m, refk, ref_a1, ref_rem, half_log_norm)
+        return 1
+    S_ = 0.0
+    comp = 0.0
+    ss = 0.0
+    ea = 0.0
+    for u in range(nu):
+        if W.akey[u] == -INFINITY:
+            continue
+        if u != r and not (_fast_d(W, u, r, z, z2d, s2h) > _SKIP_LOG):
+            continue
+        sc = 1.0
+        mag = 0.0
+        if u != r:
+            D = _DD0
+            dk = W.akey_k[u] - W.akey_k[r]
+            if dk != 0:
+                tdd = _dd_mul(F.s2half, P.z2)
+                D = _dd_neg(tdd) if dk > 0 else tdd
+                mag += fabs(tdd.hi)
+            da1 = _dd_add(W.akey_a1[u], _dd_neg(W.akey_a1[r]))
+            if da1.hi != 0.0:
+                tdd = _dd_mul_d(da1, z)
+                D = _dd_add(D, tdd)
+                mag += fabs(tdd.hi)
+            dr = _dd_add(W.akey_rem[u], _dd_neg(W.akey_rem[r]))
+            D = _dd_add(D, dr)
+            mag += fabs(dr.hi)
+            sc = exp(D.hi) * (1.0 + D.lo)
+        rel = _DD_EPS * (W.aerr[u] + 1.0) + 8.0 * _DD_EPS * _DD_EPS * mag
+        for i in range(W.apc[u].n):
+            c = W.apc[u].c[i] * sc
+            tt = S_ + c
+            comp += (S_ - tt) + c if fabs(S_) >= fabs(c) else (c - tt) + S_
+            S_ = tt
+            ss += c * c
+            ea += fabs(c) * rel
+    S_ += comp
+    if not (ss > 0.0) or not isfinite(ss):
+        return 0
+    nrm = sqrt(ss)
+    H[ip] = S_ / nrm
+    err_h[ip] = ea / nrm + 2.0 * _DD_EPS * fabs(H[ip])
+    hl = _log_dd(nrm)
+    lref = (-s2h * z2d if W.akey_k[r] else 0.0) + W.akey_a1[r].hi * z + W.akey_rem[r].hi
+    log_m[ip] = lref + hl.hi
+    _store_reference(ip, W.akey_k[r], W.akey_a1[r], W.akey_rem[r], hl, refk, ref_a1,
+                     ref_rem, half_log_norm)
+    return 1
+
+
+cdef void _log_point(
+    Py_ssize_t ip, const atomc* A, int na, const fam* F, ptstate* P,
+    double* H, double* err_h, double* log_m, int* refk, double* ref_a1,
+    double* ref_rem, double* half_log_norm, piece* pc
+) noexcept nogil:
+    """Log path at one point (every piece in structured log form)."""
+    cdef double z = P.z
+    cdef double z2d = z * z
+    cdef double s2h = F.s2half.hi
+    cdef int npiece = 0, j, i, r, dk
+    cdef const atomc* a
+    cdef factor fp, fx, one
+    cdef piece* q
+    cdef const piece* R
+    cdef dd ze, D, tdd, da1, dr, hl
+    cdef double Sm, comp, ss, ea, Da, mag, c, t, nrm, lref
+    P.sp_ok = 0
+    P.g_ok[0] = P.g_ok[1] = P.g_ok[2] = P.g_ok[3] = 0
+    if not P.zzero and not P.lz_ok:
+        P.Lz = _log_dd(P.az)
+        P.lz_ok = 1
+    _factor_one(&one)
+    for j in range(na):
+        a = &A[j]
+        if a.xtype == _XLOG:
+            # coef * (-log|z - e|): q'' = coef / (z - e)**2.
+            ze = _two_sum(z, -a.par)
+            if ze.hi == 0.0:
+                continue
+            q = &pc[npiece]
+            npiece += 1
+            q.sgn = a.sgnth
+            q.k = 0
+            q.a1 = _DD0
+            q.rem = _dd_add(a.lth, _dd_mul_d(
+                _log_of_dd(ze if ze.hi > 0 else _dd_neg(ze)), -2.0))
+            q.err = 3.0
+            continue
+        _poly_factor(&fp, P, a)
+        if a.xtype == _XSOFT:
+            _softpower_factor(&fx, P, F, a)
+        elif a.xtype == _XEXP:
+            _exp_factor(&fx, a)
+        else:
+            fx = one
+        if a.gate == GATE_NONE:
+            _leibniz(pc, &npiece, &fp, &fx, &one, 1.0, a)
+        elif a.gate <= GATE_WU:
+            _leibniz(pc, &npiece, &fp, &fx, _get_gate(P, F, a.gate - 1), 1.0, a)
+        elif z >= 0:
+            # W_C = G_U - W_L for z >= 0, G_L - W_U below (exact identities).
+            _leibniz(pc, &npiece, &fp, &fx, _get_gate(P, F, 1), 1.0, a)
+            _leibniz(pc, &npiece, &fp, &fx, _get_gate(P, F, 2), -1.0, a)
+        else:
+            _leibniz(pc, &npiece, &fp, &fx, _get_gate(P, F, 0), 1.0, a)
+            _leibniz(pc, &npiece, &fp, &fx, _get_gate(P, F, 3), -1.0, a)
+    if npiece == 0:
+        _store_zero(ip, H, err_h, log_m, refk, ref_a1, ref_rem, half_log_norm)
+        return
+    # Reference: the largest piece (exact order on extended log magnitudes).
+    r = 0
+    for i in range(1, npiece):
+        if _approx_d(&pc[i], &pc[r], z, z2d, s2h) > 0.0:
+            r = i
+    R = &pc[r]
+    Sm = 0.0
+    comp = 0.0
+    ss = 0.0
+    ea = 0.0
+    for i in range(npiece):
+        q = &pc[i]
+        Da = 0.0 if i == r else _approx_d(q, R, z, z2d, s2h)
+        if not (Da > _SKIP_LOG):
+            continue
+        D = _DD0
+        mag = 0.0
+        dk = q.k - R.k
+        if dk != 0:
+            tdd = _dd_mul(F.s2half, P.z2)
+            D = _dd_neg(tdd) if dk > 0 else tdd
+            mag += fabs(tdd.hi)
+        da1 = _dd_add(q.a1, _dd_neg(R.a1))
+        if da1.hi != 0.0:
+            tdd = _dd_mul_d(da1, z)
+            D = _dd_add(D, tdd)
+            mag += fabs(tdd.hi)
+        dr = _dd_add(q.rem, _dd_neg(R.rem))
+        D = _dd_add(D, dr)
+        mag += fabs(dr.hi)
+        c = q.sgn * exp(D.hi) * (1.0 + D.lo)
+        t = Sm + c                                  # Neumaier summation
+        comp += (Sm - t) + c if fabs(Sm) >= fabs(c) else (c - t) + Sm
+        Sm = t
+        ss += c * c
+        ea += fabs(c) * (_DD_EPS * q.err + 8.0 * _DD_EPS * _DD_EPS * mag)
+    Sm += comp
+    nrm = sqrt(ss)
+    H[ip] = Sm / nrm
+    err_h[ip] = ea / nrm + 2.0 * _DD_EPS * fabs(H[ip])
+    hl = _log_dd(nrm)
+    lref = (-s2h * z2d if R.k else 0.0) + R.a1.hi * z + R.rem.hi
+    log_m[ip] = lref + hl.hi
+    _store_reference(ip, R.k, R.a1, R.rem, hl, refk, ref_a1, ref_rem, half_log_norm)
+
+
+cdef inline void _family(const BasisTable* t, fam* F) noexcept nogil:
+    F.s = t.gate_s
+    F.m = t.root
+    F.s2 = _two_prod(F.s, F.s)
+    F.s2half = _dd_mul_d(F.s2, 0.5)
+    F.logs = _log_dd(F.s)
+    F.log_s2 = _dd_mul_d(F.logs, 2.0)
+    F.log_m1 = _log_dd(<double> (F.m - 1))
+
+
+cdef void _atom_constants(
+    const BasisTable* t, int i, double coef, atomc* a
+) noexcept nogil:
+    """Per-atom constants of curvature atom ``i`` with coefficient ``coef``."""
+    cdef int j = t.atom_fn[i]
+    cdef double p
+    memset(a, 0, sizeof(atomc))
+    a.gate = t.atom_gate[i]
+    a.par = t.atom_par[i]
+    a.dir = 1 if t.side[j] == SIDE_UPPER else -1
+    if t.kind[j] == FN_MONOMIAL:
+        a.xtype = _XPOLY
+        a.n = t.degree[j]
+    elif t.kind[j] == FN_SOFT:
+        a.xtype = _XSOFT
+    elif t.kind[j] == FN_EXP:
+        a.xtype = _XEXP
+    else:
+        a.xtype = _XLOG
+    a.sgnth = 1.0 if coef > 0 else -1.0
+    a.theta = coef
+    a.lth = _log_dd(fabs(coef))
+    if a.n >= 1:
+        a.logn = _log_dd(<double> a.n)
+    if a.n >= 2:
+        a.lognn1 = _log_dd(<double> a.n * (a.n - 1))
+    if a.xtype == _XSOFT:
+        p = a.par
+        a.logp = _log_dd(p)
+        a.sgnpm1 = 1.0 if p > 1.0 else (-1.0 if p < 1.0 else 0.0)
+        if p != 1.0:
+            a.logpm1 = _log_dd(fabs(p - 1.0))
+    elif a.xtype == _XEXP:
+        a.loglam = _log_dd(a.par)
+
+
+cdef void _free_work(curvwork* W) noexcept nogil:
+    free(W.atoms)
+    free(W.pc)
+    free(W.akey_k)
+    free(W.akey_a1)
+    free(W.akey_rem)
+    free(W.akey)
+    free(W.aerr)
+    free(W.apc)
+
+
+cdef int _alloc_work(curvwork* W, int na) noexcept nogil:
+    """Allocate the per-call buffers for ``na`` atoms; ``-1`` on failure."""
+    cdef size_t n = <size_t> (na if na > 0 else 1)
+    W.atoms = <atomc*> malloc(sizeof(atomc) * n)
+    W.pc = <piece*> malloc(sizeof(piece) * n * _MAXP_PER_ATOM)
+    # Fast groups: two sub-gates of W_C, each split into value and derivative.
+    W.akey_k = <int*> malloc(sizeof(int) * 4 * n)
+    W.akey_a1 = <dd*> malloc(sizeof(dd) * 4 * n)
+    W.akey_rem = <dd*> malloc(sizeof(dd) * 4 * n)
+    W.akey = <double*> malloc(sizeof(double) * 4 * n)
+    W.aerr = <double*> malloc(sizeof(double) * 4 * n)
+    W.apc = <fpieces*> malloc(sizeof(fpieces) * 4 * n)
+    if (W.atoms == NULL or W.pc == NULL or W.akey_k == NULL or W.akey_a1 == NULL
+            or W.akey_rem == NULL or W.akey == NULL or W.aerr == NULL or W.apc == NULL):
+        _free_work(W)
+        return -1
+    return 0
+
+
+cdef void _scaled_points(
+    const BasisTable* t, curvwork* W, int na, const fam* F, Py_ssize_t npts,
+    const double* zin, bint use_fast, double* H, double* err_h, double* log_m,
+    int* refk, double* ref_a1, double* ref_rem, double* half_log_norm
+) noexcept nogil:
+    """Evaluate the ``na`` prepared atoms of ``W.atoms`` at every point."""
+    cdef Py_ssize_t ip
+    cdef ptstate P
+    cdef double z
+    for ip in range(npts):
+        z = zin[ip]
+        P.z = z
+        P.az = fabs(z)
+        P.sz = -1.0 if z < 0 else 1.0
+        P.zzero = z == 0.0
+        P.lz_ok = 0
+        P.z2 = _two_prod(z, z)
+        if use_fast and not P.zzero and _fast_point(
+            ip, W.atoms, na, F, &P, H, err_h, log_m, refk, ref_a1, ref_rem,
+            half_log_norm, W,
+        ):
+            continue
+        _log_point(ip, W.atoms, na, F, &P, H, err_h, log_m, refk, ref_a1, ref_rem,
+                   half_log_norm, W.pc)
+
+
+cdef int curvature_scaled(
+    const BasisTable* t,
+    const double* acoef,
+    Py_ssize_t npts,
+    const double* z,
+    bint use_fast,
+    double* H,
+    double* err_h,
+    double* log_m,
+    int* refk,
+    double* ref_a1,
+    double* ref_rem,
+    double* half_log_norm,
+) noexcept nogil:
+    """Structured scaled curvature at ``npts`` canonical points.
+
+    ``acoef[i]`` is the coefficient of curvature atom ``i`` (``atom_row @
+    theta``); zero atoms are skipped.  ``refk`` may be NULL (no reference
+    output; then ``ref_a1``, ``ref_rem`` and ``half_log_norm`` are unused,
+    otherwise each holds ``2 npts`` doubles as ``(hi, lo)`` pairs).
+    ``use_fast`` selects the fast path where it applies (both paths give the
+    same result to rounding).  Returns ``-1`` on allocation failure.
+    """
+    cdef curvwork W
+    cdef fam F
+    cdef int i, na = 0
+    if _alloc_work(&W, t.natom) != 0:
+        return -1
+    _family(t, &F)
+    for i in range(t.natom):
+        if acoef[i] != 0.0:
+            _atom_constants(t, i, acoef[i], &W.atoms[na])
+            na += 1
+    _scaled_points(t, &W, na, &F, npts, z, use_fast, H, err_h, log_m, refk, ref_a1,
+                   ref_rem, half_log_norm)
+    _free_work(&W)
+    return 0
+
+
+cdef int curvature_rows(
+    const BasisTable* t,
+    Py_ssize_t npts,
+    const double* z,
+    bint use_fast,
+    double* R,
+    double* N,
+    int* refk,
+    double* ref_a1,
+    double* ref_rem,
+) noexcept nogil:
+    """Theta-free per-atom curvature rows at ``npts`` canonical points.
+
+    ``R[ip * A + i] = phi_i''(z) / S(z)`` and ``N[ip * A + i] = ||pieces_i|| /
+    S(z)`` for every curvature atom ``i`` with unit coefficient, where the
+    common positive scale ``S = exp(-k (s**2/2) z**2 + a1 z + rem)`` (returned
+    as ``refk``, ``ref_a1``, ``ref_rem``, double-double pairs) is the largest
+    atom magnitude at the point.  For any atom coefficients ``c``,
+    ``q'' = S sum_i c_i R_i`` and ``H = sum_i c_i R_i / ||c N||``.  An atom
+    whose pieces lie below ``exp(-700)`` of the largest atom is beyond the
+    rows' dynamic range at that point: it is stored as ``R = 0`` and
+    ``N = -1`` (an atom without pieces has ``R = N = 0``), so a caller can
+    tell when the atoms it weights are all out of range and the rows do not
+    determine ``H``.  Returns ``-1`` on allocation failure.
+    """
+    cdef Py_ssize_t A = t.natom
+    cdef Py_ssize_t ip, q, p
+    cdef int i, r, dk
+    cdef curvwork W
+    cdef fam F
+    cdef double* hj
+    cdef double* eh
+    cdef double* lm
+    cdef int* kj
+    cdef double* a1j
+    cdef double* remj
+    cdef double* hl
+    cdef double zz, z2d, t2, t1, Da, nj
+    cdef dd rr, hh, z2, D, pa1, prem, qa1, qrem, da1
+    if A == 0:
+        for ip in range(npts):
+            refk[ip] = 0
+            ref_a1[2 * ip] = 0.0
+            ref_a1[2 * ip + 1] = 0.0
+            ref_rem[2 * ip] = -INFINITY
+            ref_rem[2 * ip + 1] = 0.0
+        return 0
+    if _alloc_work(&W, 1) != 0:
+        return -1
+    hj = <double*> malloc(sizeof(double) * npts * A)
+    eh = <double*> malloc(sizeof(double) * npts)
+    lm = <double*> malloc(sizeof(double) * npts)
+    kj = <int*> malloc(sizeof(int) * npts * A)
+    a1j = <double*> malloc(sizeof(double) * 2 * npts * A)
+    remj = <double*> malloc(sizeof(double) * 2 * npts * A)
+    hl = <double*> malloc(sizeof(double) * 2 * npts)
+    if (hj == NULL or eh == NULL or lm == NULL or kj == NULL or a1j == NULL
+            or remj == NULL or hl == NULL):
+        free(hj)
+        free(eh)
+        free(lm)
+        free(kj)
+        free(a1j)
+        free(remj)
+        free(hl)
+        _free_work(&W)
+        return -1
+    _family(t, &F)
+    for i in range(A):
+        _atom_constants(t, i, 1.0, &W.atoms[0])
+        _scaled_points(t, &W, 1, &F, npts, z, use_fast, &hj[i * npts], eh, lm,
+                       &kj[i * npts], &a1j[2 * i * npts], &remj[2 * i * npts], hl)
+        for ip in range(npts):
+            # Fold the piece norm into rem.  An atom without pieces already has
+            # rem = -inf; one whose pieces cancel exactly (H = 0) keeps its norm.
+            q = i * npts + ip
+            if not isfinite(remj[2 * q]):
+                continue        # (-inf + x in double-double would give NaN)
+            rr = _dd_add(_dd(remj[2 * q], remj[2 * q + 1]),
+                         _dd(hl[2 * ip], hl[2 * ip + 1]))
+            remj[2 * q] = rr.hi
+            remj[2 * q + 1] = rr.lo
+    for ip in range(npts):
+        zz = z[ip]
+        z2d = zz * zz
+        z2 = _two_prod(zz, zz)
+        r = -1
+        for i in range(A):
+            q = i * npts + ip
+            if remj[2 * q] == -INFINITY:
+                continue
+            if r < 0:
+                r = i
+                continue
+            p = r * npts + ip
+            dk = kj[q] - kj[p]
+            t2 = 0.0 if dk == 0 else -<double> dk * F.s2half.hi * z2d
+            t1 = (a1j[2 * q] - a1j[2 * p]) * zz
+            Da = t2 if isinf(t2) else (
+                t1 if isinf(t1) else t2 + t1 + (remj[2 * q] - remj[2 * p]))
+            if Da > 0:
+                r = i
+        if r < 0:
+            for i in range(A):
+                R[ip * A + i] = 0.0
+                N[ip * A + i] = 0.0
+            refk[ip] = 0
+            ref_a1[2 * ip] = 0.0
+            ref_a1[2 * ip + 1] = 0.0
+            ref_rem[2 * ip] = -INFINITY
+            ref_rem[2 * ip + 1] = 0.0
+            continue
+        p = r * npts + ip
+        pa1 = _dd(a1j[2 * p], a1j[2 * p + 1])
+        prem = _dd(remj[2 * p], remj[2 * p + 1])
+        for i in range(A):
+            q = i * npts + ip
+            if remj[2 * q] == -INFINITY:
+                R[ip * A + i] = 0.0
+                N[ip * A + i] = 0.0
+                continue
+            dk = kj[q] - kj[p]
+            t2 = 0.0 if dk == 0 else -<double> dk * F.s2half.hi * z2d
+            t1 = (a1j[2 * q] - a1j[2 * p]) * zz
+            Da = t2 if isinf(t2) else (
+                t1 if isinf(t1) else t2 + t1 + (remj[2 * q] - remj[2 * p]))
+            if not (Da > -700.0):
+                R[ip * A + i] = 0.0
+                N[ip * A + i] = -1.0
+                continue
+            D = _DD0
+            if dk != 0:
+                hh = _dd_mul(F.s2half, z2)
+                D = _dd_neg(hh) if dk > 0 else hh
+            qa1 = _dd(a1j[2 * q], a1j[2 * q + 1])
+            qrem = _dd(remj[2 * q], remj[2 * q + 1])
+            da1 = _dd_add(qa1, _dd_neg(pa1))
+            if da1.hi != 0.0:
+                D = _dd_add(D, _dd_mul_d(da1, zz))
+            D = _dd_add(D, _dd_add(qrem, _dd_neg(prem)))
+            nj = exp(D.hi) * (1.0 + D.lo)          # ||pieces_i|| / S
+            N[ip * A + i] = nj
+            R[ip * A + i] = hj[q] * nj
+        refk[ip] = kj[p]
+        ref_a1[2 * ip] = pa1.hi
+        ref_a1[2 * ip + 1] = pa1.lo
+        ref_rem[2 * ip] = prem.hi
+        ref_rem[2 * ip + 1] = prem.lo
+    free(hj)
+    free(eh)
+    free(lm)
+    free(kj)
+    free(a1j)
+    free(remj)
+    free(hl)
+    _free_work(&W)
+    return 0
+
+
+# --------------------------------------------------------------------------
 # tail atoms and verdicts
 # --------------------------------------------------------------------------
 
 cdef class TailKernel:
     """Flat atoms of one ``_TailModel`` (``basis_tails``).
+
+    Every atom and envelope weight is ``zeta**power exp(rate zeta - kappa
+    zeta**2 + const)``; ``kappa > 0`` for the Gaussian gate deviations, and
+    the constant is kept in log form so no row underflows.
 
     Parameters
     ----------
@@ -1219,6 +2995,8 @@ cdef class TailKernel:
         )
         apower = np.array([a.power for a in tail.atoms], dtype=np.float64)
         arate = np.array([a.rate for a in tail.atoms], dtype=np.float64)
+        akappa = np.array([a.kappa for a in tail.atoms], dtype=np.float64)
+        aconst = np.array([a.const for a in tail.atoms], dtype=np.float64)
         aoffset = np.array([a.offset for a in tail.atoms], dtype=np.float64)
         arow = np.zeros((max(na, 1), d))
         acut = np.zeros((max(na, 1), d))
@@ -1229,7 +3007,10 @@ cdef class TailKernel:
         ecoef = np.array([e.coef for e in tail.envelopes], dtype=np.float64)
         epower = np.array([e.power for e in tail.envelopes], dtype=np.float64)
         erate = np.array([e.rate for e in tail.envelopes], dtype=np.float64)
-        arrays = [akind, apower, arate, aoffset, arow, acut, ecol, ecoef, epower, erate]
+        ekappa = np.array([e.kappa for e in tail.envelopes], dtype=np.float64)
+        econst = np.array([e.const for e in tail.envelopes], dtype=np.float64)
+        arrays = [akind, apower, arate, akappa, aconst, aoffset, arow, acut, ecol,
+                  ecoef, epower, erate, ekappa, econst]
         arrays = [
             np.ascontiguousarray(a) if a.size else np.zeros(1, a.dtype) for a in arrays
         ]
@@ -1244,17 +3025,21 @@ cdef class TailKernel:
         self.t.akind = <const int*> cnp.PyArray_DATA(arrays[0])
         self.t.apower = <const double*> cnp.PyArray_DATA(arrays[1])
         self.t.arate = <const double*> cnp.PyArray_DATA(arrays[2])
-        self.t.aoffset = <const double*> cnp.PyArray_DATA(arrays[3])
-        self.t.arow = <const double*> cnp.PyArray_DATA(arrays[4])
-        self.t.acut = <const double*> cnp.PyArray_DATA(arrays[5])
-        self.t.ecol = <const int*> cnp.PyArray_DATA(arrays[6])
-        self.t.ecoef = <const double*> cnp.PyArray_DATA(arrays[7])
-        self.t.epower = <const double*> cnp.PyArray_DATA(arrays[8])
-        self.t.erate = <const double*> cnp.PyArray_DATA(arrays[9])
+        self.t.akappa = <const double*> cnp.PyArray_DATA(arrays[3])
+        self.t.aconst = <const double*> cnp.PyArray_DATA(arrays[4])
+        self.t.aoffset = <const double*> cnp.PyArray_DATA(arrays[5])
+        self.t.arow = <const double*> cnp.PyArray_DATA(arrays[6])
+        self.t.acut = <const double*> cnp.PyArray_DATA(arrays[7])
+        self.t.ecol = <const int*> cnp.PyArray_DATA(arrays[8])
+        self.t.ecoef = <const double*> cnp.PyArray_DATA(arrays[9])
+        self.t.epower = <const double*> cnp.PyArray_DATA(arrays[10])
+        self.t.erate = <const double*> cnp.PyArray_DATA(arrays[11])
+        self.t.ekappa = <const double*> cnp.PyArray_DATA(arrays[12])
+        self.t.econst = <const double*> cnp.PyArray_DATA(arrays[13])
 
     def cut_row(self, int atom):
         """Cut row of a violating atom (its own row, or the full-space row)."""
-        return np.array(self._keep[5][atom], dtype=np.float64)
+        return np.array(self._keep[7][atom], dtype=np.float64)
 
 
 cdef inline TailResult _empty_result() noexcept nogil:
@@ -1265,12 +3050,49 @@ cdef inline TailResult _empty_result() noexcept nogil:
     r.lead_value = NAN
     r.lead_power = NAN
     r.lead_rate = NAN
+    r.lead_kappa = NAN
+    r.lead_const = NAN
     r.margin = NAN
     r.has_lead = False
     r.has_margin = False
     r.has_cutoff = False
     r.cut_atom = -1
     return r
+
+
+cdef enum:
+    _PIECE = 5      # power, rate, kappa, const, magnitude
+
+
+cdef inline bint _stronger(
+    double kappa, double rate, double power, double big_k, double big_r, double big_b
+) noexcept nogil:
+    """Whether a weight outgrows the leader's (lexicographic in ``-kappa, rate,
+    power``)."""
+    if kappa != big_k:
+        return kappa < big_k
+    if rate != big_r:
+        return rate > big_r
+    return power > big_b
+
+
+cdef inline double _crossover(
+    double db, double dr, double dk
+) noexcept nogil:
+    """Smallest ``zeta >= 0`` beyond which a weaker ratio is nonincreasing.
+
+    The log ratio has derivative ``db / zeta + dr - 2 dk zeta`` (``db``, ``dr``
+    are the competitor's power and rate excess, ``dk >= 0`` its extra
+    Gaussian rate); it is nonpositive beyond the positive root of
+    ``2 dk zeta**2 - dr zeta - db``.
+    """
+    if dk > 0.0:
+        if db <= 0.0 and dr <= 0.0:
+            return 0.0
+        return (dr + sqrt(dr * dr + 8.0 * dk * npmax(db, 0.0))) / (4.0 * dk)
+    if dr < 0.0 and db > 0.0:
+        return db / (-dr)
+    return 0.0
 
 
 cdef TailResult _lead_proof(
@@ -1287,14 +3109,13 @@ cdef TailResult _lead_proof(
     """Cutoff beyond which atom ``lead`` dominates every competitor."""
     cdef double lead_lo = values[lead] - slacks[lead]
     cdef int npc = 0
-    cdef int i
-    cdef double v, sl, mag, m, big_b, big_r, zeta, keep, factor, total
-    cdef double b, r
+    cdef int i, q
+    cdef double v, sl, mag, m, big_b, big_r, big_k, big_c, zeta, keep, factor, total
+    cdef double b, r, kk, log_w
     cdef TailResult res = _empty_result()
     for i in range(nenv):
-        pieces[3 * npc] = env[3 * i]
-        pieces[3 * npc + 1] = env[3 * i + 1]
-        pieces[3 * npc + 2] = env[3 * i + 2]
+        for q in range(_PIECE):
+            pieces[_PIECE * npc + q] = env[_PIECE * i + q]
         npc += 1
     for i in range(lead + 1, tt.na):
         v = values[i]
@@ -1309,28 +3130,37 @@ cdef TailResult _lead_proof(
             m = -tt.apower[i]
             if tt.aoffset[i] < 0.0:
                 mag *= pow(2.0, m)
-        pieces[3 * npc] = tt.apower[i]
-        pieces[3 * npc + 1] = tt.arate[i]
-        pieces[3 * npc + 2] = mag
+        pieces[_PIECE * npc] = tt.apower[i]
+        pieces[_PIECE * npc + 1] = tt.arate[i]
+        pieces[_PIECE * npc + 2] = tt.akappa[i]
+        pieces[_PIECE * npc + 3] = tt.aconst[i]
+        pieces[_PIECE * npc + 4] = mag
         npc += 1
     big_b = tt.apower[lead]
     big_r = tt.arate[lead]
+    big_k = tt.akappa[lead]
+    big_c = tt.aconst[lead]
     res.status = TAIL_INCONCLUSIVE
     res.lead_value = lead_lo
     res.lead_power = big_b
     res.lead_rate = big_r
+    res.lead_kappa = big_k
+    res.lead_const = big_c
     res.has_lead = True
     zeta = tt.zeta_min
     for i in range(npc):
-        b = pieces[3 * i]
-        r = pieces[3 * i + 1]
-        if r > big_r or (r == big_r and b > big_b):
+        b = pieces[_PIECE * i]
+        r = pieces[_PIECE * i + 1]
+        kk = pieces[_PIECE * i + 2]
+        if _stronger(kk, r, b, big_k, big_r, big_b):
             return res
-        if r < big_r and b > big_b:
-            zeta = npmax(zeta, (b - big_b) / (big_r - r))
+        zeta = npmax(zeta, _crossover(b - big_b, r - big_r, kk - big_k))
     keep = 1.0 - npmax(dominance, 1e-12)
     while zeta <= zeta_cap:
-        if big_b * log(zeta) + big_r * zeta < _LOG_UNDERFLOW:
+        # Leader weights below exp(-575) are not trusted, except Gaussian
+        # leaders, whose comparisons are relative and exact in log form.
+        log_w = big_b * log(zeta) + big_r * zeta
+        if big_k == 0.0 and log_w < _LOG_UNDERFLOW:
             break
         if tt.akind[lead] == 1 and tt.aoffset[lead] > 0.0:
             factor = pow(zeta / (zeta + tt.aoffset[lead]), -tt.apower[lead])
@@ -1339,9 +3169,11 @@ cdef TailResult _lead_proof(
         total = 0.0
         for i in range(npc):
             total += exp(
-                log(pieces[3 * i + 2])
-                + (pieces[3 * i] - big_b) * log(zeta)
-                + (pieces[3 * i + 1] - big_r) * zeta
+                log(pieces[_PIECE * i + 4])
+                + (pieces[_PIECE * i] - big_b) * log(zeta)
+                + (pieces[_PIECE * i + 1] - big_r) * zeta
+                - (pieces[_PIECE * i + 2] - big_k) * zeta * zeta
+                + (pieces[_PIECE * i + 3] - big_c)
             )
         if total * (1.0 + 1e-12) < lead_lo * factor * keep:
             res.status = TAIL_NONNEGATIVE
@@ -1357,7 +3189,7 @@ cdef TailResult _lead_proof(
 
 cdef Py_ssize_t tail_work_size(const TailTable* tt) noexcept nogil:
     """Doubles needed by ``tail_verdict``: values, slacks, envelopes, pieces."""
-    return 5 * tt.na + 6 * tt.ne + 3
+    return 2 * tt.na + _PIECE * (tt.na + 2 * tt.ne) + _PIECE
 
 
 cdef TailResult tail_verdict(
@@ -1381,7 +3213,7 @@ cdef TailResult tail_verdict(
     cdef double* values = work
     cdef double* slacks = work + na
     cdef double* env = work + 2 * na
-    cdef double* pieces = work + 2 * na + 3 * tt.ne
+    cdef double* pieces = work + 2 * na + _PIECE * tt.ne
     cdef int i, col, first = -1, nenv = 0, k, zero_lead = -1
     cdef double v, a, term, mag
     cdef bint nonzero_row
@@ -1414,17 +3246,19 @@ cdef TailResult tail_verdict(
                 # theta the feasible set is lexicographic (that atom > 0, or
                 # = 0 and the weaker ones >= 0), whose closure is that atom
                 # >= 0.  Its row is the valid cut (the weaker atom's row
-                # excluded every member with linear tails at both ends,
-                # G3-049); its margin moves the point to a positive leader.
+                # excluded every member with linear tails at both ends); its
+                # margin moves the point to a positive leader.
                 res.cut_atom = i if zero_lead < 0 else zero_lead
                 return res
             first = i
     for i in range(tt.ne):
         mag = fabs(theta[tt.ecol[i]]) * tt.ecoef[i]
         if mag > 0.0:
-            env[3 * nenv] = tt.epower[i]
-            env[3 * nenv + 1] = tt.erate[i]
-            env[3 * nenv + 2] = mag
+            env[_PIECE * nenv] = tt.epower[i]
+            env[_PIECE * nenv + 1] = tt.erate[i]
+            env[_PIECE * nenv + 2] = tt.ekappa[i]
+            env[_PIECE * nenv + 3] = tt.econst[i]
+            env[_PIECE * nenv + 4] = mag
             nenv += 1
     if first < 0:
         if nenv == 0:
@@ -1446,7 +3280,7 @@ cdef TailResult tail_verdict(
             break  # a stronger atom that is not a nonnegative contribution
         if values[k] - slacks[k] <= 0.0:
             continue
-        if growth and (tt.apower[k] < 0.0 or tt.arate[k] < 0.0):
+        if growth and _decaying(tt.apower[k], tt.arate[k], tt.akappa[k]):
             continue
         cand = _lead_proof(
             tt, values, slacks, k, env, nenv, zeta_cap, dominance, pieces
@@ -1458,27 +3292,33 @@ cdef TailResult tail_verdict(
     return best
 
 
+cdef inline bint _decaying(double power, double rate, double kappa) noexcept nogil:
+    """Whether a leading slope weight decays (gives no outward growth)."""
+    return kappa > 0.0 or rate < 0.0 or (rate == 0.0 and power < 0.0)
+
+
 cdef int growth_status(const TailResult* res) noexcept nogil:
     """Properness from an order-1 verdict (``basis_tails._growth_verdict``)."""
     if res.status == TAIL_VIOLATED:
         return GROWTH_IMPROPER
-    if res.has_lead and (res.lead_power < 0.0 or res.lead_rate < 0.0):
+    if res.has_lead and _decaying(res.lead_power, res.lead_rate, res.lead_kappa):
         # A positive but decaying leading slope is integrable.
         return GROWTH_IMPROPER
     if res.status == TAIL_INCONCLUSIVE:
         return GROWTH_INCONCLUSIVE
-    if not res.has_margin or res.lead_power < 0.0 or res.lead_rate < 0.0:
-        # Identically zero or decaying slope: q tends to a finite limit.
+    if not res.has_margin:
+        # Identically zero slope: q tends to a finite limit.
         return GROWTH_IMPROPER
     return GROWTH_PROPER
 
 
 cdef double tail_bound(const TailResult* res, double zeta) noexcept nogil:
-    """``margin zeta**lead_power exp(lead_rate zeta)`` (``_TailResult.bound``)."""
+    """``margin zeta**b exp(r zeta - kappa zeta**2 + const)`` (``_TailResult.bound``)."""
     cdef double log_w
     if not res.has_margin:
         return 0.0
-    log_w = res.lead_power * log(zeta) + res.lead_rate * zeta
+    log_w = (res.lead_power * log(zeta) + res.lead_rate * zeta
+             - res.lead_kappa * zeta * zeta + res.lead_const)
     if log_w > 700.0:
         return INFINITY
     return res.margin * exp(log_w)
@@ -1529,6 +3369,36 @@ def potential(BasisKernel kernel, const double[::1] theta, const double[::1] x,
         potential_point(t, &theta[0], x[i], max_order, &fwork[0], &cwork[0], q)
         for k in range(max_order + 1):
             o[k, i] = q[k]
+    return out
+
+
+def potential_z(BasisKernel kernel, const double[::1] theta, const double[::1] z,
+                int max_order):
+    """``q`` and its ``z`` derivatives at canonical points: ``(max_order + 1, R)``.
+
+    The points are never rounded through user units (``potential_point_z``),
+    so a support a few ulps wide is resolved.
+    """
+    cdef const BasisTable* t = &kernel.t
+    cdef Py_ssize_t n = z.shape[0]
+    cdef Py_ssize_t i
+    cdef int k
+    cdef double hk
+    if theta.shape[0] != t.d:
+        raise ValueError("theta has the wrong length")
+    if not 0 <= max_order <= 4:
+        raise ValueError("max_order must be in 0..4")
+    out = np.empty((max_order + 1, n))
+    cdef double[:, ::1] o = out
+    cdef double[::1] fwork = np.empty(5 * t.nf + 1)
+    cdef double[::1] cwork = np.empty((max_order + 1) * t.d + 1)
+    cdef double q[5]
+    for i in range(n):
+        potential_point_z(t, &theta[0], z[i], max_order, &fwork[0], &cwork[0], q)
+        hk = 1.0
+        for k in range(max_order + 1):
+            o[k, i] = q[k] * hk
+            hk = hk * t.h
     return out
 
 
@@ -1603,7 +3473,8 @@ def potential_enclosure(BasisKernel kernel, const double[::1] theta,
 def tail_result(TailKernel tail, const double[::1] theta, double zeta_cap,
                 double dominance, bint growth):
     """Tail verdict as a tuple ``(status, cutoff, zeta, lead_value, lead_power,
-    lead_rate, margin, cut_atom)`` (``None`` for absent values)."""
+    lead_rate, lead_kappa, lead_const, margin, cut_atom)`` (``None`` for absent
+    values)."""
     if theta.shape[0] != tail.t.d:
         raise ValueError("theta has the wrong length")
     work = np.empty(tail_work_size(&tail.t))
@@ -1611,7 +3482,7 @@ def tail_result(TailKernel tail, const double[::1] theta, double zeta_cap,
     cdef TailResult r = tail_verdict(
         &tail.t, &theta[0], zeta_cap, dominance, growth, &w[0]
     )
-    status = ("nonnegative", "violated", "inconclusive")[r.status]
+    status = ("verified", "violated", "unverified")[r.status]
     return (
         status,
         r.cutoff if r.has_cutoff else None,
@@ -1619,6 +3490,8 @@ def tail_result(TailKernel tail, const double[::1] theta, double zeta_cap,
         None if isnan(r.lead_value) else r.lead_value,
         r.lead_power if r.has_lead else None,
         r.lead_rate if r.has_lead else None,
+        r.lead_kappa if r.has_lead else None,
+        r.lead_const if r.has_lead else None,
         r.margin if r.has_margin else None,
         r.cut_atom,
     )
@@ -1639,6 +3512,90 @@ def endpoint_width(BasisKernel kernel, const double[::1] theta, bint upper,
     return endpoint_exclusion(
         t, &theta[0], upper, threshold, &rv[0], &pv[0], <Iv*> &iw[0]
     )
+
+
+def curvature(BasisKernel kernel, const double[::1] theta, const double[::1] z,
+              bint use_fast=True, bint reference=False):
+    """Structured scaled curvature ``(H, err_h, log_m)`` at canonical points ``z``.
+
+    ``H = q'' / ||pieces||`` in ``z`` units has the exact sign of ``q''``;
+    ``log_m`` is the natural log of the piece norm (``q''_zz = H exp(log_m)``),
+    possibly infinite when the scale itself leaves binary64 range.
+    ``use_fast=False`` forces the log path (a test hook; both agree).  With
+    ``reference=True`` the exact scale is appended as ``(refk, ref_a1,
+    ref_rem, half_log_norm)``: ``log_m = -refk (s**2/2) z**2 + a1 z + rem +
+    half_log_norm`` with double-double ``(n, 2)`` parts.
+    """
+    cdef const BasisTable* t = &kernel.t
+    cdef Py_ssize_t n = z.shape[0]
+    cdef int rc
+    if theta.shape[0] != t.d:
+        raise ValueError("theta has the wrong length")
+    acoef = np.ascontiguousarray(kernel.atom_rows @ np.asarray(theta))
+    if acoef.size == 0:
+        acoef = np.zeros(1)
+    H = np.empty(max(n, 1))
+    err = np.empty(max(n, 1))
+    logm = np.empty(max(n, 1))
+    cdef double[::1] av = acoef
+    cdef double[::1] hv = H
+    cdef double[::1] ev = err
+    cdef double[::1] lv = logm
+    refk = np.zeros(max(n, 1), dtype=np.intc)
+    a1 = np.zeros((max(n, 1), 2))
+    rem = np.zeros((max(n, 1), 2))
+    hl = np.zeros((max(n, 1), 2))
+    cdef int[::1] kv = refk
+    cdef double[:, ::1] a1v = a1
+    cdef double[:, ::1] remv = rem
+    cdef double[:, ::1] hlv = hl
+    cdef int* kp = &kv[0] if reference else NULL
+    cdef const double* zp = &z[0] if n else NULL
+    with nogil:
+        rc = curvature_scaled(t, &av[0], n, zp, use_fast, &hv[0], &ev[0], &lv[0],
+                              kp, &a1v[0, 0], &remv[0, 0], &hlv[0, 0])
+    if rc != 0:
+        raise MemoryError("curvature work buffers")
+    if reference:
+        return H[:n], err[:n], logm[:n], refk[:n], a1[:n], rem[:n], hl[:n]
+    return H[:n], err[:n], logm[:n]
+
+
+def curvature_atom_rows(BasisKernel kernel, const double[::1] z, bint use_fast=True):
+    """Theta-free per-atom curvature rows at canonical points ``z``.
+
+    Returns ``(R, N, refk, ref_a1, ref_rem)``: ``R`` and ``N`` of shape
+    ``(n, A)`` (see ``curvature_rows``), ``refk`` of shape ``(n,)`` and the
+    double-double scale parts ``ref_a1``, ``ref_rem`` of shape ``(n, 2)``.
+    """
+    cdef const BasisTable* t = &kernel.t
+    cdef Py_ssize_t n = z.shape[0]
+    cdef Py_ssize_t A = t.natom
+    cdef int rc
+    R = np.zeros((n, A))
+    N = np.zeros((n, A))
+    refk = np.zeros(max(n, 1), dtype=np.intc)
+    a1 = np.zeros((max(n, 1), 2))
+    rem = np.zeros((max(n, 1), 2))
+    if n == 0:
+        return R, N, refk[:0], a1[:0], rem[:0]
+    Rb = np.zeros(n * A + 1)
+    Nb = np.zeros(n * A + 1)
+    cdef double[::1] rv = Rb
+    cdef double[::1] nv = Nb
+    cdef int[::1] kv = refk
+    cdef double[:, ::1] av = a1
+    cdef double[:, ::1] mv = rem
+    cdef const double* zp = &z[0]
+    with nogil:
+        rc = curvature_rows(t, n, zp, use_fast, &rv[0], &nv[0], &kv[0], &av[0, 0],
+                            &mv[0, 0])
+    if rc != 0:
+        raise MemoryError("curvature work buffers")
+    if A:
+        R = Rb[: n * A].reshape(n, A).copy()
+        N = Nb[: n * A].reshape(n, A).copy()
+    return R, N, refk[:n], a1[:n], rem[:n]
 
 
 def _ulp_steps(const double[::1] x):

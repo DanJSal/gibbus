@@ -39,7 +39,7 @@ c = Distribution().fit(intervals, support=(-np.inf, np.inf))
 print(f"Mean: {c.mean:.3f}")
 ```
 
-Interval rows contribute their fitted probability masses directly; they are not converted to midpoint observations. Very coarse censoring can make mixture decomposition weakly identified or unidentified. See [Fitting](fitting.md#input-formats) for accepted layouts and [Numerical methods and performance](numerical-methods.md#interval-censored-likelihoods) for the integration and identifiability details.
+Interval rows contribute their fitted probability masses directly; they are not converted to midpoint observations. Very coarse censoring can make mixture decomposition weakly identified or unidentified. See [Fitting](fitting.md#input-formats) for accepted layouts and [Numerical methods](numerical-methods.md#interval-censored-likelihoods) for the integration and identifiability details.
 
 ## Weighted Samples
 
@@ -211,8 +211,7 @@ np.save("mixture_model.npy", c_mix.data)
 c_mix_loaded = Distribution(np.load("mixture_model.npy", allow_pickle=False))
 ```
 
-This build writes and reads durable format 2. Other format versions, including
-format 1 from the earlier polynomial engine, are rejected with a refit message.
+See [Serialization](serialization.md) for the durable format.
 The fitted mathematical model is durable within the supported format; optional
 numerical caches can be rebuilt. See [Serialization](serialization.md) for the
 complete compatibility policy.

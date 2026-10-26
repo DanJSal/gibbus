@@ -1,25 +1,9 @@
-"""Cached evaluation closures for PDF and potential functions.
+"""The exp-space potential of a base-space potential.
 
-This module constructs and returns *callable closures* over a fitted
-polynomial potential ``q(z)``.  Each factory function captures the
-relevant arrays at construction time so that repeated evaluations are
-cheap.
-
-Pipeline position
------------------
-``gibbus._postfit.evaluators`` sits just above the raw vectorized kernels in
-``_model/vec.py``.  It is called from ``_api/component.py`` (via ``_assign_from_struct``)
-to rebuild the evaluation stack whenever a new fit state is loaded.
-
-Conventions
------------
-* All closures accept both scalars and arrays.  Scalar inputs produce
-  ``float`` outputs; array inputs produce ``numpy.ndarray`` outputs.
-* Internal coordinate *z* is related to user coordinate *x* by
-  ``z = sigma_eff * x + mu_eff``; the affine mapping is handled by the
-  caller (``_BaseSpaceView``), not here.
-* Boundary log-singularity terms use only the canonical amplitude pair
-  ``[aL, aU]``. Distances are fixed at the actual support endpoints.
+``_potential_exp_from_x_potential`` turns a base-space potential callable
+``pot_x(x, n)`` into ``pot_y(y, n)`` for ``y = exp(x)`` by the change of
+variables (Stirling numbers of the first kind give the derivatives).  The
+closure accepts scalars and arrays; scalar inputs produce ``float``.
 """
 
 from functools import cache

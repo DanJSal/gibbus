@@ -1,12 +1,9 @@
-"""Coefficient-linear constraint rows of a G3 fit and their cone description.
+"""Coefficient-linear constraint rows of a fit and their cone description.
 
-G1 owner replaced: the cone builders of ``_fit/conic_qp.py``
-(``_support_representation`` and its Markov-Lukacs blocks) and the start of
-``_fit/conic_newton.py`` (``_interior_start``).  Retained from G1: the solver's
-description ``B theta = sum_b L_b(Q_b)``, ``Q_b`` PSD, the compiled
-interior-point solver that consumes it, and a strictly interior cold start.
-Replaced: every G3 constraint is a homogeneous row ``a . theta >= 0``, so each
-row is one ``1 x 1`` block (a nonnegative scalar) instead of a Gram block.
+The solver's description is ``B theta = sum_b L_b(Q_b)``, ``Q_b`` PSD,
+consumed by the compiled interior-point solver; every constraint is a
+homogeneous row ``a . theta >= 0``, so each row is one ``1 x 1`` block (a
+nonnegative scalar).  A strictly interior cold start is built here too.
 
 Rows, by kind:
 
@@ -15,7 +12,7 @@ Rows, by kind:
   outward-nonnegative (``_SideAsymptotics.leading``).  Interior-point endpoints
   lie strictly inside the description, and the segment between two interior
   points does too, so every iterate keeps a strictly positive leader and is
-  proper (G3-032, M-O12); a collapse toward zero is a face decision;
+  proper; a collapse toward zero is a face decision;
 * ``"cut"`` -- ``Phi''(x*) . theta >= 0`` at a curvature minimum;
 * ``"tail"`` -- the leading curvature functional of a violated tail.
 
@@ -30,6 +27,7 @@ import numpy as np
 
 from .._defaults import _reraise_if_debug
 from .._model.basis_normalizer import _QuadratureFailure
+from ._curvature_kernels import same_constraint_rows
 from .conic_newton import _preconditioned_subproblem
 from .conic_qp import _ConicRepresentation
 
@@ -60,10 +58,7 @@ def _same_constraint(units, rows, /):
     numpy.ndarray
         Boolean, shape ``(k, m)``.
     """
-    u = units[:, None, :]
-    r = rows[None, :, :]
-    same = ((r != 0.0) == (u != 0.0)) & (np.abs(r - u) <= _SAME_DIRECTION * np.abs(u))
-    return np.all(same, axis=2)
+    return same_constraint_rows(units, rows, _SAME_DIRECTION)
 
 
 @dataclass(frozen=True)
@@ -129,12 +124,13 @@ class _ConstraintRows:
         unit = new / peak[:, None]
         unit /= np.sqrt(np.einsum("ij,ij->i", unit, unit))[:, None]
         # A new row is dropped if it is an existing row or an earlier added one.
-        known = np.any(_same_constraint(unit, self.rows), axis=1).tolist()
-        among = _same_constraint(unit, unit).tolist()
+        known = np.any(_same_constraint(unit, self.rows), axis=1)
+        among = _same_constraint(unit, unit)
         added = []
         for i in range(len(unit)):
-            if not (known[i] or any(among[i][j] for j in added)):
+            if not known[i]:
                 added.append(i)
+                known |= among[:, i]
         if not added:
             return self
         return _ConstraintRows(
@@ -169,7 +165,7 @@ def _structural_rows(model, /):
 
 
 def _linear_representation(rows, /):
-    """Cone description of ``rows @ theta >= 0`` for the G1 conic solver.
+    """Cone description of ``rows @ theta >= 0`` for the conic solver.
 
     Each row is a ``1 x 1`` block; ``y = -1`` is a strictly dual-feasible
     reference multiplier (every slack ``-y_b`` is positive).
@@ -199,19 +195,16 @@ def _linear_representation(rows, /):
 def _column_scales(rows, hessian, /):
     """Row-flattening column scales: where row feasibility is measured (Curtis-Reid).
 
-    G1 scales its polynomial rows geometrically, ``sigma**power`` with
-    ``sigma`` a least-squares fit of the log row magnitudes, so rows of
-    monomials far from the origin stay resolvable.  G3 rows are point
-    evaluations of general columns (an exponential column can exceed the
-    others by ``1e18`` at a far curvature cut), so the same idea is applied in its
-    general form: scales ``c_j = exp(gamma_j)`` minimizing
+    Rows are point evaluations of general columns (an exponential column can
+    exceed the others by ``1e18`` at a far curvature cut), so the scales are
+    least-squares balanced in log magnitude: scales ``c_j = exp(gamma_j)`` minimizing
     ``sum (log|a_ij| + rho_i + gamma_j)**2`` over the nonzero row entries
     together with the Jacobi targets ``log sqrt(H_jj)`` (one pseudo-row per
     column), so likelihood curvature and constraint geometry are balanced.
     In these coordinates every row is resolvable, so feasibility of the
     subproblem endpoints is measured and restored here (``_polish``, the
-    KKT tests).  The interior-point solves themselves run in G1's Jacobi
-    scaling (G3-050): flattening the rows can spread the scaled Hessian over
+    KKT tests).  The interior-point solves themselves run in the Jacobi
+    scaling: flattening the rows can spread the scaled Hessian over
     1e18 (a near-zero leader face whose cuts carry 1e-14 gate entries), past
     what the solver's dual certificate resolves (``non_descent``, bound
     ``inf``).
@@ -231,23 +224,46 @@ def _column_scales(rows, hessian, /):
     h = np.asarray(hessian, dtype=np.float64)
     n = h.shape[0]
     diag = np.diag(h)
-    entries = []  # (row index, column, log magnitude)
-    for i, row in enumerate(rows.rows):
-        for j in np.flatnonzero(row):
-            entries.append((i, int(j), math.log(abs(float(row[j])))))
-    r = rows.size
-    for j in range(n):
-        if diag[j] > 0.0:
-            entries.append((r + j, j, 0.5 * math.log(float(diag[j]))))
-    m = r + n
-    design = np.zeros((len(entries), m + n))
-    target = np.zeros(len(entries))
-    for e, (i, j, value) in enumerate(entries):
-        design[e, i] = 1.0
-        design[e, m + j] = 1.0
-        target[e] = -value
-    solution = np.linalg.lstsq(design, target, rcond=None)[0]
-    gamma = solution[m:]
+    # Eliminate each row offset by centering its nonzero entries. The
+    # remaining least-squares problem has n columns, independent of the
+    # number of cuts. Preserve the original minimum-norm gauge separately
+    # on every connected component of the row/column incidence graph.
+    values = np.vstack([rows.rows, np.diag(np.sqrt(np.maximum(diag, 0.0)))])
+    mask = values != 0.0
+    counts = mask.sum(axis=1)
+    mask = mask[counts > 0]
+    values = values[counts > 0]
+    counts = counts[counts > 0]
+    logs = np.zeros_like(values)
+    np.log(np.abs(values), out=logs, where=mask)
+    means = logs.sum(axis=1) / counts
+    incidence = mask.astype(float)
+    centered = incidence / counts[:, None]
+    ii, jj = np.nonzero(mask)
+    design = -centered[ii].copy()
+    design[np.arange(len(ii)), jj] += 1.0
+    target = means[ii] - logs[ii, jj]
+    adjacency = incidence.T @ incidence > 0
+    remaining = set(range(n))
+    gauges, targets = [], []
+    while remaining:
+        component = {min(remaining)}
+        pending = list(component)
+        while pending:
+            column = pending.pop()
+            neighbors = set(np.flatnonzero(adjacency[column])) - component
+            component.update(neighbors)
+            pending.extend(neighbors)
+        remaining.difference_update(component)
+        columns = sorted(component)
+        selected = np.any(mask[:, columns], axis=1)
+        gauge = centered[selected].sum(axis=0)
+        gauge[columns] += 1.0
+        gauges.append(gauge)
+        targets.append(-float(means[selected].sum()))
+    design = np.vstack([design, gauges])
+    target = np.concatenate([target, targets])
+    gamma = np.linalg.lstsq(design, target, rcond=None)[0]
     # Fix the free row/column gauge: geometric mean of the scales is one.
     gamma -= gamma.mean()
     return np.exp(gamma)
@@ -269,7 +285,7 @@ def _interior_direction(rows, /):
 
     With a margin variable ``t`` the homogeneous system ``a_i . theta >= t``
     (unit rows ``a_i``), ``t >= 0`` is solved for
-    ``min 1/2 (|theta|^2 + t^2) - t`` by the G1 interior-point solver: the
+    ``min 1/2 (|theta|^2 + t^2) - t`` by the interior-point solver: the
     result has slack at least ``t > 0`` in every row whenever the cone has an
     interior.  (Minimizing a pull alone
     can stop on a face once cut rows are present.)
@@ -348,18 +364,17 @@ class _StartResult:
 def _interior_start(objective, rows, /, max_iterations=60, direction=None):
     """Strictly interior cold start: the best point on the ray ``a w``.
 
-    G1 starts from a Gaussian matched to the data moments plus small positive
-    higher terms; a G3 basis need not contain a free quadratic, so the start
-    is instead the NLL minimizer along the strictly interior structural
+    A basis need not contain a free quadratic (no Gaussian start), so the
+    start is the NLL minimizer along the strictly interior structural
     direction ``w`` (convex in ``a > 0``; every ``a w`` is proper because the
     growth rows are homogeneous and strictly positive).  Newton steps in
-    ``a``, bounded in ``log a``, with Armijo backtracking; stopped by G1's
+    ``a``, bounded in ``log a``, with Armijo backtracking; stopped by the
     predicted-decrease criterion.
 
     Parameters
     ----------
     objective : _BasisPointObjective
-        Objective (G1 callable shape).
+        Objective callable.
     rows : _ConstraintRows
         Structural rows.
     max_iterations : int
@@ -399,7 +414,7 @@ def _interior_start(objective, rows, /, max_iterations=60, direction=None):
         whw = float(w @ current.hessian @ w)
         d1 = a * gw
         d2 = a * gw + a * a * whw
-        # G1's convergence measure: the predicted decrease of the Newton model
+        # Convergence measure: the predicted decrease of the Newton model
         # (1e-12 nats, ``_NewtonOptions.tolerance``); a gradient test alone
         # would ask for more than the NLL can resolve.
         predicted = 0.5 * d1 * d1 / d2 if d2 > 0.0 else np.inf
@@ -417,8 +432,8 @@ def _interior_start(objective, rows, /, max_iterations=60, direction=None):
                 # A trial the normalizer cannot resolve (a nearly flat
                 # potential far from the minimizer: a z**2 face start stepped
                 # 0.5 -> 1.7e-4) is a line-search rejection, recorded as not
-                # routine, as for Newton trials (G3-032, G3-042).
-                _reraise_if_debug(exc, "G3 interior-start ray trial")
+                # routine, as for Newton trials.
+                _reraise_if_debug(exc, "interior-start ray trial")
                 step *= 0.5
                 continue
             if trial.nll <= current.nll + 1e-4 * step * d1:

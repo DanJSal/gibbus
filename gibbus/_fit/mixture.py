@@ -2,7 +2,7 @@
 
 This low-level fitting module contains observation-level mixture helpers used
 by the API-layer fitting controller, automatic component-count selection, and
-natural mixture machinery.  It owns no public estimator state and imports no API-layer
+the basis mixture fitter.  It owns no public estimator state and imports no API-layer
 objects.
 
 Contents
@@ -333,7 +333,7 @@ def _initial_responsibility_candidates(
     callers that run EM can keep whichever converged solution has the larger
     observed log-likelihood.  ``include_valley=False`` is how a caller widens
     the search when the valley start proved unreliable (see
-    ``natural_mixture._fit_natural_mixture``).
+    ``basis_mixture._multistart``).
 
     Parameters
     ----------
@@ -378,7 +378,7 @@ def _gmm_init_responsibilities(samples_1d, n_components, rng, /):
     Fits a ``K``-component Gaussian mixture by EM (k-means++ centers, hard
     initial assignment, ``AUTO_GMM_N_INIT`` restarts, the best final average
     log likelihood kept) in the modeled base coordinate and returns its
-    posterior responsibilities and weights.  It is a seed only: the natural
+    posterior responsibilities and weights.  It is a seed only: the basis
     mixture fit refines everything.
 
     Parameters
@@ -839,8 +839,9 @@ def _propose_n_components(samples_1d, k_max, rng, /, *, verbose=0):
     This is a structural prior, not a decision: ``_count_modes_kde``
     sweeps a Gaussian KDE across bandwidths and reports the most
     frequent number of prominent local maxima.  The actual choice is
-    made by :func:`gibbus._api.selection.select_n_components`, which scores candidate *K*
-    values with lightweight log-concave fits centered on this proposal.
+    made by :func:`gibbus._fit.basis_mixture._select_components`, which
+    scores candidate *K* values with lightweight log-concave fits centered on
+    this proposal.
 
     Candidate counts are deliberately scored by the log-concave model family
     itself.  KDE mode counting only centers the candidate range, while

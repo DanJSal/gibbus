@@ -51,6 +51,7 @@ __all__ = [
     "needs_asymptotic_tail",
     "refine_tail_quantiles",
     "tail_log_cdf",
+    "tail_log_masses",
     "tail_rate",
 ]
 
@@ -249,6 +250,56 @@ def exact_tail_log_cdf(potential, x, endpoint, /, *, upper):
     return -qx + np.log(local_scale) + np.log(value)
 
 
+def tail_log_masses(potential, /, *, compiled=None):
+    """The tail-mass evaluator of a density: ``f(x, endpoint, *, upper)``.
+
+    The evaluator returns ``log P`` of the interval between each point of
+    ``x`` and ``endpoint`` (the upper or lower tail per ``upper``).  When
+    ``compiled`` is given it resolves every point in one call; points it
+    cannot resolve, and densities without one, use the scaled tail
+    quadrature (:func:`exact_tail_log_cdf`), which factors out the density at
+    each point and integrates an ``O(1)`` profile.  This is the one tail
+    strategy behind survival functions, extreme quantiles and tail CDFs.
+
+    Parameters
+    ----------
+    potential : callable
+        Normalized negative-log density ``potential(x, n)``.
+    compiled : callable or None
+        ``compiled(x_array, endpoint) -> log masses``, the compiled row
+        integrator of a fitted component; it raises one of
+        ``NUMERIC_FAILURES`` for rows it cannot close (a fit whose requested
+        tail leader is fixed to zero, or a potential beyond binary64
+        resolution).
+
+    Returns
+    -------
+    callable
+        ``(x, endpoint, *, upper) -> numpy.ndarray`` of log masses.
+    """
+
+    def scaled(x, endpoint, upper):
+        out = np.full(x.shape, np.nan)
+        out[x == endpoint] = -np.inf
+        for i in np.flatnonzero(~np.isnan(x) & (x != endpoint)):
+            out[i] = exact_tail_log_cdf(potential, float(x[i]), endpoint, upper=upper)
+        return out
+
+    def evaluate(x, endpoint, /, *, upper):
+        flat = np.asarray(x, dtype=np.float64).reshape(-1)
+        endpoint = float(endpoint)
+        if compiled is not None:
+            try:
+                return np.asarray(compiled(flat, endpoint), dtype=np.float64)
+            except NUMERIC_FAILURES as exc:
+                # Not routine: the primary integrator could not close a row;
+                # the scaled quadrature is an equally exact evaluation.
+                _reraise_if_debug(exc, "compiled tail mass")
+        return scaled(flat, endpoint, bool(upper))
+
+    return evaluate
+
+
 def _displacement_coordinate(potential, endpoint, direction, start, /):
     """Return a dimensionless displacement coordinate rooted at *start*.
 
@@ -391,7 +442,7 @@ _ENDPOINT_ULPS = 64
 """Seeds this close to a finite endpoint (in its ulps) return the endpoint."""
 
 
-def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
+def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_masses):
     """Solve an extreme tail quantile with asymptotic seeding and exact correction.
 
     The leading asymptotic tail is used only to obtain a robust seed.  The
@@ -413,10 +464,9 @@ def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
         Initial asymptotic tail seed.
     upper : bool
         Whether to invert the upper rather than lower tail.
-    log_tail_mass : callable or None
-        Exact tail-mass evaluator ``f(x, endpoint, upper=...)``.  Supplying
-        one lets callers keep component or mixture tail quadrature below the
-        Python potential-callback boundary during root correction.
+    log_tail_masses : callable
+        Tail-mass evaluator ``(x_array, endpoint, *, upper) -> log masses``
+        (:func:`tail_log_masses`) for the exact correction.
     """
     direction = 1.0 if upper else -1.0
     to_x, dx_dv = _displacement_coordinate(potential, endpoint, direction, float(start))
@@ -431,10 +481,8 @@ def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
     # root is already close.  Keep a bracket in the same displacement variable
     # so a bad Newton step cannot leave the monotone tail region.
     def exact_at(vv):
-        x_eval = to_x(vv)
-        if log_tail_mass is not None:
-            return float(log_tail_mass(x_eval, endpoint, upper=upper))
-        return exact_tail_log_cdf(potential, x_eval, endpoint, upper=upper)
+        x_eval = float(to_x(vv))
+        return float(log_tail_masses(np.array([x_eval]), endpoint, upper=upper)[0])
 
     # Re-bracket the *exact* target.  This is usually a very small adjustment,
     # but it also handles a spectral seed that was on the wrong side.
@@ -443,7 +491,7 @@ def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
     ):
         # The seed lies within the last ulps of a finite endpoint, where no
         # interior coordinate is representable enough to integrate; the
-        # endpoint is the representable quantile (G3-046).
+        # endpoint is the representable quantile.
         return float(endpoint)
     f_v = exact_at(v)
     if not np.isfinite(f_v):
@@ -504,7 +552,7 @@ def invert_tail(potential, log_p, endpoint, start, /, *, upper, log_tail_mass):
 
 
 def refine_tail_quantiles(
-    potential, raw_ppf, lo_edge, hi_edge, p, base_out, /, *, log_tail_mass
+    potential, raw_ppf, lo_edge, hi_edge, p, base_out, /, *, log_tail_masses
 ):
     """Re-solve quantiles the spectral CDF cannot resolve.
 
@@ -530,8 +578,8 @@ def refine_tail_quantiles(
         Requested probabilities.
     base_out : numpy.ndarray, shape (R,)
         Quantiles from the spectral inverse, in base coordinates.
-    log_tail_mass : callable or None
-        Exact tail-mass evaluator forwarded to :func:`invert_tail`.
+    log_tail_masses : callable
+        Tail-mass evaluator forwarded to :func:`invert_tail`.
 
     Returns
     -------
@@ -559,10 +607,10 @@ def refine_tail_quantiles(
                 lo_edge,
                 seed_lo,
                 upper=False,
-                log_tail_mass=log_tail_mass,
+                log_tail_masses=log_tail_masses,
             )
         except NUMERIC_FAILURES as exc:
-            # Fails loudly (G3-047, Phase E default 4): the spectral answer
+            # Fails loudly: the spectral answer
             # holds no significant digits out here.
             raise RuntimeError(
                 f"asymptotic lower-tail quantile at p={p[idx]:.3e} did not "
@@ -576,7 +624,7 @@ def refine_tail_quantiles(
                 hi_edge,
                 seed_hi,
                 upper=True,
-                log_tail_mass=log_tail_mass,
+                log_tail_masses=log_tail_masses,
             )
         except NUMERIC_FAILURES as exc:
             raise RuntimeError(

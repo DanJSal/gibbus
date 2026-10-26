@@ -1,16 +1,11 @@
 # cython: language_level=3
 
-"""Compiled G3 face Newton: G1's fused loop over a compiled basis objective.
+"""Compiled face Newton: the fused loop over a compiled basis objective.
 
-G1 owner replaced: the Python objective callback of
-``conic_newton._newton_on_representation`` (``solve_callback_newton``) for
-G3 point fits, G1's compiled interval loop (``_conic_kernels.
-solve_interval_newton``) for G3 interval fits (G3-044), and G1's compiled
-shared-mixture objectives (``_shared_mixture_kernels.SharedMStepObjective``
-and ``JointMixtureObjective``) for G3 mixtures (G3-045).  Retained from G1:
-the fused nogil Newton loop ``_conic_kernels._face_newton_loop`` (warm/cold
+One implementation serves point fits, interval fits and mixtures.  The
+fused nogil Newton loop is ``_conic_kernels._face_newton_loop`` (warm/cold
 conic subproblems, carried certificate, Armijo line search with the roundoff
-rule, backtracking on any rejected trial) and the saddle-free metric
+rule, backtracking on any rejected trial) with the saddle-free metric
 ``_conic_kernels._in_safeguarded_metric``.
 
 ``BasisFaceObjective`` evaluates one objective on a face ``x -> theta = N x``
@@ -35,9 +30,9 @@ component; shared columns are joint coordinates of every block).  Kinds:
   covariance of the complete-data scores over the labels ``sum_i w_i
   sum_k r_ik (g_ik - g_bar_i)(g_ik - g_bar_i)^T``.
 
-The metric is ``F`` when ``C`` is identically zero, else G1's saddle-free
+The metric is ``F`` when ``C`` is identically zero, else the saddle-free
 metric of the restricted ``F`` and ``C``.  While its gate is on (inside a run)
-every trial must first be globally convex in every block (G3-038): a block
+every trial must first be globally convex in every block: a block
 is rejected cheaply when ``q''`` at one of its valleys lies below the shape
 verdict's floor, else after the full curvature search; the first violating
 trial of a run queues its block's cut rows, and the first call after the
@@ -63,7 +58,6 @@ from .._model._basis_kernels cimport (
     BasisTable,
     TailKernel,
     TailTable,
-    eval_point,
 )
 from .._model._normalizer_kernels cimport (
     NORM_PROPER,
@@ -81,21 +75,23 @@ from ._conic_kernels cimport (
     _in_safeguarded_metric,
 )
 from ._curvature_kernels cimport (
-    SEARCH_NONNEGATIVE,
-    SEARCH_INCONCLUSIVE,
+    SEARCH_VERIFIED,
+    CurvatureSearch,
+    CurvSearch,
     SearchOptions,
     SearchResult,
     search_free,
+    search_options,
     separate_c,
-    valleys_c,
 )
+from .linear_qp import _projection_candidate
 
 cnp.import_array()
 
 # ``basis_constraints._same_constraint``: four ulp of each entry.
 cdef double _SAME = 4.0 * 2.220446049250313e-16
 
-# Rejection codes of ``_evaluate`` (any nonzero code backtracks in G1's loop).
+# Rejection codes of ``_evaluate`` (any nonzero code backtracks in the loop).
 cdef enum:
     REJECT_SHAPE = 1
     REJECT_IMPROPER = 2
@@ -123,14 +119,9 @@ KIND_MSTEP = K_MSTEP
 KIND_JOINT = K_JOINT
 
 
-from ._series_search cimport SeriesSearchTable, SeriesSearchKernel, series_candidates_c
-
 cdef struct Ctx:
     # Blocks: table and size per block; per-block slots have stride ``d``
     # (the largest size), the block's own arrays contiguous inside them.
-    SeriesSearchTable** series
-    int series_hits
-    int full_searches
     const BasisTable** tables
     const int* dims
     const double** cscale
@@ -149,9 +140,8 @@ cdef struct Ctx:
     const TailTable** ctail_lo
     const TailTable** ctail_hi
     NormOptions nopt
+    CurvSearch** search
     SearchOptions sopt
-    double floor_
-    double series_margin
     int cap_rows
     # Data.
     const double* stats
@@ -164,11 +154,7 @@ cdef struct Ctx:
     int intervals
     # Run state.
     int gate
-    void* curvature_contexts
-    void* curvature_options
     int stop_on_failure
-    double* dom_a
-    double* dom_b
     const double* known
     int nknown
     int armed
@@ -180,8 +166,6 @@ cdef struct Ctx:
     int p_block
     int p_nrows
     int p_npoints
-    double p_a
-    double p_b
     int failures
     int f_status
     int f_side
@@ -200,7 +184,6 @@ cdef struct Ctx:
     double* logz
     double* fwork
     double* colwork
-    double* vbuf
     double* rows
     double* unit
     double* p_theta
@@ -280,9 +263,7 @@ cdef bint _known(const Ctx* c, const double* u) noexcept nogil:
     return False
 
 
-cdef void _queue(
-    Ctx* c, int b, int nrows, int npoints, double a, double bb
-) noexcept nogil:
+cdef void _queue(Ctx* c, int b, int nrows, int npoints) noexcept nogil:
     """Keep ``c.rows`` as block ``b``'s cuts of the first violating trial, if new.
 
     Only the first violating trial of a run (normally the full step)
@@ -308,92 +289,34 @@ cdef void _queue(
     c.p_block = b
     c.p_nrows = nrows
     c.p_npoints = npoints
-    c.p_a = a
-    c.p_b = bb
     c.has_pending = 1
-
-
-cdef int _resolve_contact(Ctx* c, int b) noexcept nogil:
-    """Ask the shared separator to refine a numerically ambiguous contact."""
-    if c.curvature_contexts == NULL:
-        return 0
-    with gil:
-        try:
-            from .curvature_search import _separate_curvature
-            contexts = <object> c.curvature_contexts
-            options = <object> c.curvature_options
-            result = _separate_curvature(contexts[b],
-                np.array(<double[:c.dims[b]]> c.part, copy=True), options)
-            return result.status == "nonnegative"
-        except (ArithmeticError, ValueError, OverflowError):
-            return 0
 
 
 cdef int _gate(Ctx* c, int b) noexcept nogil:
     """Block ``b``: ``0`` globally convex, ``1`` rejection, ``-1`` allocation failure.
 
-    A block is rejected outright when ``q''`` at one of its valleys (the
-    local minima over the round's search domain) lies below the shape
-    verdict's floor: that point proves the violation and ``Phi''(x)`` there
-    is a valid cut.  Only a block passing this test pays for the full
-    curvature search, whose ``nonnegative`` verdict accepts it.  Columns
-    overflowing far out give no usable row: such a point is left to the
-    full search.
+    The block is accepted when the curvature search verifies ``q'' >= 0``
+    within its threshold; otherwise its cut rows (point cuts, then the
+    leading functional of each violated tail, or the bound rows of a negative
+    log amplitude) are queued and the trial is rejected.
     """
-    cdef const BasisTable* t = c.tables[b]
     cdef int d = c.dims[b]
-    cdef int nv = 0, i, j, nbad = 0, m = 0, npts
-    cdef double q2
-    cdef bint usable, used_series=False
-    cdef double rejection_floor
+    cdef int i, j, m = 0, npts
     cdef SearchResult sr
     cdef const TailTable* tt
     _gather(c, b, c.part)
-    nv=-1
-    if c.series[b]!=NULL:
-        nv=series_candidates_c(c.series[b],c.part,c.vbuf,c.sopt.initial_cells+4)
-        used_series=nv>=0
-    if nv<0:
-        if valleys_c(t, c.part, c.dom_a[b], c.dom_b[b], &c.sopt, c.vbuf, &nv) != 0:
-            return -1
-    rejection_floor=-c.series_margin/(t.h*t.h) if used_series else c.floor_
-    for i in range(nv):
-        eval_point(t, c.vbuf[i], 2, c.fwork, c.colwork)
-        usable = False
-        q2 = 0.0
-        for j in range(d):
-            if not isfinite(c.colwork[2 * d + j]):
-                usable = False
-                break
-            if c.colwork[2 * d + j] != 0.0:
-                usable = True
-            q2 = q2 + c.colwork[2 * d + j] * c.part[j]
-        if usable and q2 < rejection_floor:
-            memcpy(&c.rows[nbad * d], &c.colwork[2 * d], d * sizeof(double))
-            nbad += 1
-    if nbad:
-        if used_series: c.series_hits+=1
-        _queue(c, b, nbad, nbad, c.dom_a[b], c.dom_b[b])
-        c.r_block = b
-        c.r_nrows = nbad
-        return 1
-    c.full_searches+=1
-    if separate_c(t, c.part, c.ctail_lo[b], c.ctail_hi[b], &c.sopt, &sr) != 0:
+    if separate_c(c.search[b], c.part, c.ctail_lo[b], c.ctail_hi[b], &c.sopt, &sr) != 0:
         return -1
-    if sr.n_bound == 0:
-        if sr.status == SEARCH_NONNEGATIVE:
-            search_free(&sr)
-            return 0
-        if sr.status == SEARCH_INCONCLUSIVE and sr.unresolved == 0 and _resolve_contact(c, b):
-            search_free(&sr)
-            return 0
+    if sr.status == SEARCH_VERIFIED:
+        search_free(&sr)
+        return 0
     if sr.n_bound:
         # gamma < 0 sends q'' to -inf at an endpoint: the bound rows.
         for i in range(sr.n_bound):
             for j in range(d):
                 c.rows[m * d + j] = 1.0 if j == sr.bound_cols[i] else 0.0
             m += 1
-        _queue(c, b, m, 0, sr.a, sr.b)
+        _queue(c, b, m, 0)
     else:
         for i in range(sr.n_cuts):
             memcpy(&c.rows[m * d], &sr.cut_rows[i * d], d * sizeof(double))
@@ -405,7 +328,7 @@ cdef int _gate(Ctx* c, int b) noexcept nogil:
                 memcpy(&c.rows[m * d], &tt.acut[sr.tails[i].cut_atom * d],
                        d * sizeof(double))
                 m += 1
-        _queue(c, b, m, npts, sr.a, sr.b)
+        _queue(c, b, m, npts)
         if m == npts:
             # Point cuts only: a violated tail's leading functional belongs to
             # its asymptotic hierarchy, and a step to that boundary is left to
@@ -761,29 +684,30 @@ cdef int _refine_scalar_qp(
     cdef int i
     cdef double candidate_bound, incumbent_bound
     with gil:
-        try:
-            from .linear_qp import _projection_candidate
-            result = _projection_candidate(
-                np.array(<double[:n*n]> h, copy=True).reshape(n,n),
-                np.array(<double[:n]> g, copy=True),
-                np.array(<double[:n]> theta, copy=True),
-                np.array(<double[:r*n]> b, copy=True).reshape(r,n),
-            )
-            if result is None:
-                return 0
-            candidate_bound = max(0.0, -result.model_value) + max(0.0, result.gap)
-            incumbent_bound = max(0.0, -model[0]) + max(0.0, gap[0])
-            if isfinite(incumbent_bound) and candidate_bound >= incumbent_bound:
-                return 0
-            for i in range(n):
-                endpoint[i] = result.params[i]
-            for i in range(r):
-                dual[i] = result.dual[i]
-            model[0] = result.model_value
-            gap[0] = result.gap
-            return 1
-        except (np.linalg.LinAlgError, RuntimeError, ValueError):
+        # Unresolved projections and NumPy/SciPy numerical failures return
+        # ``None`` (recorded in the failure ledger by ``_projection_candidate``)
+        # and defer to the interior-point kernel.  Nothing is caught here: a
+        # contract error cannot leave this noexcept callback, so Cython reports
+        # it as unraisable instead of it being mistaken for a deferral.
+        result = _projection_candidate(
+            np.array(<double[:n*n]> h, copy=True).reshape(n,n),
+            np.array(<double[:n]> g, copy=True),
+            np.array(<double[:n]> theta, copy=True),
+            np.array(<double[:r*n]> b, copy=True).reshape(r,n),
+        )
+        if result is None:
             return 0
+        candidate_bound = max(0.0, -result.model_value) + max(0.0, result.gap)
+        incumbent_bound = max(0.0, -model[0]) + max(0.0, gap[0])
+        if isfinite(incumbent_bound) and candidate_bound >= incumbent_bound:
+            return 0
+        for i in range(n):
+            endpoint[i] = result.params[i]
+        for i in range(r):
+            dual[i] = result.dual[i]
+        model[0] = result.model_value
+        gap[0] = result.gap
+        return 1
 
 
 cdef double _step(
@@ -869,8 +793,10 @@ cdef class BasisFaceObjective:
         per infinite end, ``None`` otherwise, face-restricted, and the moment
         column scales) and ``_NormalizerOptions``.
     search : tuple
-        ``(blocks, options)``: per block ``(tail_lo, tail_hi)`` order-2
-        ``TailKernel`` and ``_CurvatureOptions``.
+        ``(blocks, options)``: per block ``(tail_lo, tail_hi, search)``
+        (order-2 ``TailKernel`` per infinite end and the block's
+        ``CurvatureSearch``, ``None`` when the objective is never gated) and
+        ``_CurvatureSearchOptions``.
     kind : int
         ``KIND_POINT``, ``KIND_INTERVAL``, ``KIND_MSTEP`` or ``KIND_JOINT``.
     data : dict
@@ -890,15 +816,11 @@ cdef class BasisFaceObjective:
     cdef void* _ptrs
 
     def __cinit__(self, kernels, basis, index, normalizer, search, int kind, data,
-                  int trace=0, series_models=None, curvature_contexts=None):
+                  int trace=0):
         cdef int nb, b, n_logit = 0
         cdef Py_ssize_t R = 0
         cdef BasisKernel kb
         self._ptrs = NULL
-        self.c.curvature_contexts = NULL
-        self.c.curvature_options = NULL
-        self.c.series=NULL
-        self.c.series_hits=0;self.c.full_searches=0
         kernels = list(kernels)
         nb = len(kernels)
         if nb < 1 or len(index) != nb:
@@ -973,8 +895,8 @@ cdef class BasisFaceObjective:
             raise ValueError("one weight per row")
         elif kind == K_MSTEP and intervals and weights.shape != (nb, R):
             raise ValueError("one weight vector per block")
-        # Valleys (initial_cells + 4) or a search's cuts, tails and bound rows.
-        cap = max(int(sopts.max_cuts) + d + 2, int(sopts.initial_cells) + 4)
+        # A search's point cuts, then two tail rows, or d bound rows.
+        cap = int(sopts.max_cuts) * (int(sopts.n_extra) + 1) + d + 2
         trace = max(trace, 0)
         wide = max(5 * d, n) + 1
         joint = kind == K_JOINT
@@ -984,7 +906,7 @@ cdef class BasisFaceObjective:
             mean=np.zeros(nb * d),
             cov=np.zeros(nb * d * d), logz=np.zeros(nb),
             fwork=np.zeros(5 * nf + 1), colwork=np.zeros(wide),
-            vbuf=np.zeros(int(sopts.initial_cells) + 4), rows=np.zeros((cap, d)),
+            rows=np.zeros((cap, d)),
             unit=np.zeros(n), p_theta=np.zeros(n), p_rows=np.zeros((cap, d)),
             f_theta=np.zeros(n), trace=np.zeros((max(trace, 1), n)),
             gfull=np.zeros(n), ffull=np.zeros((n, n)), cfull=np.zeros((n, n)),
@@ -999,40 +921,31 @@ cdef class BasisFaceObjective:
             gvec=np.zeros(max(d, n) + (nb + 1) * n + 1),
             nll_part=np.zeros(2 * nb + 1),
             scores=np.zeros(max(R * n, 1) if joint and data.get("scores") else 1),
-            dom=np.zeros((2, nb)), known=np.zeros((1, n)),
+            known=np.zeros((1, n)),
         )
         self._keep = dict(kernels=kernels, basis=basis, index=padded, dims=dims,
                           stats=stats, scales=scales, nblocks=nblocks,
                           sblocks=sblocks, bufs=bufs, rows=(lower, upper),
                           weights=weights, mass=mass, phi=phi)
-        if curvature_contexts is not None:
-            if len(curvature_contexts) != nb:
-                raise ValueError("one curvature context per block")
-            self._keep["curvature_contexts"] = tuple(curvature_contexts)
-            self._keep["curvature_options"] = sopts
-            self.c.curvature_contexts = <void*> self._keep["curvature_contexts"]
-            self.c.curvature_options = <void*> sopts
-        self.c.series=<SeriesSearchTable**>calloc(nb,sizeof(SeriesSearchTable*))
-        if self.c.series==NULL: raise MemoryError("series search pointer table")
-        caches=[None]*nb
-        if getattr(sopts,"series_candidates",False) and series_models is not None:
-            from .series_search import _SeriesCandidateCache
-            if len(series_models)!=nb: raise ValueError("one series model per block")
-            caches=[_SeriesCandidateCache(m,sopts) for m in series_models]
-        self._keep["series_caches"]=caches
-        self._keep["series_kernels"]=[None]*nb
-        # Per-block pointers: tables, six table arrays and column scales.
-        self._ptrs = calloc(8 * nb + 1, sizeof(void*))
+        # Per-block pointers: tables, six table arrays, column scales and the
+        # curvature searches.
+        self._ptrs = calloc(9 * nb + 1, sizeof(void*))
         if self._ptrs == NULL:
-            raise MemoryError("compiled G3 face objective")
+            raise MemoryError("compiled face objective")
         cdef const TailTable** tp = <const TailTable**> self._ptrs
         cdef const GrowthTable** gp = <const GrowthTable**> self._ptrs
         cdef const BasisTable** bp = <const BasisTable**> self._ptrs
         cdef const double** sp = <const double**> self._ptrs
+        cdef CurvSearch** cp = <CurvSearch**> self._ptrs
         for b in range(nb):
             ntl, ntu, gl, gu, _ = nblocks[b]
-            ctl, ctu = sblocks[b]
+            ctl, ctu, search_b = sblocks[b]
             kb = kernels[b]
+            cp[8 * nb + b] = NULL
+            if search_b is not None:
+                if (<CurvatureSearch> search_b).s.t != &kb.t:
+                    raise ValueError("curvature search of another basis")
+                cp[8 * nb + b] = &(<CurvatureSearch> search_b).s
             tp[b] = NULL if ntl is None else &(<TailKernel> ntl).t
             tp[nb + b] = NULL if ntu is None else &(<TailKernel> ntu).t
             gp[2 * nb + b] = NULL if gl is None else &(<GrowthKernel> gl).t
@@ -1041,10 +954,10 @@ cdef class BasisFaceObjective:
             tp[5 * nb + b] = NULL if ctu is None else &(<TailKernel> ctu).t
             bp[6 * nb + b] = &kb.t
             sp[7 * nb + b] = _ptr(scales[b])
-        kb = kernels[0]
         self.c.tables = &bp[6 * nb]
         self.c.dims = <const int*> cnp.PyArray_DATA(dims)
         self.c.cscale = &sp[7 * nb]
+        self.c.search = &cp[8 * nb]
         self.c.d = d
         self.c.n = n
         self.c.k = k
@@ -1066,18 +979,7 @@ cdef class BasisFaceObjective:
         self.c.nopt.variation = nopts.variation
         self.c.nopt.drop_tol = nopts.drop_tol
         self.c.nopt.zeta_cap = nopts.zeta_cap
-        self.c.sopt.rho = sopts.rho
-        self.c.sopt.initial_cells = sopts.initial_cells
-        self.c.sopt.max_cells = sopts.max_cells
-        self.c.sopt.min_width = sopts.min_width
-        self.c.sopt.newton_tol = sopts.newton_tol
-        self.c.sopt.newton_max = sopts.newton_max
-        self.c.sopt.zeta_cap = sopts.zeta_cap
-        self.c.sopt.fallback_zeta = sopts.fallback_zeta
-        self.c.sopt.max_cuts = sopts.max_cuts
-        self.c.sopt.feasibility_tol = sopts.feasibility_tol
-        self.c.floor_ = -float(sopts.feasibility_tol) / float(kb.t.h) ** 2
-        self.c.series_margin=max(float(sopts.feasibility_tol),float(getattr(sopts,"series_violation_tol",1e-10)))
+        search_options(sopts, &self.c.sopt)
         self.c.cap_rows = cap
         self.c.stats = _ptr(stats)
         self.c.mass = _ptr(mass)
@@ -1095,7 +997,6 @@ cdef class BasisFaceObjective:
         self.c.logz = _ptr(bufs["logz"])
         self.c.fwork = _ptr(bufs["fwork"])
         self.c.colwork = _ptr(bufs["colwork"])
-        self.c.vbuf = _ptr(bufs["vbuf"])
         self.c.rows = _ptr(bufs["rows"])
         self.c.unit = _ptr(bufs["unit"])
         self.c.p_theta = _ptr(bufs["p_theta"])
@@ -1119,8 +1020,6 @@ cdef class BasisFaceObjective:
         self.c.gvec = _ptr(bufs["gvec"])
         self.c.nll_part = _ptr(bufs["nll_part"])
         self.c.scores = _ptr(bufs["scores"]) if joint and data.get("scores") else NULL
-        self.c.dom_a = _ptr(bufs["dom"])
-        self.c.dom_b = &self.c.dom_a[nb]
         self.c.trace_cap = trace
         self.c.trace_n = 0
         self.c.known = _ptr(bufs["known"])
@@ -1137,18 +1036,17 @@ cdef class BasisFaceObjective:
         self.c.evaluations = 0
 
     def __dealloc__(self):
-        free(self.c.series)
         free(self._ptrs)
 
-    def begin(self, known_rows, domains, bint stop_on_failure=False):
-        """Start a gated run: known joint unit rows ``(m, n)`` and per-block domains."""
+    def begin(self, known_rows, bint stop_on_failure=False):
+        """Start a gated run with known joint unit rows ``(m, n)``."""
         cdef int b
-        cdef SeriesSearchKernel sk
+        for b in range(self.c.nb):
+            if self.c.search[b] == NULL:
+                raise ValueError("a gated run needs a curvature search per block")
         known = np.ascontiguousarray(known_rows, dtype=np.float64)
         if known.ndim != 2 or known.shape[1] != self.c.n:
             raise ValueError("known rows have the wrong shape")
-        if len(domains) != self.c.nb:
-            raise ValueError("one search domain per block")
         if known.shape[0] == 0:
             known = np.zeros((1, self.c.n))
             self.c.nknown = 0
@@ -1156,28 +1054,10 @@ cdef class BasisFaceObjective:
             self.c.nknown = known.shape[0]
         self._keep["known_now"] = known
         self.c.known = _ptr(known)
-        for b in range(self.c.nb):
-            self.c.dom_a[b] = float(domains[b][0])
-            self.c.dom_b[b] = float(domains[b][1])
-            cache=self._keep["series_caches"][b]
-            kernel=None if cache is None else cache.prepare(domains[b])
-            self._keep["series_kernels"][b]=kernel
-            self.c.series[b]=NULL
-            if kernel is not None:
-                sk=kernel
-                self.c.series[b]=&sk.t
         self.c.armed = 0
         self.c.has_pending = 0
         self.c.stop_on_failure = stop_on_failure
         self.c.gate = 1
-
-    def series_statistics(self):
-        """Candidate-search reuse and gate counts for experiments."""
-        return dict(hits=self.c.series_hits,full_searches=self.c.full_searches,
-                    blocks=[None if c is None else dict(builds=c.builds,
-                        tensor_builds=c.tensor_builds,tensor_reuses=c.tensor_reuses,reason=c.reason,
-                        kernel=None if c.kernel is None else c.kernel.statistics())
-                        for c in self._keep["series_caches"]])
 
     def end(self):
         """End the gated run."""
@@ -1258,22 +1138,21 @@ cdef class BasisFaceObjective:
     def newton(self, x0, double nll0, gradient0, hessian0, b_matrix, a_packed, sizes,
                a_offsets, q_offsets, reference_dual, row_degrees, blocks0, column_scale,
                options):
-        """Run G1's fused Newton loop from ``x0`` (face coordinates).
+        """Run the fused Newton loop from ``x0`` (face coordinates).
 
         ``begin`` must have been called.  ``x0`` is the accepted start with
         NLL ``nll0``, gradient ``gradient0`` ``(k,)`` and metric
-        ``hessian0`` ``(k, k)``; the cone description is G1's packed one
-        and ``blocks0`` its packed start Gram blocks; ``column_scale`` fixes
-        the subproblem column scales (G3-034), ``None`` takes G1's Jacobi
-        scaling of each subproblem's Hessian (G3-050); ``options`` is G1's
-        ``_NewtonOptions``.
+        ``hessian0`` ``(k, k)``; the cone description is packed and
+        ``blocks0`` its packed start Gram blocks; ``column_scale`` fixes the
+        subproblem column scales, ``None`` takes the Jacobi scaling of each
+        subproblem's Hessian; ``options`` is a ``_NewtonOptions``.
 
         Returns
         -------
         tuple
             ``(code, x, blocks, dual, iterations, evaluations,
             subproblem_iterations, bound, nll, gradient, metric, mean, fisher,
-            missing)``; ``code`` 1-5 are G1's statuses, 6 an objective stop;
+            missing)``; ``code`` 1-5 are the loop's statuses, 6 an objective stop;
             ``nll``, ``gradient`` and ``metric`` are those of ``x`` (face
             coordinates), ``mean`` its ``E_b[Phi_b]`` per block (list) and
             ``fisher``/``missing`` its restricted ``F`` and ``C`` (meaningful
@@ -1282,7 +1161,7 @@ cdef class BasisFaceObjective:
         Raises
         ------
         MemoryError, numpy.linalg.LinAlgError
-            From the loop's conic subproblems (as G1's callback loop).
+            From the loop's conic subproblems.
         """
         cdef int k = self.c.k
         if not self.c.gate:
@@ -1346,7 +1225,7 @@ cdef class BasisFaceObjective:
         if code == -2:
             raise np.linalg.LinAlgError("starting Gram block is not positive definite")
         if code == -1:
-            raise MemoryError("compiled G3 Newton workspace")
+            raise MemoryError("compiled Newton workspace")
         if code < 0:
             raise np.linalg.LinAlgError("conic QP precomputation did not converge")
         bufs = self._keep["bufs"]
@@ -1364,7 +1243,7 @@ cdef class BasisFaceObjective:
         Returns
         -------
         tuple or None
-            ``(block, rows, n_points, theta, domain)``: ``rows[:n_points]``
+            ``(block, rows, n_points, theta)``: ``rows[:n_points]``
             are point cuts (``Phi''(x)``, block coordinates), the rest tail
             or bound rows; ``theta`` is the violating trial (joint
             coordinates).
@@ -1374,10 +1253,9 @@ cdef class BasisFaceObjective:
         d = self._keep["dims"][self.c.p_block]
         rows = np.array(<double[:self.c.p_nrows * d]> self.c.p_rows, copy=True)
         theta = np.array(<double[:self.c.n]> self.c.p_theta, copy=True)
-        domain = (self.c.p_a, self.c.p_b)
         return (
             int(self.c.p_block), rows.reshape(self.c.p_nrows, d), self.c.p_npoints,
-            theta, domain,
+            theta,
         )
 
     def failures(self):

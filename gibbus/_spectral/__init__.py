@@ -10,13 +10,16 @@
   state and rebuilds the compiled evaluators on load.
 * :mod:`.tail` — asymptotic inversion below ``TAIL_ASYMPTOTIC_P``, where the
   stored CDF holds no significant digits.
+* :mod:`.config` / :mod:`.chebyshev` — immutable construction policy and
+  cached Chebyshev interpolation helpers.
 * ``_panel_kernels`` — compiled small-panel transforms, Clenshaw validation,
   integration, and differentiation used during post-fit construction.
 * ``_cdf_eval`` / ``_ppf_eval`` / ``_certify`` — compiled spectral query
   and Bernstein-certification kernels.
 * ``_builders`` — compiled CDF/PPF construction over a data-described
-  density of G3 basis components.
+  density of basis components.
 
-This subpackage depends only on :mod:`gibbus._defaults`, so it can be built
-and tested against any density callable.
+This subpackage depends on :mod:`gibbus._defaults` and, for basis densities,
+the compiled basis kernels (``_model._basis_kernels``); its Python builders
+can be tested against any density callable.
 """

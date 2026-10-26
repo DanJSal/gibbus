@@ -1,28 +1,25 @@
-"""Public G3 basis configuration and its one-time canonicalization.
+"""Public basis configuration and its one-time canonicalization.
 
-G1 owner extended: the public structural fit options (``poly_degree``,
-``log_boundary_lower``/``upper``) validated in ``_fit/inputs.py``.  Stage 4
-routes ``BasisSpec`` through that single input boundary (G1 rule: validate
-once, there), maps ``poly_degree`` onto ``bulk_degree`` and keeps G1's
-automatic (likelihood-ratio) choice of endpoint logs from ``_fit/boundary.py``.
-
-The G3 potential is ``q(x) = sum_j f_j(x) [a_j + b_j t_L(x) + c_j t_U(x)]``
-over named underlying functions (monomials, finite-boundary logarithms,
-noninteger soft powers and directional exponentials).  This module defines the
-user-facing configuration records and converts one :class:`BasisSpec` into a
-canonical, fully validated :class:`_BasisRequest`.  It performs no data
-analysis and no linear algebra; see :mod:`gibbus._model.basis_geometry` and
+The potential is ``q(z) = sum_j f_j(z) [a_j + b_j t_L(z) + c_j t_U(z)]`` over
+named underlying functions of the canonical coordinate ``z`` (monomials,
+finite-endpoint logarithms, soft powers and directional exponentials), with
+the fixed Gaussian gates ``t_L`` and ``t_U`` of
+:mod:`gibbus._model.basis_geometry`.  This module defines the user-facing
+configuration records and converts one :class:`BasisSpec` into a canonical,
+fully validated :class:`_BasisRequest`.  It performs no data analysis and no
+linear algebra; see :mod:`gibbus._model.basis_geometry` and
 :mod:`gibbus._model.basis`.
 
-Integer ``SoftPower`` requests are deliberately converted to the monomial
-family (G3-003): ``(x**2 + delta)**(n/2)`` is not a polynomial for odd ``n``,
-so this is a family *selection*, not an algebraic identity.
+An integer ``SoftPower`` request is converted to the :class:`Polynomial` tail
+of the same power.  The soft power exists to give non-integer tail orders
+smoothly; at an integer order the monomial gives the same tail with a simpler
+function.
 """
 
 import math
 import numbers
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .._defaults import BASIS_DEFAULT_BULK_DEGREE
 
@@ -51,31 +48,6 @@ def _is_real_number(value, /):
     return isinstance(value, numbers.Real) and not isinstance(value, bool)
 
 
-def _auto_or_finite(value, name, /, *, positive=False):
-    """Validate an ``"auto"`` sentinel or a finite real number.
-
-    Parameters
-    ----------
-    value : object
-        ``"auto"`` or a real number.
-    name : str
-        Field name used in error messages.
-    positive : bool, optional
-        Require a strictly positive number.
-
-    Raises
-    ------
-    ValueError
-        If ``value`` is neither ``"auto"`` nor an admissible finite number.
-    """
-    if isinstance(value, str) and value == _AUTO:
-        return
-    if not _is_real_number(value) or not math.isfinite(float(value)):
-        raise ValueError(f"{name} must be 'auto' or a finite real number")
-    if positive and not float(value) > 0.0:
-        raise ValueError(f"{name} must be positive")
-
-
 @dataclass(frozen=True)
 class Polynomial:
     """Integer polynomial tail: ``q ~ C |x|**power`` at that infinite end.
@@ -101,22 +73,22 @@ class Polynomial:
 
 @dataclass(frozen=True)
 class SoftPower:
-    """Soft-power tail ``(x**2 + delta)**(power/2)``, ``q ~ C |x|**power``.
+    """Soft-power tail ``A(z)**power``, so ``q ~ C |x|**power`` at that end.
 
+    ``A(z) = (1 + z**4)**(1/4) - 1`` in the canonical coordinate ``z`` is
+    smooth, vanishes to fourth order at the origin and grows like ``|z|``.
     An integer ``power`` is converted to :class:`Polynomial` with a
-    :class:`GibbusBasisWarning`; ``delta`` is then ignored.
+    :class:`GibbusBasisWarning`.
 
     Parameters
     ----------
     power : float or "auto", optional
-        Tail power, at least 1; omitted or ``"auto"`` estimates a
-        continuous exponent empirically at fit time.
-    delta : float or ``"auto"``, optional
-        Positive smoothing parameter in squared user units.
+        Tail power, greater than 1 (``1`` itself converts to
+        ``Polynomial(1)``); omitted or ``"auto"`` estimates a continuous
+        exponent empirically at fit time.
     """
 
     power: float | str = _AUTO
-    delta: float | str = _AUTO
 
     def __post_init__(self):
         """Validate the fields."""
@@ -126,7 +98,6 @@ class SoftPower:
             raise ValueError("SoftPower power must be a finite real number")
         if self.power != _AUTO and float(self.power) < 1.0:
             raise ValueError("SoftPower power must be at least 1")
-        _auto_or_finite(self.delta, "SoftPower delta", positive=True)
 
 
 @dataclass(frozen=True)
@@ -152,51 +123,12 @@ class Exponential:
             raise ValueError("Exponential rate must be positive")
 
 
-@dataclass(frozen=True)
-class TanhSpec:
-    """Fixed geometry of the lower/upper tanh modulators.
-
-    ``t_L(x) = tanh(alpha_L (x - x_L))`` exists only for an infinite lower
-    support end and ``t_U(x) = tanh(alpha_U (x_U - x))`` only for an infinite
-    upper end.  Explicit values for an unavailable modulator are rejected.
-
-    Parameters
-    ----------
-    lower_location, upper_location : float or ``"auto"``, optional
-        Tanh centers in user units; automatic values are data quantiles.
-    lower_steepness, upper_steepness : float or ``"auto"``, optional
-        Positive steepness in inverse user units. Unweighted, uncensored
-        single-component full-line point fits default to the deterministic
-        sample-size-shrunk skew-aware rule; otherwise automatic values are
-        ``2 / s`` for the robust data scale ``s``. Explicit values prevail.
-    """
-
-    lower_location: float | str = _AUTO
-    upper_location: float | str = _AUTO
-    lower_steepness: float | str = _AUTO
-    upper_steepness: float | str = _AUTO
-
-    def __post_init__(self):
-        """Validate the fields."""
-        _auto_or_finite(self.lower_location, "lower_location")
-        _auto_or_finite(self.upper_location, "upper_location")
-        _auto_or_finite(self.lower_steepness, "lower_steepness", positive=True)
-        _auto_or_finite(self.upper_steepness, "upper_steepness", positive=True)
-        lo, up = self.lower_location, self.upper_location
-        if (
-            not isinstance(lo, str)
-            and not isinstance(up, str)
-            and not float(lo) < float(up)
-        ):
-            raise ValueError("lower_location must be strictly below upper_location")
-
-
 _TAIL_TYPES = (Polynomial, SoftPower, Exponential)
 
 
 @dataclass(frozen=True)
 class BasisSpec:
-    """Provisional G3 potential-basis configuration (API subject to change).
+    """Potential-basis configuration.
 
     Parameters
     ----------
@@ -204,11 +136,11 @@ class BasisSpec:
         Support ``(L, U)`` with ``L < U``; either end may be infinite.
     bulk_degree : int or "auto", optional
         Highest bulk monomial degree, at least 1.  ``"auto"`` lets the fitter
-        choose it by G1's omitted-statistic degree ladder (G3-035).
+        choose it by the omitted-statistic degree ladder.
     log_lower, log_upper : bool or "auto", optional
         Enable the ungated ``-log(x - L)`` / ``-log(U - x)`` term; ``True``
         requires the corresponding finite endpoint.  ``"auto"`` lets the
-        fitter decide by G1's one-sided likelihood-ratio test (no term at an
+        fitter decide by a one-sided likelihood-ratio test (no term at an
         infinite end).
     lower_tail, upper_tail : Polynomial, SoftPower, Exponential or None
         Requested leading tail class at an infinite end.  Omitting that
@@ -220,19 +152,19 @@ class BasisSpec:
         shared physical amplitude.
     expansion : {"auto", "minimal", "full"}, optional
         Coefficient-span policy.  ``"auto"`` (default) starts from the
-        minimal span and adds slots of the full span only when G1's
-        omitted-statistic score test resolves them (G3-035); ``"minimal"`` and
+        minimal span and adds slots of the full span only when the
+        omitted-statistic score test resolves them; ``"minimal"`` and
         ``"full"`` fix the span.
-    tanh : TanhSpec, optional
-        Tanh modulator geometry.
 
     Notes
     -----
-    The basis is defined in the fixed robust fitting coordinate
-    ``z = (x - c) / h`` (weighted median ``c``, robust scale ``h``; per
-    component in mixtures).  Monomials are powers of ``z`` and soft powers are
-    centered at ``c``.  Under tanh gating the origin ``c`` is part of the
-    represented family; the scale ``h`` only rescales coefficients.
+    The basis is defined in the canonical coordinate ``z = (x - c) / h`` fixed
+    by the support and the data quantiles ``q10`` and ``q90`` (per component
+    in mixtures; see :mod:`gibbus._model.coords`).  On the full line the
+    quantiles sit at ``z = -1`` and ``z = 1``, the centers of the fixed gates.
+    Soft-power and exponential tails are gated toward their own end, so they
+    shape only that tail; monomials shape the bulk and give subleading tail
+    corrections.
     """
 
     support: tuple = (-math.inf, math.inf)
@@ -243,7 +175,6 @@ class BasisSpec:
     upper_tail: Polynomial | SoftPower | Exponential | None = None
     independent_equal_rate_coefficients: bool = False
     expansion: str = _AUTO_EXPANSION
-    tanh: TanhSpec = field(default_factory=TanhSpec)
 
     def __post_init__(self):
         """Validate the fields."""
@@ -289,20 +220,6 @@ class BasisSpec:
                 raise ValueError(f"{name} requires an infinite support end")
         if self.expansion not in (_AUTO_EXPANSION, _MINIMAL, _FULL):
             raise ValueError("expansion must be 'auto', 'minimal' or 'full'")
-        if not isinstance(self.tanh, TanhSpec):
-            raise TypeError("tanh must be a TanhSpec")
-        if math.isfinite(lower) and (
-            self.tanh.lower_location != _AUTO or self.tanh.lower_steepness != _AUTO
-        ):
-            raise ValueError(
-                "lower tanh geometry requires an infinite lower support end"
-            )
-        if math.isfinite(upper) and (
-            self.tanh.upper_location != _AUTO or self.tanh.upper_steepness != _AUTO
-        ):
-            raise ValueError(
-                "upper tanh geometry requires an infinite upper support end"
-            )
 
 
 @dataclass(frozen=True)
@@ -314,16 +231,14 @@ class _TailRequest:
     kind : str
         ``"polynomial"``, ``"soft_power"`` or ``"exponential"``.
     value : float
-        Integer power, noninteger soft power, or exponential rate.
-    delta : float or None
-        Explicit soft-power smoothing, or ``None`` for automatic/irrelevant.
+        Integer power, noninteger soft power, or exponential rate in user
+        units.
     converted_from_soft_power : bool
         Whether an integer ``SoftPower`` request was converted.
     """
 
     kind: str
     value: float
-    delta: float | None = None
     converted_from_soft_power: bool = False
 
     @property
@@ -352,8 +267,6 @@ class _BasisRequest:
         Independent equal-rate leading amplitudes.
     expansion : str
         ``"minimal"`` or ``"full"``.
-    lower_location, upper_location, lower_steepness, upper_steepness : float or None
-        Explicit tanh geometry, ``None`` for automatic.
     """
 
     lower: float
@@ -365,10 +278,6 @@ class _BasisRequest:
     upper_tail: _TailRequest | None
     independent: bool
     expansion: str
-    lower_location: float | None
-    upper_location: float | None
-    lower_steepness: float | None
-    upper_steepness: float | None
 
     @property
     def lower_infinite(self):
@@ -379,17 +288,6 @@ class _BasisRequest:
     def upper_infinite(self):
         """Whether the upper support end is ``+inf``."""
         return self.upper == math.inf
-
-
-def _optional_float(value, /):
-    """Return ``None`` for ``"auto"`` and ``float(value)`` otherwise.
-
-    Parameters
-    ----------
-    value : float or str
-        Validated ``"auto"`` sentinel or number.
-    """
-    return None if isinstance(value, str) else float(value)
 
 
 def _needs_tail_estimation(tail, /):
@@ -432,13 +330,12 @@ def _canonical_tail(tail, side, /):
     if power.is_integer():
         warnings.warn(
             f"{side} SoftPower(power={power:g}) has an integer exponent and is "
-            f"treated as the monomial tail x**{int(power)}; delta is ignored and "
-            "no soft-power function is used",
+            f"treated as the polynomial tail Polynomial({int(power)})",
             GibbusBasisWarning,
             stacklevel=4,
         )
         return _TailRequest(_POLYNOMIAL, power, converted_from_soft_power=True)
-    return _TailRequest(_SOFT_POWER, power, delta=_optional_float(tail.delta))
+    return _TailRequest(_SOFT_POWER, power)
 
 
 def _canonicalize_basis_spec(spec, /):
@@ -482,8 +379,4 @@ def _canonicalize_basis_spec(spec, /):
         upper_tail=_canonical_tail(spec.upper_tail, "upper"),
         independent=bool(spec.independent_equal_rate_coefficients),
         expansion=str(spec.expansion),
-        lower_location=_optional_float(spec.tanh.lower_location),
-        upper_location=_optional_float(spec.tanh.upper_location),
-        lower_steepness=_optional_float(spec.tanh.lower_steepness),
-        upper_steepness=_optional_float(spec.tanh.upper_steepness),
     )

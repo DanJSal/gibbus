@@ -21,10 +21,10 @@ from gibbus._fit.degree import _DegreeSelectionConfig
         (6, [{"poly_degree": "auto"}, {"poly_degree": 4}], ("auto", 4)),
     ],
 )
-def test_natural_degree_policy_preserves_tuple_and_component_precedence(
+def test_degree_policy_preserves_tuple_and_component_precedence(
     global_degree, options, expected
 ):
-    assert fitting._natural_degree_policy(global_degree, options) == expected
+    assert fitting._degree_policy(global_degree, options) == expected
 
 
 def test_bimodal_default_fit_does_not_select_components(monkeypatch):
@@ -118,6 +118,19 @@ def test_selected_single_component_reuses_request_degree_config(monkeypatch, sub
     assert all(
         item is config for item in selected_configs + single_configs + refit_configs
     )
-    # ``_fit_mixture_auto`` also refines each admitted count (G3), so only
+    # ``_fit_mixture_auto`` also refines each admitted count, so only
     # the configuration identity is checked for it.
     assert refit_configs
+
+
+def test_explicit_high_degree_is_lifted_from_a_converged_smaller_degree():
+    # A cold degree-12 start on half-line gamma data stalls (non_descent);
+    # the explicit degree is lifted from the converged rungs below it.
+    x = np.random.default_rng(0).gamma(3.0, size=800)
+    # The endpoint log is fixed so the two families nest.
+    kwargs = dict(support=(0.0, np.inf), log_boundary_lower=False)
+    model = Distribution().fit(x, poly_degree=12, **kwargs)
+    nested = Distribution().fit(x, poly_degree=10, **kwargs)
+    assert model.fit_diagnostics["converged"]
+    # A larger nested family cannot fit worse.
+    assert np.mean(model.logpdf(x)) >= np.mean(nested.logpdf(x)) - 1e-9

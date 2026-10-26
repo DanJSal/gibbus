@@ -1,165 +1,62 @@
-"""Curvature separation for the G3 basis: find where ``q''`` may fall below 0.
+"""Curvature separation: find every region where ``q''`` falls below zero.
 
-G1 owner replaced: ``_fit/separation.py`` (exact separator) and the
-post-solve ``_certify`` call of ``_fit/conic_newton.py``.  G1's exact
-Markov-Lukacs cone needs no cuts; G3 enforces ``q'' >= 0`` by permanent
-coefficient-linear cut rows, and the post-solve verdict maps onto G1's
-``uncertified`` status.  ``separation.py`` is deleted when the Stage 4 fitter
-switches over.
+``q'' >= 0`` is enforced by permanent coefficient-linear cut rows; this module
+finds them.  For a coefficient vector ``theta`` the search returns every
+negative interval of the scaled curvature ``H = q'' / ||pieces||`` below the
+threshold ``-tau`` (``H`` is bounded, smooth and has the exact sign of
+``q''``), cut rows ``R(z) . theta >= 0`` at each interval's minimum and a few
+Chebyshev points across it, and tail cut rows where a leading asymptotic
+curvature term is negative.  The constraint itself is always ``q'' >= 0``;
+``tau`` only selects points and sets what counts as verified.
 
-For a coefficient vector ``theta`` the search returns every local minimum of
-``q''`` that may lie below the cut threshold ``tau = rho / h**2``, the
-coefficient-linear cut rows ``Phi''(x*) . theta >= 0`` for them, and tail
-cuts where a leading asymptotic curvature term is negative.  The constraint
-itself is always ``q'' >= 0`` (G3-026); ``tau`` only selects points.
+1. **Domain** (``basis_tails``): each infinite end is searched out to the
+   cutoff beyond which ``q'' > 0`` is proven from the asymptotic atoms (or to
+   a cap when the tail is violated or unproven); each finite end with a
+   positive log amplitude has an excluded neighborhood where ``q'' >= 0`` is
+   enclosed.
+2. **Panels** (``_curvature_kernels``): a fixed hierarchy per basis whose
+   theta-free per-atom rows are cached at Chebyshev nodes, so a new ``theta``
+   costs a matrix-vector product and a DCT per panel; panels are bisected
+   until resolved to ``tau``, and candidate panels are sampled for roots and
+   critical points.
+3. **Verdict**: ``"verified"`` (within the threshold: no interval below
+   ``-tau``, tails proven, every panel resolved), ``"violated"`` (an interval,
+   a tail or a log amplitude is negative) or ``"unverified"`` (fail closed).
 
-1. **Compact domain** (``basis_tails``): each infinite end contributes a
-   cutoff beyond which ``q'' > 0`` is proven from the asymptotic atoms (or a
-   tail violation / inconclusive verdict); each finite end with a positive
-   log amplitude contributes an excluded neighbourhood where
-   ``q'' >= tau``; other finite ends are ordinary closed endpoints.
-2. **Cells** (``basis_interval``): asinh-spaced cells plus gate locations
-   and the coordinate centre.  Per cell, with ``m`` the midpoint and
-   ``r`` the half-width, ``q''(x) >= A + B (x - m) + C/2 (x - m)**2`` from
-   point enclosures ``A ∋ q''(m)``, ``B ∋ q'''(m)`` and the cell enclosure
-   ``C ∋ q''''(X)``.  A cell is
-
-   * *discarded* when that lower bound (or the direct enclosure of ``q''``)
-     exceeds ``tau``;
-   * *monotone* when ``q'''`` provably has one sign: its minimum is at the
-     descending end, which a neighbour covers, unless it is a real support
-     endpoint (then a candidate) or a proven boundary (then covered);
-   * *convex* when ``q'''' >= 0`` on it: ``q'''`` is nondecreasing, so a
-     safeguarded Newton/bisection on ``q'''`` finds the minimum (possibly
-     at a cell end, which is then recorded too);
-   * otherwise *bisected*, down to a minimum width and within a cell
-     budget.  Cells left over are *unresolved*: the verdict is then
-     ``inconclusive`` -- never ``nonnegative`` (fail closed).
-
-3. **Cuts**: every minimum whose ``q''`` enclosure reaches below ``tau`` is a
-   cut candidate; the lowest ``max_cuts`` are returned.
-
-Bounds are returned as binary64 intervals (numerical evidence, G3-028).
-Resolved polynomial contact points use extended-precision Horner arithmetic;
-ambiguous ungated polynomial/log points can use exact rational evaluation.
-The cell search runs in the compiled ``_curvature_kernels``.
+The search runs in the compiled ``_curvature_kernels``.
 """
 
 import copy
-import math
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from .._defaults import (
-    CURVATURE_CUT_RHO,
-    CURVATURE_FALLBACK_ZETA,
-    CURVATURE_FEASIBILITY_TOL,
-    CURVATURE_INITIAL_CELLS,
-    CURVATURE_MAX_CELLS,
-    CURVATURE_MAX_CUTS,
-    CURVATURE_MIN_WIDTH,
-    CURVATURE_NEWTON_MAX,
-    CURVATURE_NEWTON_TOL,
-    CURVATURE_ZETA_CAP,
-)
+from .._defaults import CURVATURE_SEARCH_OPTIONS
 from .._model.basis_tails import _build_tail_model, _tail_on_face, _TailResult
-from ._curvature_kernels import separate
-
-
-@dataclass(frozen=True)
-class _CurvatureOptions:
-    """Search settings (Stage 2 defaults, G3-026/G3-029).
-
-    Parameters
-    ----------
-    series_candidates : bool
-        Enable the experimental cached Taylor candidate search in Newton trial
-        gates. The full curvature acceptance check remains in force. Default
-        False because cache construction can cost more than it saves on short fits.
-    series_order, series_samples, series_steps : int
-        Taylor order, scan subdivisions per panel, and refinement step limit.
-    series_tolerance : float
-        Candidate root-bracket tolerance in fitting-scale units. This does not
-        change the feasibility tolerance of the full search.
-    series_violation_tol : float
-        Fast rejection margin in fitting-coordinate curvature units. Smaller
-        violations go to the unchanged full search so approximate contact
-        locations cannot keep adding poorly positioned near-active rows.
-    series_max_panels : int
-        Cache panel budget; unsupported geometry/range or budget exhaustion
-        uses the direct candidate search.
-    rho : float
-        Cut threshold ``tau = rho / h**2`` (dimensionless ``rho``).
-    initial_cells : int
-        Number of asinh-spaced initial cells.
-    max_cells : int
-        Budget of processed cells per search.
-    min_width : float
-        Smallest cell width, in units of ``h``.
-    newton_tol : float
-        Refinement bracket width, in units of ``h``.
-    newton_max : int
-        Maximum refinement iterations.
-    zeta_cap : float
-        Largest tail cutoff tried, in units of ``h``.
-    fallback_zeta : float
-        Half-width (units of ``h``) of the finite search on an end whose tail
-        is violated or numerically zero; an end whose positive leader cannot
-        be proven dominant before ``zeta_cap`` is searched out to
-        ``zeta_cap`` instead (G3-037).
-    max_cuts : int
-        Most finite cuts returned per search (lowest minima first).
-    feasibility_tol : float
-        Shape-verdict tolerance in fitting-coordinate units (G1 ``_certify``):
-        a minimum is violated only when its enclosure lies below
-        ``-feasibility_tol / h**2`` (G3-033).
-    """
-
-    # Approximate candidate generation only; acceptance still uses separate_c.
-    series_candidates: bool = False
-    series_order: int = 16
-    series_samples: int = 8
-    series_steps: int = 16
-    series_tolerance: float = 1e-5
-    series_max_panels: int = 128
-    series_violation_tol: float = 1e-10
-
-    rho: float = CURVATURE_CUT_RHO
-    initial_cells: int = CURVATURE_INITIAL_CELLS
-    max_cells: int = CURVATURE_MAX_CELLS
-    min_width: float = CURVATURE_MIN_WIDTH
-    newton_tol: float = CURVATURE_NEWTON_TOL
-    newton_max: int = CURVATURE_NEWTON_MAX
-    zeta_cap: float = CURVATURE_ZETA_CAP
-    fallback_zeta: float = CURVATURE_FALLBACK_ZETA
-    max_cuts: int = CURVATURE_MAX_CUTS
-    feasibility_tol: float = CURVATURE_FEASIBILITY_TOL
+from ._curvature_kernels import CurvatureSearch, separate
 
 
 @dataclass(frozen=True)
 class _CurvatureMinimum:
-    """One local minimum (or unresolved cell) of ``q''``.
+    """The minimum of one negative interval of the scaled curvature.
 
     Parameters
     ----------
     x : float
         Location (user units).
+    z : float
+        Location in the canonical coordinate.
     value : float
-        Floating-point ``q''(x)``.
-    lower, upper : float
-        Enclosure of ``q''(x)``.
+        Scaled curvature ``H`` there (in ``[-1, 0)`` for a single leading
+        piece; dimensionless).
     kind : str
-        ``"interior"``, ``"endpoint"`` (closed support endpoint) or
-        ``"affine"`` (lower end of a cell where ``q''`` is affine within
-        negligible error: a candidate, not a stationary point) or
-        ``"unresolved"`` (midpoint of a cell the budget left open).
+        ``"interior"``, ``"endpoint"`` (the interval reaches a finite support
+        endpoint) or ``"tail"`` (it extends to an infinite end).
     """
 
     x: float
+    z: float
     value: float
-    lower: float
-    upper: float
     kind: str
 
 
@@ -170,60 +67,76 @@ class _CurvatureSearchResult:
     Parameters
     ----------
     status : str
-        ``"nonnegative"`` (every cell resolved, tails proven, all minima
-        enclosed at or above ``-feasibility_tol / h**2``), ``"violated"`` (a
-        minimum enclosed below it or a negative tail leader) or
-        ``"inconclusive"``.
+        ``"verified"``, ``"violated"`` or ``"unverified"``.
     threshold : float
-        Cut threshold ``tau`` (user curvature units).
+        Threshold ``tau`` on the scaled curvature.
     domain : tuple of float
-        Compact search interval.
+        Searched interval (user units).
+    intervals : tuple
+        Negative intervals ``(z_lo, z_hi, z_min, h_min, to_inf, touches_end)``
+        in canonical units, ascending.
     minima : tuple of _CurvatureMinimum
-        All recorded minima, ascending ``x``.
+        The minimum of each negative interval, ascending ``x``.
     tails : tuple
         ``_TailResult`` per infinite end.
     cut_points : numpy.ndarray
-        Finite cut locations, shape ``(k,)``.
+        Finite cut locations (user units), shape ``(k,)``.
     cut_rows : numpy.ndarray
-        Cut rows, shape ``(k + t, d)``: ``Phi''(x*)`` for the finite cuts,
-        then the leading functional of each violated tail.
-    cells : int
-        Cells processed.
+        Cut rows, shape ``(k + t, d)``: scaled column curvatures at the finite
+        cuts (``q''`` up to a positive factor), then the leading functional of
+        each violated tail.
+    panels : int
+        Panels in the search hierarchy.
     unresolved : int
-        Cells left unresolved.
+        Panels or endpoint scans left unresolved.
     """
 
     status: str
     threshold: float
     domain: tuple
+    intervals: tuple
     minima: tuple
     tails: tuple
     cut_points: np.ndarray
     cut_rows: np.ndarray
-    cells: int
+    panels: int
     unresolved: int
 
     @property
     def feasible(self):
-        """Whether ``q'' >= 0`` was established on the whole support."""
-        return self.status == "nonnegative"
+        """Whether ``q'' >= 0`` was verified within the threshold."""
+        return self.status == "verified"
 
 
 @dataclass
 class _CurvatureContext:
-    """Theta-independent search data for one compiled basis (tail atoms)."""
+    """Theta-independent search data for one compiled basis.
+
+    Parameters
+    ----------
+    model : _BasisModel
+        Compiled basis.
+    options : _CurvatureSearchOptions
+        Search policy (its degree and ``jmin`` fix the panel hierarchy).
+    """
 
     model: object
+    options: object = CURVATURE_SEARCH_OPTIONS
     tails: dict = field(default_factory=dict)
+    search: object = None
 
     def __post_init__(self):
-        """Validate the fields."""
-        for side in ("lower", "upper"):
-            if not math.isfinite(getattr(self.model.request, side)):
-                self.tails[side] = _build_tail_model(self.model, side)
+        """Build the tail atoms and the panel hierarchy."""
+        for entry in self.model.asymptotics:
+            self.tails[entry.side] = _build_tail_model(self.model, entry.side)
+        self.search = CurvatureSearch(
+            self.model.kernel, int(self.options.degree), int(self.options.jmin)
+        )
 
     def on_face(self, basis, /):
         """Context for points of a face ``theta = N phi`` (exact-zero atoms dropped).
+
+        The panel rows do not depend on the face and are shared.
 
         Parameters
         ----------
@@ -238,23 +151,21 @@ class _CurvatureContext:
 def _separate_curvature(context, theta, /, options=None):
     """Run the curvature separation for one coefficient vector.
 
-    The search runs in ``_curvature_kernels.separate_c`` (method in the
-    module docstring).
-
     Parameters
     ----------
     context : _CurvatureContext
         Compiled-basis search data.
     theta : numpy.ndarray
         Coefficients, shape ``(d,)``.
-    options : _CurvatureOptions or None
-        Search settings.
+    options : _CurvatureSearchOptions or None
+        Search policy; ``None`` uses the context's.  Its degree and ``jmin``
+        must match the context's.
 
     Returns
     -------
     _CurvatureSearchResult
     """
-    options = options or _CurvatureOptions()
+    options = context.options if options is None else options
     model = context.model
     theta = np.ascontiguousarray(theta, dtype=np.float64)
     d = model.n_coefficients
@@ -264,14 +175,15 @@ def _separate_curvature(context, theta, /, options=None):
         tau,
         domain,
         bound,
+        intervals,
         minima,
         tails,
         cut_points,
         cut_rows,
-        cells,
+        panels,
         unresolved,
     ) = separate(
-        model.kernel,
+        context.search,
         theta,
         None if tl is None else tl.kernel,
         None if tu is None else tu.kernel,
@@ -283,48 +195,22 @@ def _separate_curvature(context, theta, /, options=None):
             status="violated",
             threshold=tau,
             domain=domain,
+            intervals=(),
             minima=(),
             tails=(),
             cut_points=np.zeros(0),
             cut_rows=np.eye(d)[bound],
-            cells=0,
+            panels=0,
             unresolved=0,
         )
-    if (
-        status == "inconclusive"
-        and unresolved == 0
-        and all(t[1] == "nonnegative" for t in tails)
-    ):
-        floor = -options.feasibility_tol / model.geometry.scale**2
-        ambiguous = [i for i, m in enumerate(minima) if m[2] < floor <= m[3]]
-        if ambiguous:
-            from .._model.basis_interval import _exact_ungated_curvature
-
-            exact = _exact_ungated_curvature(
-                model, theta, [minima[i][0] for i in ambiguous]
-            )
-            if exact is not None:
-                minima = list(minima)
-                for i, (value, lower, upper) in zip(ambiguous, exact):
-                    m = minima[i]
-                    lower, upper = max(m[2], lower), min(m[3], upper)
-                    if lower > upper:
-                        raise ArithmeticError(
-                            "curvature interval excludes its exact point value"
-                        )
-                    minima[i] = (m[0], value, lower, upper, m[4])
-                if any(m[3] < floor for m in minima):
-                    status = "violated"
-                elif all(m[2] >= floor for m in minima):
-                    status = "nonnegative"
     results = []
     tail_rows = []
-    for side, st, cutoff, zeta, lead, power, rate, margin, atom in tails:
+    for side, st, cutoff, zeta, lead, power, rate, kappa, const, margin, atom in tails:
         cut = None
         if st == "violated":
             a = context.tails[side].atoms[atom]
             cut = (a.row if a.cut is None else a.cut).copy()
-            tail_rows.append(cut)
+            tail_rows.append(cut / np.max(np.abs(cut)))
         results.append(
             _TailResult(
                 side,
@@ -335,6 +221,8 @@ def _separate_curvature(context, theta, /, options=None):
                 cut,
                 lead_power=power,
                 lead_rate=rate,
+                lead_kappa=kappa,
+                lead_const=const,
                 margin=margin,
             )
         )
@@ -345,10 +233,11 @@ def _separate_curvature(context, theta, /, options=None):
         status=status,
         threshold=tau,
         domain=domain,
+        intervals=tuple(intervals),
         minima=tuple(_CurvatureMinimum(*m) for m in minima),
         tails=tuple(results),
         cut_points=cut_points,
         cut_rows=rows,
-        cells=cells,
+        panels=panels,
         unresolved=unresolved,
     )

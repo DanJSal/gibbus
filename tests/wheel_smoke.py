@@ -10,8 +10,6 @@ import scipy
 import gibbus
 
 EXTENSIONS = (
-    "gibbus._fit._series_search",
-    "gibbus._model._series_kernels",
     "gibbus._fit._tail_likelihood_kernels",
     "gibbus._fit._basis_newton_kernels",
     "gibbus._fit._conic_kernels",

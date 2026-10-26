@@ -1,23 +1,20 @@
 """Outward-rounded interval enclosures of basis columns and their derivatives.
 
-G1 owner replaced: the rounding-margin arithmetic of the Bernstein
-curvature certificate (``_fit/_curvature_certificate.pyx``), which applies only
-to polynomials; G3 encloses general columns cell by cell instead.
-
 For cells ``X_i = [lo_i, hi_i]`` (degenerate cells give point enclosures) this
 module returns intervals guaranteed to contain ``Phi_c^(k)(x)`` for every
 ``x`` in ``X_i``, built by interval arithmetic on the same closed forms the
-evaluator uses: monotone ranges for ``z``, ``exp``, ``log``, ``tanh`` and
-``expit``, interval powers, and the tanh derivative polynomials in ``t`` and
-``w = 1 - t**2 = p m``.
+evaluator uses: monotone ranges for ``z``, ``exp``, ``log`` and the gate
+weights (``erfc``), Hermite polynomials times the Gaussian density for gate
+derivatives, and positive powers of monotone quantities for soft powers.
+Soft-power derivative enclosures beyond order two are the whole line.
 
 Rounding: every arithmetic result is widened by a relative ``4u`` plus one
-ulp (``numpy.nextafter``) -- covering correct rounding and the rounding of
-float scalar constants -- and every transcendental (``exp``, ``log``,
-``tanh``, ``expit``, non-integer powers) by ``8u`` plus one ulp, to cover
-correctly rounded arithmetic and the accuracy of the platform's libm.  These
-are floating-point enclosures, recorded as numerical evidence (G3-028): no
-arbitrary-precision verification is claimed.
+ulp -- covering correct rounding and the rounding of float scalar constants
+-- and every transcendental (``exp``, ``log``, ``erfc``, non-integer powers)
+by ``8u`` plus one ulp, to cover correctly rounded arithmetic and the
+accuracy of the platform's libm.  These are floating-point enclosures,
+recorded as numerical evidence: no arbitrary-precision verification is
+claimed.
 
 The arithmetic runs in the compiled ``_basis_kernels``
 (``basis_enclosure_cell``, ``potential_enclosure_cell``), built without
@@ -25,70 +22,12 @@ floating-point contraction so that each operation rounds once. Ungated
 polynomial/log curvature at a point is grouped into an extended-precision
 Horner chain when the whole potential has that ungated form. In this point
 calculation, exact single-entry +/-1 coefficient maps carry no formation error;
-general maps retain their rounding bounds. The curvature search can resolve
-ambiguous ungated polynomial/log contact points using exact rational arithmetic.
+general maps retain their rounding bounds.
 """
-
-from fractions import Fraction
 
 import numpy as np
 
 from ._basis_kernels import basis_enclosure, potential_enclosure
-
-
-def _exact_ungated_curvature(model, theta, points):
-    """Directed binary64 point bounds from exact rational polynomial arithmetic.
-
-    This is a precision fallback for resolved but ambiguous contact points.
-    Unsupported functions or nonzero gates return ``None``.  The exact model
-    map, stored coefficients and stored geometry define the rational input.
-    """
-    coefficients = [
-        sum((v * Fraction(float(a)) for v, a in zip(row, theta)), Fraction(0))
-        for row in model.coefficient_map_exact
-    ]
-    if any(
-        coefficients[3 * j + 1] or coefficients[3 * j + 2]
-        for j in range(len(model.functions))
-    ):
-        return None
-    polynomial = {}
-    logarithms = []
-    for fn in model.functions:
-        coefficient = coefficients[3 * fn.index]
-        if not coefficient:
-            continue
-        if fn.kind == "monomial":
-            if fn.degree >= 2:
-                polynomial[fn.degree - 2] = coefficient * fn.degree * (fn.degree - 1)
-        elif fn.kind == "log":
-            endpoint = (
-                model.request.lower if fn.side == "lower" else model.request.upper
-            )
-            logarithms.append((Fraction(float(endpoint)), coefficient))
-        else:
-            return None
-    h, c = Fraction(model.geometry.scale), Fraction(model.geometry.center)
-    degree = max(polynomial, default=0)
-    result = []
-    for point in points:
-        x = Fraction(float(point))
-        z = (x - c) / h
-        value = Fraction(0)
-        for n in range(degree, -1, -1):
-            value = value * z + polynomial.get(n, Fraction(0))
-        value /= h * h
-        for endpoint, coefficient in logarithms:
-            if x == endpoint:
-                return None
-            value += coefficient / (x - endpoint) ** 2
-        nearest = float(value)
-        if not np.isfinite(nearest):
-            return None
-        lower = np.nextafter(nearest, -np.inf) if Fraction(nearest) > value else nearest
-        upper = np.nextafter(nearest, np.inf) if Fraction(nearest) < value else nearest
-        result.append((nearest, float(lower), float(upper)))
-    return result
 
 
 def _cells(lo, hi, /):
@@ -136,16 +75,17 @@ def _potential_enclosure(model, theta, lo, hi, orders, /):
 
     ``q`` is enclosed function by function through the exact map
     ``full = M theta``: ``q = sum_j f_j (a_j + b_j t_L + c_j t_U)``, one
-    combined gate per function, in the same cancellation-free lower/upper
-    forms the evaluator uses.  Coefficients that cancel across columns (for
+    combined gate per function, in the same cancellation-free partition
+    form the evaluator uses.  Coefficients that cancel across columns (for
     example several gated exponentials whose leading amplitudes nearly sum to
     zero) therefore cancel before any interval product, instead of adding
     their widths.  Each slot of ``full`` carries the dot-product rounding
     bound ``(d + 1) u sum_c |M_sc theta_c|``; exactly zero slots stay exactly
     zero, so a function with no coefficient (e.g. a disabled endpoint log) is
     skipped and never produces ``0 * inf``.  Each gate limit
-    ``a + sb b + sc c`` is enclosed as one sum per function, so a structurally
-    exact zero (e.g. the upper limit of ``tL + tU``) stays exact.
+    ``a + sb b + sc c`` (lower, central and upper) is enclosed as one sum per
+    function, so a structurally exact zero (e.g. the upper limit of
+    ``tL + tU``) stays exact.
     Specialized polynomial point bounds handle exact unit maps separately.
 
     Parameters

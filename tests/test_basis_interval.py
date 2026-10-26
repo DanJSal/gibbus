@@ -1,22 +1,23 @@
-"""G3 Stage 2a: outward-rounded interval enclosures of basis derivatives.
+"""Outward-rounded interval enclosures of basis derivatives.
 
-Point enclosures must contain the 150-digit mpmath value of every column and
-derivative (orders 0-4) at bulk and far-tail points; cell enclosures must
+Point enclosures must contain the high-precision oracle value of every column
+and derivative (orders 0-4) at bulk and far-tail points; cell enclosures must
 contain dense float samples; and enclosures must shrink with the cell.
+Soft-power derivative enclosures beyond order two are the whole line, which
+contains everything trivially.
 """
 
 import math
 import warnings
 from fractions import Fraction
 
-import mpmath as mp
 import numpy as np
 import pytest
+from _basis_oracle import BasisOracle
 from test_basis_evaluation import (
     ORACLE_SPECS,
     _broad_battery,
     _compile,
-    _oracle_column,
     _test_points,
 )
 
@@ -25,7 +26,6 @@ from gibbus._model.basis_eval import _evaluate_basis
 from gibbus._model.basis_interval import _basis_enclosure, _potential_enclosure
 
 RNG = np.random.default_rng(20261016)
-mp.mp.dps = 150
 
 
 @pytest.mark.parametrize("spec", ORACLE_SPECS, ids=lambda s: "")
@@ -34,17 +34,13 @@ def test_point_enclosures_contain_high_precision_values(spec):
     bulk, tail = _test_points(model)
     points = np.concatenate([bulk, tail])
     enc = _basis_enclosure(model, points, points, range(5))
+    oracle = BasisOracle(model, max_order=4)
     for col, column in enumerate(model.columns):
-        oracle = _oracle_column(model, column)
         for k in range(5):
             lo, hi = enc[k][0][:, col], enc[k][1][:, col]
             for i, x in enumerate(points):
-                ref = mp.diff(oracle, mp.mpf(float(x)), k)
-                if not mp.isfinite(ref):
-                    continue
-                # mpmath.diff leaves ~1e-160 noise on exactly-zero derivatives.
-                noise = mp.mpf(10) ** -100
-                assert lo[i] - noise <= ref <= hi[i] + noise, (
+                ref, _ = oracle.column(col, x, k)
+                assert lo[i] <= ref <= hi[i], (
                     column.label,
                     k,
                     x,
@@ -60,9 +56,9 @@ def test_point_potential_enclosure_uses_stable_polynomial_horner():
     labels = [column.label for column in model.columns]
     theta = np.zeros(model.n_coefficients)
     root, curvature = 13.8, 8e-11
-    theta[labels.index("x^2")] = (root**2 + curvature) / 2.0
-    theta[labels.index("x^3")] = -root / 3.0
-    theta[labels.index("x^4")] = 1.0 / 12.0
+    theta[labels.index("z^2")] = (root**2 + curvature) / 2.0
+    theta[labels.index("z^3")] = -root / 3.0
+    theta[labels.index("z^4")] = 1.0 / 12.0
     x = model.geometry.center + model.geometry.scale * root
 
     enclosure = _potential_enclosure(model, theta, [x], [x], (2,))[2]
@@ -70,7 +66,7 @@ def test_point_potential_enclosure_uses_stable_polynomial_horner():
     exact = sum(
         n
         * (n - 1)
-        * Fraction(theta[labels.index(f"x^{n}")])
+        * Fraction(theta[labels.index(f"z^{n}")])
         * z ** (n - 2)
         / Fraction(model.geometry.scale) ** 2
         for n in range(2, 5)

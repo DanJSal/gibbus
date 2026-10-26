@@ -1,11 +1,9 @@
 # cython: language_level=3
 """Compiled interior-point solver and face Newton loop of the conic subproblems.
 
-G1 owner extended: ``_fit/_conic_kernels.pyx``.  G1's natural-coordinate point
-and interval objectives and their Newton loops are replaced by the G3
-objectives of ``_basis_newton_kernels`` (G3-039, G3-044); kept are the
-interior-point solver, the saddle-free metric and the generic face Newton loop
-those objectives drive through ``FaceObjective``.
+The interior-point solver, the saddle-free metric and the generic face
+Newton loop that the objectives of ``_basis_newton_kernels`` drive through
+``FaceObjective``.
 
 The test suite keeps a pure-Python translation (``tests/conic_reference.py``)
 and compares the two.  One call solves
@@ -56,7 +54,7 @@ cdef double _QP_GAP_TOL = CONIC_QP_GAP_TOL
 cdef int _QP_MAX_ITER = CONIC_QP_MAX_ITER
 # A repeated step hint in one line search must shorten the step by at least
 # this factor: a moving curvature minimum otherwise shortened it by
-# 1e-4 per objective evaluation, doubling the evaluations (G3-060).
+# 1e-4 per objective evaluation, doubling the evaluations.
 cdef double _HINT_SHRINK = 0.9
 cdef double _QP_STEP_FRACTION = CONIC_QP_STEP_FRACTION
 
@@ -401,7 +399,7 @@ cdef struct Rep:
     double margin            # smallest eigenvalue of the reference slacks
     # Rows with a nonzero operator in each block (CSR): block bb reads rows
     # blk_rows[blk_start[bb]:blk_start[bb + 1]].  Every block loop skips the
-    # exact zeros (G3 descriptions: one row per 1 x 1 block, G3-040).
+    # exact zeros (descriptions with one row per 1 x 1 block).
     int* blk_start
     int* blk_rows
 
@@ -478,7 +476,7 @@ cdef int _prepare(Rep* rep, bint need_complement, double* work) noexcept nogil:
     cdef double* scratch = g + r * r
     cdef const double* ab
     # Row lists of the blocks; a description is row-separable when every row
-    # reads exactly one block (G3: pointwise curvature and structural rows).
+    # reads exactly one block (pointwise curvature and structural rows).
     count = 0
     for bb in range(rep.nb):
         kk = rep.k[bb]
@@ -500,10 +498,9 @@ cdef int _prepare(Rep* rep, bint need_complement, double* work) noexcept nogil:
             if scratch[i] != 1.0:
                 separable = False
     # SVD of B for B^+ and the range complement by one-sided Jacobi: over the
-    # rows (G1), or over the n columns for a row-separable description with
-    # more rows than columns (G3's cut rows: O(n^2 r) per sweep instead of
-    # O(r^2 (n + r)), G3-040).  G1's polynomial descriptions keep the row
-    # sweep, so their arithmetic is unchanged.
+    # rows, or over the n columns for a row-separable description with more
+    # rows than columns (cut rows: O(n^2 r) per sweep instead of
+    # O(r^2 (n + r))).
     rep.has_complement = False
     if not (separable and r > n):
         _svd_rows(rep.b, r, n, x, u, sigma)
@@ -514,7 +511,7 @@ cdef int _prepare(Rep* rep, bint need_complement, double* work) noexcept nogil:
         # One rank decision for B^+ and the range complement: a direction
         # outside the resolved range is not inverted (a near-null singular
         # value of nearly parallel rows amplified the rounding of L(Q) into a
-        # large endpoint move, G3-050).
+        # large endpoint move).
         thr = 1e-12 * (smax if smax > 1.0 else 1.0)
         memset(rep.pinv, 0, n * r * sizeof(double))
         for j in range(r):
@@ -555,7 +552,7 @@ cdef int _prepare(Rep* rep, bint need_complement, double* work) noexcept nogil:
             # never empty).  Formed with B itself, the complement annihilates
             # the computed range to roundoff; I - sum u_j u_j^T from the
             # normalized x_j / sigma_j carries their eps / sigma_j direction
-            # error and stalled the primal residual near 1e-12 (G3-040).
+            # error and stalled the primal residual near 1e-12.
             rep.has_complement = True
             memset(g, 0, n * r * sizeof(double))
             for j in range(n):
@@ -771,7 +768,7 @@ cdef double _certified_gap(
     # misses the description by more than roundoff -- 1e-13 of the image, or
     # the rounding of the row product itself when that is larger (a far
     # coefficient vector, |theta| ~ 1e4 on a near-unidentified span, cannot
-    # meet 1e-13 in B theta whatever its blocks, G3-050).
+    # meet 1e-13 in B theta whatever its blocks).
     _gram_map(rep, q, image)
     big = c_absmax(image, r)
     floor_ = 1e-13 * (big if big > 1.0 else 1.0)
@@ -1588,7 +1585,7 @@ def solve_preconditioned(
     tuple
         ``(endpoint, endpoint_blocks_packed, model_value, gap, iterations,
         dual_scaled, scaled_model_value)``: the endpoint reconstructed in
-        natural coordinates against the original description, its blocks in
+        unscaled coordinates against the original description, its blocks in
         the original basis and Newton model value, and the scaled solve's
         certified gap, iteration count, multipliers and model value.
     """
@@ -1630,7 +1627,7 @@ cdef tuple _solve_preconditioned_buffers(
     """Solve a quadratic from bound contiguous buffers without recoercion.
 
     ``col_scale`` (length ``n``, positive) replaces the Jacobi column scaling
-    when given; ``None`` keeps G1's Jacobi scaling.
+    when given; ``None`` keeps the Jacobi scaling.
 
     The caller retains the compatible quadratic/cone buffer owners and supplies
     explicit interior-point controls. Only the result buffers are allocated here.
@@ -1776,7 +1773,7 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
     p += 2 * n * n + 2 * n + 16
     work = p
     # Column scaling: Jacobi, unless the caller supplies explicit positive
-    # scales (G3 row-flattening scales for 1 x 1 row descriptions).
+    # scales (row-flattening scales for 1 x 1 row descriptions).
     for j in range(n):
         if col_scale != NULL:
             column[j] = col_scale[j]
@@ -1892,7 +1889,7 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
     if status != 0:
         free(arena)
         return status
-    # Back to natural coordinates and the original Gram basis.
+    # Back to unscaled coordinates and the original Gram basis.
     off = 0
     for bb in range(nb):
         kk = k[bb]
@@ -1911,7 +1908,7 @@ cdef int _preconditioned(int n, int r, int nb, const int* k, const Py_ssize_t* a
         return status
     _reconstruct(&original.rep, endpoint, out_blocks, work)
     _disown(&original)
-    # Model value in natural coordinates (H symmetrized as in the reference).
+    # Model value in unscaled coordinates (H symmetrized as in the reference).
     for i in range(n):
         for j in range(n):
             hs_mat[i * n + j] = 0.5 * (h[i * n + j] + h[j * n + i])
@@ -1932,9 +1929,9 @@ cdef int _in_safeguarded_metric(
 ) noexcept nogil:
     """Build the interval saddle-free metric in small dense C kernels.
 
-    This is the compiled equivalent of ``natural_objective._safeguarded_metric``.
-    The generalized eigenproblem is whitened by the Fisher matrix after the
-    same diagonal Jacobi scaling used by the Python/SciPy implementation.
+    The generalized eigenproblem is whitened by the Fisher matrix after a
+    diagonal Jacobi scaling (``basis_objective._BasisIntervalObjective.metric``
+    is the Python entry).
     """
     cdef Py_ssize_t n2 = n * n
     cdef double* f = work
@@ -1969,7 +1966,7 @@ cdef int _in_safeguarded_metric(
             a[i * n + j] = observed[i * n + j] / d
 
     # B = L L^T.  If the Fisher metric is numerically singular, use Fisher
-    # itself, exactly as ``_safeguarded_metric`` does.
+    # itself.
     if _cholesky(b, n) != 0:
         memcpy(metric, f, n2 * sizeof(double))
         smallest_out[0] = -INFINITY
@@ -2055,7 +2052,7 @@ def safeguarded_metric(fisher, missing):
 
 
 # ---------------------------------------------------------------------------
-# Fused Newton loop for natural point objectives
+# Fused face Newton loop
 # ---------------------------------------------------------------------------
 
 cdef inline bint _pn_finite(double x) noexcept nogil:
@@ -2090,7 +2087,7 @@ cdef int _face_newton_loop(
     Return codes 1--5 are the public solver statuses, 6 an objective's
     ``FACE_STOP``; negative codes come from the conic subproblem kernel (-1
     allocation failure).  ``col_scale`` (or NULL for Jacobi) fixes the
-    subproblem column scales (G3-034).
+    subproblem column scales.
     """
     cdef Py_ssize_t n2 = n * n
     cdef Py_ssize_t total = n + qtot + r + n + qtot + r + n + qtot + n + n2 + qtot
@@ -2150,38 +2147,41 @@ cdef int _face_newton_loop(
         # Roundoff of the NLL value.  Tolerances on NLL decreases are absolute
         # (nats per observation): a change of data units shifts the NLL by
         # log(scale), so a tolerance relative to it moved the stopping point
-        # with the units (G3-050).
+        # with the units.
         scale = fabs(current_nll[0])
         if scale < 1.0:
             scale = 1.0
         first_solve = 1
         while True:
             qp_iterations = 0
-            status = _preconditioned(
-                n, r, nb, sizes, aoff, qoff, qtot, na,
-                hessian, gradient, theta, b, a, ref, degrees,
-                blocks if first_solve else cold_blocks, col_scale,
-                _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
-                endpoint, endpoint_blocks, endpoint_dual,
-                &candidate_model, &gap, &qp_iterations, &scaled_model,
-            )
-            # A resolved scalar projection may improve the conic endpoint.
-            # Both kernels use the same Newton traversal and original-model
-            # certificate; no basis-family dispatch is involved.
+            # A resolved projection already meets the original quadratic
+            # gap target. Try it before allocating and solving the conic
+            # problem; retain the conic kernel for unresolved projections.
+            candidate_model = 0.0
+            gap = INFINITY
+            accepted = 0
             if objective.refine != NULL and nb == r and qtot == r:
-                if status != 0:
-                    candidate_model = 0.0
-                    gap = INFINITY
-                if objective.refine(objective.ctx, n, r, b, hessian, gradient,
-                                    theta, endpoint, endpoint_dual,
-                                    &candidate_model, &gap):
-                    status = 0
-                    for bb in range(nb):
-                        endpoint_blocks[bb] = 0.0
-                        for i in range(n):
-                            endpoint_blocks[bb] += b[bb*n+i] * endpoint[i]
-                        if endpoint_blocks[bb] <= 0.0:
-                            endpoint_blocks[bb] = 1.0
+                accepted = objective.refine(
+                    objective.ctx, n, r, b, hessian, gradient,
+                    theta, endpoint, endpoint_dual, &candidate_model, &gap,
+                )
+            if accepted:
+                status = 0
+                for bb in range(nb):
+                    endpoint_blocks[bb] = 0.0
+                    for i in range(n):
+                        endpoint_blocks[bb] += b[bb*n+i] * endpoint[i]
+                    if endpoint_blocks[bb] <= 0.0:
+                        endpoint_blocks[bb] = 1.0
+            else:
+                status = _preconditioned(
+                    n, r, nb, sizes, aoff, qoff, qtot, na,
+                    hessian, gradient, theta, b, a, ref, degrees,
+                    blocks if first_solve else cold_blocks, col_scale,
+                    _QP_GAP_TOL, _QP_MAX_ITER, _QP_STEP_FRACTION,
+                    endpoint, endpoint_blocks, endpoint_dual,
+                    &candidate_model, &gap, &qp_iterations, &scaled_model,
+                )
             if status != 0:
                 free(arena)
                 return status
@@ -2249,7 +2249,7 @@ cdef int _face_newton_loop(
                 trial_hessian, &trial_smallest,
             )
             if status == FACE_STOP:
-                # The objective ends the run at the accepted iterate (G3).
+                # The objective ends the run at the accepted iterate.
                 iterations_out[0] = iteration
                 evaluations_out[0] = evaluations
                 subproblem_iterations_out[0] = sub_iterations
@@ -2263,7 +2263,7 @@ cdef int _face_newton_loop(
                 # largest step that keeps them feasible: halving discarded
                 # half of a step that missed a moving curvature minimum by
                 # 1e-9, so the cut exchange converged at a rate of 0.6
-                # (G3-060).  The shortened trial is gated again.
+                # The shortened trial is gated again.
                 hint = -1.0
                 if objective.step != NULL:
                     hint = objective.step(

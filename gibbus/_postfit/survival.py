@@ -6,7 +6,7 @@ import numpy as np
 from scipy.integrate import quad
 
 from .._defaults import EXPECT_MAX_RELATIVE_ERROR, SF_HANDOVER_P, _reraise_if_debug
-from .._spectral.tail import exact_tail_log_cdf, invert_tail
+from .._spectral.tail import invert_tail
 from .logspace import log1mexp
 
 
@@ -31,22 +31,12 @@ def _vectorize_scalar(func, x, *args):
 
 
 def log_sf_hybrid(
-    potential,
-    spectral_cdf,
-    x,
-    upper_endpoint,
-    /,
-    *,
-    lower_endpoint,
-    log_tail_mass,
-    log_tail_masses,
+    spectral_cdf, x, upper_endpoint, /, *, lower_endpoint, log_tail_masses
 ):
-    """Evaluate log survival using spectral body values and exact tail quadrature.
+    """Evaluate log survival from spectral body values and exact tail masses.
 
     Parameters
     ----------
-    potential : callable
-        Normalized negative-log density evaluator.
     spectral_cdf : callable
         CDF evaluator accurate on an absolute probability scale.
     x : float or array_like
@@ -55,11 +45,10 @@ def log_sf_hybrid(
         Upper support endpoint.
     lower_endpoint : float
         Lower support endpoint, used for exact boundary semantics.
-    log_tail_mass : callable or None
-        Exact tail-mass adapter used below the spectral handover.
-    log_tail_masses : callable or None
-        Batched form ``(x_array, endpoint, upper=...) -> log masses``; when
-        given it evaluates every tail anchor in one call.
+    log_tail_masses : callable
+        Tail-mass evaluator ``(x_array, endpoint, *, upper) -> log masses``
+        (:func:`~gibbus._spectral.tail.tail_log_masses`), used below the
+        spectral handover.
     """
     arr = np.asarray(x, dtype=np.float64)
     scalar = arr.ndim == 0
@@ -77,31 +66,14 @@ def log_sf_hybrid(
         if np.any(body):
             out[interior[body]] = np.log1p(-values[body])
         tail = interior[~body]
-        if tail.size and log_tail_masses is not None:
+        if tail.size:
             out[tail] = log_tail_masses(flat[tail], upper, upper=True)
-            tail = tail[:0]
-        for j in tail:
-            out[j] = (
-                float(log_tail_mass(float(flat[j]), upper, upper=True))
-                if log_tail_mass is not None
-                else exact_tail_log_cdf(potential, float(flat[j]), upper, upper=True)
-            )
     out = out.reshape(arr.shape)
     return float(out) if scalar else out
 
 
-def cdf_hybrid(
-    potential,
-    spectral_cdf,
-    x,
-    lower_endpoint,
-    /,
-    *,
-    upper_endpoint,
-    log_tail_mass,
-    log_tail_masses,
-):
-    """Evaluate the CDF with exact lower-tail quadrature below the handover.
+def cdf_hybrid(spectral_cdf, x, lower_endpoint, /, *, upper_endpoint, log_tail_masses):
+    """Evaluate the CDF with exact lower-tail masses below the handover.
 
     The spectral representation is retained in the body so ordinary CDF
     evaluation keeps its fast absolute-probability path.  Only values at or
@@ -111,18 +83,14 @@ def cdf_hybrid(
 
     Parameters
     ----------
-    potential : callable
-        Normalized negative-log density evaluator.
     spectral_cdf : callable
         Fast body CDF evaluator.
     x : float or array_like
         Evaluation coordinates.
     lower_endpoint, upper_endpoint : float
         Support endpoints.
-    log_tail_mass : callable or None
-        Scalar exact lower-tail log-mass evaluator.
-    log_tail_masses : callable or None
-        Batched exact lower-tail log-mass evaluator.
+    log_tail_masses : callable
+        Tail-mass evaluator ``(x_array, endpoint, *, upper) -> log masses``.
 
     Returns
     -------
@@ -147,39 +115,19 @@ def cdf_hybrid(
 
     out = flat_v.copy()
     tail = np.flatnonzero(tail_mask)
-    if log_tail_masses is not None:
-        with np.errstate(under="ignore"):
-            out[tail] = np.exp(log_tail_masses(flat_x[tail], lower, upper=False))
-        tail = tail[:0]
-    for j in tail:
-        log_mass = (
-            float(log_tail_mass(float(flat_x[j]), lower, upper=False))
-            if log_tail_mass is not None
-            else exact_tail_log_cdf(potential, float(flat_x[j]), lower, upper=False)
-        )
-        with np.errstate(under="ignore"):
-            out[j] = np.exp(log_mass)
+    with np.errstate(under="ignore"):
+        out[tail] = np.exp(log_tail_masses(flat_x[tail], lower, upper=False))
     out = np.clip(out, 0.0, 1.0).reshape(arr.shape)
     return float(out) if scalar else out
 
 
 def log_cdf_hybrid(
-    potential,
-    spectral_cdf,
-    x,
-    lower_endpoint,
-    /,
-    *,
-    upper_endpoint,
-    log_tail_mass,
-    log_tail_masses,
+    spectral_cdf, x, lower_endpoint, /, *, upper_endpoint, log_tail_masses
 ):
-    """Evaluate log CDF using spectral body values and exact tail quadrature.
+    """Evaluate log CDF from spectral body values and exact tail masses.
 
     Parameters
     ----------
-    potential : callable
-        Normalized negative-log density evaluator.
     spectral_cdf : callable
         CDF evaluator accurate on an absolute probability scale.
     x : float or array_like
@@ -188,11 +136,9 @@ def log_cdf_hybrid(
         Lower support endpoint.
     upper_endpoint : float
         Upper support endpoint, used for exact boundary semantics.
-    log_tail_mass : callable or None
-        Exact tail-mass adapter used below the spectral handover.
-    log_tail_masses : callable or None
-        Batched form ``(x_array, endpoint, upper=...) -> log masses``; when
-        given it evaluates every tail anchor in one call.
+    log_tail_masses : callable
+        Tail-mass evaluator ``(x_array, endpoint, *, upper) -> log masses``,
+        used below the spectral handover.
     """
     arr = np.asarray(x, dtype=np.float64)
     scalar = arr.ndim == 0
@@ -210,15 +156,8 @@ def log_cdf_hybrid(
         if np.any(body):
             out[interior[body]] = np.log(values[body])
         tail = interior[~body]
-        if tail.size and log_tail_masses is not None:
+        if tail.size:
             out[tail] = log_tail_masses(flat[tail], lower, upper=False)
-            tail = tail[:0]
-        for j in tail:
-            out[j] = (
-                float(log_tail_mass(float(flat[j]), lower, upper=False))
-                if log_tail_mass is not None
-                else exact_tail_log_cdf(potential, float(flat[j]), lower, upper=False)
-            )
     out = out.reshape(arr.shape)
     return float(out) if scalar else out
 
@@ -417,7 +356,7 @@ def residual_entropy(potential, logsf, support, x, /):
     return _vectorize_scalar(lambda v: one(v), x)
 
 
-def isf(potential, ppf, support, p, /, *, log_tail_mass):
+def isf(potential, ppf, support, p, /, *, log_tail_masses):
     """Invert the survival probability without forming ``1-p`` in deep tails.
 
     Parameters
@@ -430,8 +369,9 @@ def isf(potential, ppf, support, p, /, *, log_tail_mass):
         Distribution support.
     p : numpy.ndarray, dtype float64
         Boundary-validated survival probabilities in ``[0, 1]``.
-    log_tail_mass : callable or None
-        Exact tail-mass adapter used for deep-tail inversion.
+    log_tail_masses : callable
+        Tail-mass evaluator ``(x_array, endpoint, *, upper) -> log masses``
+        used for deep-tail inversion.
     """
     arr = p
     scalar = arr.ndim == 0
@@ -455,7 +395,7 @@ def isf(potential, ppf, support, p, /, *, log_tail_mass):
                 hi,
                 seed_hi,
                 upper=True,
-                log_tail_mass=log_tail_mass,
+                log_tail_masses=log_tail_masses,
             )
         else:
             out[i] = float(ppf(1.0 - prob))
@@ -463,7 +403,7 @@ def isf(potential, ppf, support, p, /, *, log_tail_mass):
     return float(out) if scalar else out
 
 
-def logppf(potential, ppf, support, log_p, /, *, log_tail_mass):
+def logppf(potential, ppf, support, log_p, /, *, log_tail_masses):
     """Invert a logarithmic CDF probability directly.
 
     Parameters
@@ -476,8 +416,9 @@ def logppf(potential, ppf, support, log_p, /, *, log_tail_mass):
         Distribution support.
     log_p : numpy.ndarray, dtype float64
         Boundary-validated log CDF probabilities, no greater than zero.
-    log_tail_mass : callable or None
-        Exact tail-mass adapter used for deep-tail inversion.
+    log_tail_masses : callable
+        Tail-mass evaluator ``(x_array, endpoint, *, upper) -> log masses``
+        used for deep-tail inversion.
     """
     arr = log_p
     scalar = arr.ndim == 0
@@ -504,14 +445,14 @@ def logppf(potential, ppf, support, log_p, /, *, log_tail_mass):
                 lo,
                 seed_lo,
                 upper=False,
-                log_tail_mass=log_tail_mass,
+                log_tail_masses=log_tail_masses,
             )
         elif lp >= log_upper_body:
             if seed_hi is None:
                 seed_hi = float(np.asarray(ppf(1.0 - SF_HANDOVER_P)))
             lsf = float(log1mexp(lp))
             out[i] = invert_tail(
-                potential, lsf, hi, seed_hi, upper=True, log_tail_mass=log_tail_mass
+                potential, lsf, hi, seed_hi, upper=True, log_tail_masses=log_tail_masses
             )
         else:
             out[i] = float(ppf(np.exp(lp)))
@@ -519,7 +460,7 @@ def logppf(potential, ppf, support, log_p, /, *, log_tail_mass):
     return float(out) if scalar else out
 
 
-def logisf(potential, ppf, support, log_p, /, *, log_tail_mass):
+def logisf(potential, ppf, support, log_p, /, *, log_tail_masses):
     """Invert a logarithmic survival probability directly.
 
     Parameters
@@ -532,8 +473,9 @@ def logisf(potential, ppf, support, log_p, /, *, log_tail_mass):
         Distribution support.
     log_p : numpy.ndarray, dtype float64
         Boundary-validated log survival probabilities, no greater than zero.
-    log_tail_mass : callable or None
-        Exact tail-mass adapter used for deep-tail inversion.
+    log_tail_masses : callable
+        Tail-mass evaluator ``(x_array, endpoint, *, upper) -> log masses``
+        used for deep-tail inversion.
     """
     arr = log_p
     scalar = arr.ndim == 0
@@ -560,14 +502,19 @@ def logisf(potential, ppf, support, log_p, /, *, log_tail_mass):
                 hi,
                 seed_hi,
                 upper=True,
-                log_tail_mass=log_tail_mass,
+                log_tail_masses=log_tail_masses,
             )
         elif lp >= log_upper_body:
             if seed_lo is None:
                 seed_lo = float(np.asarray(ppf(SF_HANDOVER_P)))
             lcdf = float(log1mexp(lp))
             out[i] = invert_tail(
-                potential, lcdf, lo, seed_lo, upper=False, log_tail_mass=log_tail_mass
+                potential,
+                lcdf,
+                lo,
+                seed_lo,
+                upper=False,
+                log_tail_masses=log_tail_masses,
             )
         else:
             out[i] = float(ppf(1.0 - np.exp(lp)))

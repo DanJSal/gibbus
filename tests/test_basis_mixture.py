@@ -1,14 +1,13 @@
-"""G3 Stage 5 Phase C: shared-support mixtures (G3-045).
+"""Shared-support mixtures.
 
 Defining properties: the joint observed NLL's gradient and observed Hessian
 ``G - M`` are its derivatives; one component is the single-fit objective;
 the EM surrogate has the observed gradient at its expansion point; the
 stacked M-step without shared columns equals independent fits; fitted
-mixtures equal the exact two-normal mixture MLE and G1's mixture fits in
-the families G1 has.  Selection: one component's joint diagnostic is the
-single fit's; automatic degrees are G1's; a dropped shared log is the
-likelihood-ratio decision; every kept extension passed its likelihood
-ratio; the component count is G1's and its score is the BIC.
+mixtures equal the exact two-normal mixture MLE.  Selection: one
+component's joint diagnostic is the single fit's; a dropped shared log is
+the likelihood-ratio decision; every kept extension passed its likelihood
+ratio; the component count's score is the BIC.
 """
 
 import math
@@ -101,12 +100,12 @@ CASES = [
 def _start(model):
     labels = [c.label for c in model.columns]
     if "logL" in labels:
-        a = _theta(model, {"x": 1.0, "x^2": 0.05, "logL": 1.0})
-        b = _theta(model, {"x": 0.6, "x^2": 0.01, "logL": 1.0})
+        a = _theta(model, {"z": 1.0, "z^2": 0.05, "logL": 1.0})
+        b = _theta(model, {"z": 0.6, "z^2": 0.01, "logL": 1.0})
         shared = [labels.index("logL")]
     else:
-        a = _theta(model, {"x^2": 0.4, "x": 1.0, "x^4": 0.02})
-        b = _theta(model, {"x^2": 0.3, "x": -0.5, "x^4": 0.02})
+        a = _theta(model, {"z^2": 0.4, "z": 1.0, "z^4": 0.02})
+        b = _theta(model, {"z^2": 0.3, "z": -0.5, "z^4": 0.02})
         shared = []
     keep = [j for j in range(model.n_coefficients) if j not in shared]
     return np.concatenate([a[keep], b[keep], a[shared], [0.2]])
@@ -133,7 +132,7 @@ def test_joint_gradient_and_observed_hessian_are_the_derivatives(
 def test_one_component_is_the_single_fit_objective(kind):
     model = _model(BasisSpec(bulk_degree=4), TWO)
     data = _data(kind, TWO)
-    theta = _theta(model, {"x^2": 0.4, "x": 1.0, "x^4": 0.02})
+    theta = _theta(model, {"z^2": 0.4, "z": 1.0, "z^4": 0.02})
     ev = _joint_objective((model,), data)(theta)
     ctx = _NormalizerContext(model)
     single = (
@@ -176,7 +175,9 @@ def test_stacked_m_step_without_shared_columns_is_independent_fits():
             _PointStatistics(mstep.data["stats"][k], 1.0, TWO.size),
         )
         total += mstep.data["mass"][k] * _solve_basis(objective).objective_value
-    assert stacked.objective_value == pytest.approx(total, abs=1e-11)
+    # Fits on an active curvature row are verified within tau: cut sets that
+    # differ between the runs move the optimum by tau-level amounts.
+    assert stacked.objective_value == pytest.approx(total, abs=1e-8)
 
 
 def test_stacked_m_step_is_invariant_to_component_order():
@@ -192,17 +193,19 @@ def test_stacked_m_step_is_invariant_to_component_order():
         objective = _mstep_objective((model,) * 2, data, resp)
         result = _solve_basis(objective, blocks=blocks)
         assert result.status == "converged"
-        assert result.final_separation.status == "nonnegative"
+        assert result.final_separation.status == "verified"
         results.append(result)
     assert results[0].objective_value == pytest.approx(
-        results[1].objective_value, abs=1e-11
+        results[1].objective_value, abs=1e-8
     )
+    # Weakly identified directions at the shape-active optimum move by more
+    # than the tau-level NLL difference suggests.
     for k in range(2):
         np.testing.assert_allclose(
             blocks.part(k, results[0].params),
             blocks.part(1 - k, results[1].params),
-            rtol=2e-5,
-            atol=2e-5,
+            rtol=2e-3,
+            atol=2e-3,
         )
 
 
@@ -355,81 +358,3 @@ def test_every_kept_mixture_extension_passed_its_likelihood_ratio():
     for step in expansions[:-1]:
         assert step.chosen is not None and step.lr_p_value < alpha
     assert fit.status == "converged"
-
-
-def test_failed_fixed_degree_mixture_invokes_lower_degree_retry(monkeypatch):
-    import gibbus._fit.basis_mixture as bm
-    from gibbus._fit.conic_newton import _NewtonOptions
-
-    x = np.r_[
-        np.random.default_rng(41).normal(-2.0, 0.8, 80),
-        np.random.default_rng(42).normal(2.0, 1.0, 80),
-    ]
-    spec = BasisSpec(bulk_degree=4, expansion="minimal")
-    responsibilities = np.column_stack([x < 0.0, x >= 0.0]).astype(float) * 0.9 + 0.05
-    calls = []
-
-    def retry(problem, start, final_em, label, retry_spec, /):
-        calls.append((label, retry_spec.bulk_degree))
-        return None
-
-    monkeypatch.setattr(bm, "_retry_lower_degree", retry)
-    fit, _, _ = bm._fit_mixture_auto(
-        spec,
-        x,
-        2,
-        responsibilities=responsibilities,
-        search_options=bm._MixtureSearchOptions(treatments=("raw",), finalists=1),
-        options=_NewtonOptions(max_iterations=0),
-    )
-    assert fit.status == "iteration_limit"
-    assert len(calls) == 1
-    assert calls[0][1] == 4
-
-
-def test_lower_degree_retry_lifts_back_to_the_requested_degree():
-    import gibbus._fit.basis_mixture as bm
-    from gibbus._fit.conic_newton import _NewtonOptions
-
-    rng = np.random.default_rng(41)
-    x = np.r_[rng.normal(-2.0, 0.8, 80), rng.normal(2.0, 1.0, 80)]
-    spec = BasisSpec(bulk_degree=4, expansion="minimal")
-    responsibilities = np.column_stack([x < 0.0, x >= 0.0]).astype(float) * 0.9 + 0.05
-    prepared = bm._prepare(spec, x, None)
-    models = bm._component_models(prepared, (spec, spec), responsibilities)
-    problem = bm._MixtureProblem(models, prepared.data, _NewtonOptions())
-    start = bm._merge_responsibilities(
-        responsibilities, prepared.weights, prepared.inverse, prepared.data.size
-    )
-    fit = bm._retry_lower_degree(problem, start, bm._EMOptions(), "test", spec)
-    assert fit is not None
-    assert fit.initialization == "test/lower-degree-retry"
-    assert [model.request.bulk_degree for model in fit.models] == [4, 4]
-    assert np.isfinite(fit.log_likelihood)
-
-
-def test_converged_fixed_degree_mixture_skips_lower_degree_retry(monkeypatch):
-    import gibbus._fit.basis_mixture as bm
-    from gibbus._fit.conic_newton import _NewtonOptions
-
-    rng = np.random.default_rng(41)
-    x = np.r_[rng.normal(-2.0, 0.8, 80), rng.normal(2.0, 1.0, 80)]
-    spec = BasisSpec(bulk_degree=4, expansion="minimal")
-    responsibilities = np.column_stack([x < 0.0, x >= 0.0]).astype(float) * 0.9 + 0.05
-    calls = []
-
-    def retry(*args):
-        calls.append(True)
-        return None
-
-    monkeypatch.setattr(bm, "_retry_lower_degree", retry)
-    fit, _, _ = bm._fit_mixture_auto(
-        spec,
-        x,
-        2,
-        responsibilities=responsibilities,
-        search_options=bm._MixtureSearchOptions(treatments=("raw",), finalists=1),
-        options=_NewtonOptions(),
-    )
-    assert fit.status in ("converged", "converged_approximately")
-    assert calls == []

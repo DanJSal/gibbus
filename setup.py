@@ -62,8 +62,6 @@ DEFINE_MACROS = [("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")]
 
 # Dotted module path -> source file, both relative to the package root.
 MODULES = {
-    "_fit._series_search": "_fit/_series_search.pyx",
-    "_model._series_kernels": "_model/_series_kernels.pyx",
     "_fit._conic_kernels": "_fit/_conic_kernels.pyx",
     "_fit._basis_newton_kernels": "_fit/_basis_newton_kernels.pyx",
     "_postfit._mix_kernels": "_postfit/_mix_kernels.pyx",
@@ -78,11 +76,11 @@ MODULES = {
     "_fit._tail_likelihood_kernels": "_fit/_tail_likelihood_kernels.pyx",
 }
 
-# G3 enclosure kernels widen every rounded result by a fixed relative margin;
-# that assumes one rounding per operation, so contraction (FMA) is disabled.
+# The enclosure kernels widen every rounded result by a fixed relative margin,
+# which assumes one rounding per operation, and the structured curvature kernel
+# uses double-double primitives (two_sum, quick_two_sum) whose error terms are
+# exact only without fusion; so contraction (FMA) is disabled.
 NO_CONTRACTION = {
-    "_fit._series_search",
-    "_model._series_kernels",
     "_model._basis_kernels",
     "_model._normalizer_kernels",
     "_fit._curvature_kernels",

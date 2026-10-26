@@ -1,8 +1,0 @@
-MSTEP 1 0.6 K 2 shared True statuses ('iteration_limit',)
-MSTEP 2 1.7 K 2 shared True statuses ('converged',)
-MSTEP 3 2.4 K 2 shared True statuses ('converged',)
-MSTEP 10 9.6 K 2 shared True statuses ('uncertified',)
-MSTEP 20 21.4 K 2 shared True statuses ('iteration_limit',)
-MSTEP 30 32.4 K 2 shared True statuses ('iteration_limit',)
-MSTEP 40 40.3 K 2 shared True statuses ('converged',)
-END FitTimeoutError fit exceeded max_fit_seconds=45 (45.001 seconds elapsed; curvature exchange)

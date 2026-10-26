@@ -294,11 +294,11 @@ def test_degree8_density_is_scale_equivariant(seed, scale):
     p_scaled = scale * scaled.pdf(scale * grid)
     l1 = float(trapezoid(np.abs(p_ref - p_scaled), grid))
 
-    # The fitting coordinate makes both problems the same to rounding, and
-    # NLL tolerances are absolute (G3-050): with G1's tolerances relative to
-    # |NLL| (which shifts by log(scale)) the scaled fit stopped earlier, 9e-7
-    # apart in L1 at 1e12 (G1's bound was 5e-8).
-    assert l1 < 1e-9, f"density L1 mismatch under unit change: {l1:.3e}"
+    # The canonical coordinate makes both problems the same up to the rounding
+    # of q10/q90 under the unit change, and NLL tolerances are absolute; the
+    # two shape-constrained optima then agree to the curvature threshold's
+    # level (L1 ~1e-9 observed).
+    assert l1 < 1e-8, f"density L1 mismatch under unit change: {l1:.3e}"
     assert float(scaled._components[0]._data["nll"]) == pytest.approx(
         float(ref._components[0]._data["nll"]) + np.log(scale),
         abs=2e-10,
@@ -522,6 +522,35 @@ def test_interval_mass_probability_invariant_rejects_invalid_em_refit():
         rng=0,
     )
 
+    for comp in fitted.components:
+        masses = comp.cdf(intervals[:, 1]) - comp.cdf(intervals[:, 0])
+        assert np.all(np.isfinite(masses))
+        assert np.all(masses >= -1e-12)
+        assert np.all(masses <= 1.0 + 1e-12)
+
+
+def test_coarse_interval_mixture_completes_with_automatic_degrees():
+    """Width-2 bins of a two-mode sample are identified at the bin level.
+
+    With per-component automatic degrees the mixture must finish with a
+    valid decomposition (the width-4 version below is saturated instead).
+    """
+    rng = np.random.default_rng(0)
+    data = np.concatenate([rng.normal(-2.0, 0.7, 500), rng.normal(2.0, 0.7, 500)])
+    width = 2.0
+    edges = np.arange(
+        np.floor(data.min() / width) * width,
+        np.ceil(data.max() / width) * width + width,
+        width,
+    )
+    idx = np.clip(np.searchsorted(edges, data, side="right") - 1, 0, len(edges) - 2)
+    intervals = np.column_stack([edges[idx], edges[idx + 1]])
+
+    fitted = Distribution().fit(intervals, n_components=2, rng=0)
+
+    assert fitted.n_components == 2
+    assert np.sum(fitted.weights) == pytest.approx(1.0)
+    assert fitted.fit_diagnostics["converged"]
     for comp in fitted.components:
         masses = comp.cdf(intervals[:, 1]) - comp.cdf(intervals[:, 0])
         assert np.all(np.isfinite(masses))
@@ -897,7 +926,7 @@ def test_spectral_error_estimate_tracks_independent_cdf_error(
     assert 0.0 <= diag["error_estimate"] <= 1.0
     assert diag["error_estimate"] >= diag["mass_defect"]
     # The estimate is deliberately conservative, especially when a tiny
-    # uncertified panel exists, but it must no longer issue 1e-3-scale alarms
+    # uncertified panel exists; its diagnostic must avoid 1e-3-scale alarms
     # for CDFs that are accurate to around machine precision.
     assert diag["error_estimate"] < 5e-10
     # The estimate must not under-report independent quadrature error; the
@@ -1145,6 +1174,39 @@ def test_mixed_censoring_at_a_boundary_amplitude_is_certified():
     assert c.var == pytest.approx(2.0 * 5.0 / (49.0 * 8.0), abs=0.005)
 
 
+@pytest.mark.parametrize("degree", [2, "auto"])
+def test_mixed_censoring_near_a_singular_endpoint_converges(degree):
+    """Left-censored, narrow and exact rows from a gamma shape well below 1.
+
+    The mass piles against the endpoint singularity, so the likelihood moves
+    by rounding-level amounts near the optimum; the fit must still converge
+    with a verified shape and the automatic degree must not lose likelihood.
+    """
+    rng = np.random.default_rng(63103)
+    x = rng.gamma(0.2357, 0.494, 60)
+    scale = float(np.std(x))
+    censor = np.random.default_rng(45)
+    selector, narrow, lower = (censor.random(x.size) for _ in range(3))
+    intervals = np.column_stack([x, x])
+    left = selector < 0.05
+    intervals[left] = np.column_stack(
+        [np.zeros(left.sum()), x[left] + (0.01 + 0.39 * lower[left]) * scale]
+    )
+    band = (selector >= 0.05) & (selector < 0.40)
+    half = scale * 10.0 ** (-3.0 + 2.85 * narrow[band])
+    intervals[band] = np.column_stack([np.maximum(0.0, x[band] - half), x[band] + half])
+
+    fitted = Distribution().fit(intervals, support=(0.0, np.inf), poly_degree=degree)
+
+    diagnostics = fitted.fit_diagnostics
+    assert diagnostics["converged"]
+    assert diagnostics["components"][0]["shape"] == "verified"
+    assert np.isfinite(fitted.mean) and np.isfinite(fitted.var)
+    if degree == "auto":
+        quadratic = Distribution().fit(intervals, support=(0.0, np.inf), poly_degree=2)
+        assert fitted.loglik(intervals) >= quadratic.loglik(intervals) - 1e-8
+
+
 def test_degree_screening_uses_the_real_boundary_structure():
     """Auto-degree screening must rank the same boundary model it later fits.
 
@@ -1257,3 +1319,67 @@ def test_an_unsupported_explicit_component_count_says_what_to_do():
         .n_components
         == 1
     )
+
+
+def test_spectral_tolerance_respects_the_potential_rounding_floor():
+    # A flat-topped density with steep walls needs a potential whose terms
+    # cancel: its values are known only to ~1e-10 relative.  The panels
+    # converge to that floor instead of exhausting the panel budget and
+    # reporting all mass as uncertified (error_estimate 1.0) while the CDF is
+    # accurate.
+    x = np.random.default_rng(0).uniform(size=500)
+    model = Distribution().fit(x, support=(-5.0, 5.0))
+    d = model.spectral_diagnostics
+    assert d["uncertified_mass"] == 0.0
+    assert not d["refinement_capped"] and not d["ppf_fallback"]
+    assert d["error_estimate"] < 1e-8
+    # The CDF is the integral of the density, by independent quadrature.
+    p = np.array([0.001, 0.01, 0.1, 0.5, 0.9, 0.99, 0.999])
+    q = model.ppf(p)
+    edges = np.r_[-5.0, q]
+    pieces = [
+        quad(lambda t: float(model.pdf(t)), lo, hi, limit=400, epsabs=1e-15)[0]
+        for lo, hi in zip(edges[:-1], edges[1:])
+    ]
+    np.testing.assert_allclose(model.cdf(q), np.cumsum(pieces), atol=1e-9, rtol=0)
+    np.testing.assert_allclose(model.cdf(q), p, atol=1e-9, rtol=0)
+
+
+def _convexity_sandwich(potential, x, /):
+    """Bounds on a convex potential's log tail mass at ``x`` (outward slope).
+
+    ``q(t) >= q(x) + q'(x)(t - x)`` gives ``log S <= -q - log|q'|``; the
+    second-order term gives ``log S >= -q - log|q'| + log(1 - q''/q'^2)``.
+    """
+    q, q1, q2 = (float(potential(x, n)) for n in range(3))
+    upper = -q - np.log(abs(q1))
+    return upper + np.log1p(-q2 / q1**2), upper
+
+
+def test_far_tail_masses_resolve_where_the_compiled_rows_do_not():
+    # Degree 6 with a quadratic lower-tail request fits a linear tail (the
+    # quadratic leader on its zero face); the compiled row normalizer cannot
+    # close far-tail rows there, and the scaled tail quadrature takes over.
+    rng = np.random.default_rng(0)
+    x = -np.r_[rng.gamma(2.0, size=300), rng.weibull(2.0, size=700)]
+    model = Distribution().fit(
+        x,
+        basis=gibbus.BasisSpec(
+            support=(-np.inf, 0.0), bulk_degree=6, lower_tail=gibbus.Polynomial(2)
+        ),
+    )
+    for t in (-300.0, -530.0, -2000.0):
+        lo, hi = _convexity_sandwich(model.neg_log, t)
+        assert lo - 1e-12 * abs(lo) <= model.logcdf(t) <= hi + 1e-12 * abs(hi)
+    p = np.array([1e-300, 1e-200, 1e-100])
+    np.testing.assert_allclose(model.logcdf(model.ppf(p)), np.log(p), rtol=1e-12)
+    assert np.isfinite(model.spectral_diagnostics["error_estimate"])
+
+
+def test_far_tail_survival_beyond_float64_potential_resolution():
+    # A flat-topped density with steep walls: at x = 7.7 its potential is
+    # ~1e14, far beyond the relative resolution the compiled rows target.
+    model = Distribution().fit(np.r_[np.zeros(250), np.ones(250)])
+    for t in (5.0, 7.7, 9.0):
+        lo, hi = _convexity_sandwich(model.neg_log, t)
+        assert lo - 1e-12 * abs(lo) <= model.logsf(t) <= hi + 1e-12 * abs(hi)

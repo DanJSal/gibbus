@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from tests.g3_casegen import (
+from tests.casegen import (
     CaseSpec,
     FitSpec,
     Named,
@@ -105,7 +105,7 @@ def test_oracle_unavailable_is_not_zero_error(cases):
 
 
 def test_censored_likelihood_uses_probability_mass_not_latent(cases):
-    from tests.g3_casegen import materialize
+    from tests.casegen import materialize
 
     generated = materialize(cases[1])
 

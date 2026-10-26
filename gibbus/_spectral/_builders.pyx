@@ -12,9 +12,9 @@ evaluator arrays, and the monotone inverse in log-odds with its
 root-inversion validation.
 
 The density is described by data, not a Python callable: a weighted sum of
-fitted G3 components, each the canonical kernel ``exp(-(theta . Phi(x) + c))``
-of its compiled basis (``_basis_kernels.potential_point`` at ``x = c_f + h z``)
-at ``z = sigma x + mu``, times ``|sigma|`` and masked to the component's
+fitted basis components, each the canonical kernel ``exp(-(theta . Phi + c))``
+of its compiled basis at the canonical point (``_basis_kernels.
+potential_point_z``) ``z = sigma x + mu``, times ``|sigma|`` and masked to the component's
 public support when it is a public-coordinate view.  One component with
 ``sigma = 1, mu = 0`` is the canonical state density used at packing time;
 several are the base-space mixture density.
@@ -28,13 +28,14 @@ matrices come from the shared cached helper tables.
 
 import numpy as np
 cimport numpy as cnp
-from libc.math cimport exp, log, log1p, fabs, hypot, isfinite, isnan, isinf, nextafter
+from libc.math cimport exp, log, log1p, fabs, isfinite, isnan, isinf, nextafter
 from libc.math cimport INFINITY, NAN
-from libc.stdlib cimport malloc, calloc, free
+from libc.stdlib cimport malloc, free
 from libc.string cimport memmove, memset
 
-from .._model._basis_kernels cimport BasisKernel, BasisTable, potential_point
+from .._model._basis_kernels cimport BasisKernel, BasisTable, potential_point_z
 from ._certify cimport _chebyshev_lower_bound_c
+from ._maps cimport Map, map_jac, map_set, map_x
 
 cnp.import_array()
 
@@ -51,53 +52,13 @@ cdef int _NPAR = 9                # scalar parameters per density component
 # Density
 # ---------------------------------------------------------------------------
 
-cdef int _fitting_table(const BasisTable* physical, BasisTable* local,
-                        double** storage) noexcept nogil:
-    """Represent the basis in z=(x-c)/h without rounding back to physical x.
-
-    This mirrors the affine re-expression in the compiled normalizer.  Each
-    enabled endpoint log is shifted by -log(h) in the canonical basis; callers
-    must subtract its coefficient times log(h) from the density log normalizer.
-    """
-    cdef int j, nf = physical.nf
-    cdef double h = physical.h, c = physical.c
-    cdef double* a = <double*>malloc(3 * nf * sizeof(double))
-    if a == NULL:
-        return -1
-    storage[0] = a
-    local[0] = physical[0]
-    local.c = 0.0
-    local.h = 1.0
-    local.lower = (physical.lower - c) / h if isfinite(physical.lower) else physical.lower
-    local.upper = (physical.upper - c) / h if isfinite(physical.upper) else physical.upper
-    local.xl = (physical.xl - c) / h if physical.has_l else 0.0
-    local.xu = (physical.xu - c) / h if physical.has_u else 0.0
-    local.al = physical.al * h
-    local.au = physical.au * h
-    if physical.has_l and physical.has_u:
-        local.mid = 0.5 * local.xl + 0.5 * local.xu
-    elif physical.has_l:
-        local.mid = local.xl
-    elif physical.has_u:
-        local.mid = local.xu
-    else:
-        local.mid = INFINITY
-    for j in range(nf):
-        a[j] = physical.delta[j] / h / h
-        a[nf + j] = physical.rate[j] * h
-        a[2 * nf + j] = (physical.location[j] - c) / h
-    local.delta = a
-    local.rate = &a[nf]
-    local.location = &a[2 * nf]
-    return 0
-
 cdef struct Density:
     int K
     bint view                     # public-coordinate views: mask to [lo, hi]
     const double* par             # per component: Lz Uz log_norm mu sigma jf w lo hi
-    # G3 basis components: the potential is ``theta . Phi(x)`` at
-    # ``x = c + h z`` and ``log_norm`` normalizes the canonical-coordinate
-    # density (G3-046).
+    # Basis components: the potential is ``theta . Phi`` at the canonical
+    # point ``z`` (``potential_point_z``) and ``log_norm`` normalizes the
+    # canonical-coordinate density.
     const BasisTable** basis
     const double** theta
     double* fwork                 # scratch of the (single-threaded) evaluation
@@ -105,128 +66,89 @@ cdef struct Density:
 
 
 cdef inline double _basis_kernel(
-    const Density* d, int k, double z, const double* p
+    const Density* d, int k, double z, const double* p, double* rel_noise
 ) noexcept nogil:
-    """Canonical density of component ``k`` at ``z`` (``p``: its parameters)."""
+    """Canonical density of component ``k`` at ``z`` (``p``: its parameters).
+
+    When ``rel_noise`` is not ``NULL`` it receives the relative rounding
+    bound of the value: ``exp(-q)`` inherits the absolute rounding error of
+    ``q = sum_c theta_c Phi_c(z)``, at most ``(d + 8) eps`` times the
+    absolute term sum (``d`` for the contraction, ``8`` for the column
+    recurrences and ``exp``).  A high-degree potential whose terms cancel
+    is known only to that floor.
+    """
     cdef const BasisTable* t = d.basis[k]
-    cdef double q, v, out
+    cdef double q, v, out, terms
+    cdef int col
+    if rel_noise != NULL:
+        rel_noise[0] = 0.0
     if isnan(z):
         return NAN
     if z <= p[0] or z >= p[1]:
         # Open support: a finite endpoint carries zero density (an enabled
         # log term is infinite there; the closure has measure zero).
         return 0.0
-    potential_point(t, d.theta[k], t.c + t.h * z, 0, d.fwork, d.cwork, &q)
+    potential_point_z(t, d.theta[k], z, 0, d.fwork, d.cwork, &q)
     v = q + p[2]
     out = 0.0
     if v < 700.0:
         out = exp(-v)
     if not isfinite(out):
         out = 0.0
+    if rel_noise != NULL and out > 0.0:
+        terms = fabs(p[2])
+        for col in range(t.d):
+            if d.theta[k][col] != 0.0:
+                terms += fabs(d.theta[k][col] * d.cwork[col])
+        rel_noise[0] = (t.d + 8) * _EPS * terms
     return out
 
 
-cdef inline double _density(const Density* d, double x) noexcept nogil:
-    cdef double total = 0.0, v, z
+cdef inline double _density(const Density* d, double x, double* noise) noexcept nogil:
+    """Density at ``x``; ``noise`` (unless ``NULL``) its absolute rounding bound."""
+    cdef double total = 0.0, v, z, rel = 0.0, abs_noise = 0.0
     cdef const double* p
     cdef int k
     for k in range(d.K):
         p = d.par + _NPAR * k
         z = p[4] * x + p[3]
-        v = p[5] * _basis_kernel(d, k, z, p)
+        v = p[5] * _basis_kernel(d, k, z, p, &rel if noise != NULL else NULL)
         if d.view:
             if not (isfinite(x) and x >= p[7] and x <= p[8]):
                 v = NAN if isnan(x) else 0.0
         total += p[6] * v
+        if noise != NULL and isfinite(v):
+            abs_noise += fabs(p[6] * v) * rel
+    if noise != NULL:
+        noise[0] = abs_noise
     return total
-
-
-# ---------------------------------------------------------------------------
-# Compactifying maps (``cdf._Map``)
-# ---------------------------------------------------------------------------
-
-cdef struct Map:
-    int kind                      # 0 finite 1 lower 2 upper 3 real 4 lower_c 5 upper_c
-    double L
-    double U
-    double center
-    double scale
-
-
-cdef inline double _x_from_z(const Map* mp, double z) noexcept nogil:
-    cdef double x, y_edge, t_edge, t
-    if mp.kind == 0:
-        x = mp.center + mp.scale * z
-        if z <= -1.0:
-            x = mp.L
-        if z >= 1.0:
-            x = mp.U
-        return x
-    if mp.kind == 1:
-        return mp.L + mp.scale * (1.0 + z) / (1.0 - z)
-    if mp.kind == 2:
-        return mp.U - mp.scale * (1.0 - z) / (1.0 + z)
-    if mp.kind == 3:
-        return mp.center + (2.0 * mp.scale * z) / (1.0 - z * z)
-    if mp.kind == 4:
-        y_edge = (mp.L - mp.center) / mp.scale
-        t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-        t = t_edge + 0.5 * (z + 1.0) * (1.0 - t_edge)
-    else:
-        y_edge = (mp.U - mp.center) / mp.scale
-        t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-        t = -1.0 + 0.5 * (z + 1.0) * (t_edge + 1.0)
-    x = mp.center + (2.0 * mp.scale * t) / (1.0 - t * t)
-    if mp.kind == 4 and z <= -1.0:
-        x = mp.L
-    if mp.kind == 5 and z >= 1.0:
-        x = mp.U
-    return x
-
-
-cdef inline double _jac(const Map* mp, double z) noexcept nogil:
-    cdef double y_edge, t_edge, dt_dz, t, w
-    if mp.kind == 0:
-        return mp.scale
-    if mp.kind == 1:
-        w = 1.0 - z
-        return 2.0 * mp.scale / (w * w)
-    if mp.kind == 2:
-        w = 1.0 + z
-        return 2.0 * mp.scale / (w * w)
-    if mp.kind == 3:
-        w = 1.0 - z * z
-        return 2.0 * mp.scale * (1.0 + z * z) / (w * w)
-    if mp.kind == 4:
-        y_edge = (mp.L - mp.center) / mp.scale
-        t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-        dt_dz = 0.5 * (1.0 - t_edge)
-        t = t_edge + (z + 1.0) * dt_dz
-    else:
-        y_edge = (mp.U - mp.center) / mp.scale
-        t_edge = y_edge / (1.0 + hypot(1.0, y_edge))
-        dt_dz = 0.5 * (t_edge + 1.0)
-        t = -1.0 + (z + 1.0) * dt_dz
-    w = 1.0 - t * t
-    return (2.0 * mp.scale * (1.0 + t * t) / (w * w)) * dt_dz
 
 
 cdef inline double _g(const Density* d, const Map* mp, double z) noexcept nogil:
     """Transformed density ``f(x(z)) dx/dz`` (``SpectralCDF._g_with_map``)."""
-    cdef double xx, jj, v
-    if (mp.kind == 3 or mp.kind == 2 or mp.kind == 5) and not (z > -1.0):
+    return _g_noise(d, mp, z, NULL)
+
+
+cdef inline double _g_noise(
+    const Density* d, const Map* mp, double z, double* noise
+) noexcept nogil:
+    """``_g`` and (unless ``noise`` is ``NULL``) its absolute rounding bound."""
+    cdef double xx, jj, v, nz = 0.0
+    if noise != NULL:
+        noise[0] = 0.0
+    if (isinf(mp.L) and not (z > -1.0)) or (isinf(mp.U) and not (z < 1.0)):
         return 0.0
-    if (mp.kind == 3 or mp.kind == 1 or mp.kind == 4) and not (z < 1.0):
-        return 0.0
-    xx = _x_from_z(mp, z)
+    xx = map_x(mp, z)
     if isfinite(mp.L) and z <= -1.0:
         xx = nextafter(mp.L, INFINITY)
     if isfinite(mp.U) and z >= 1.0:
         xx = nextafter(mp.U, -INFINITY)
-    jj = _jac(mp, z)
-    v = _density(d, xx) * jj
+    jj = map_jac(mp, z)
+    v = _density(d, xx, &nz if noise != NULL else NULL) * jj
     if not (isfinite(v) and v >= 0.0):
-        v = 0.0
+        return 0.0
+    if noise != NULL and isfinite(nz * jj):
+        noise[0] = nz * jj
     return v
 
 
@@ -509,7 +431,15 @@ cdef int _fit_cdf_panel(
     double* work,
     int* depths,
 ) noexcept nogil:
-    """``SpectralCDF._fit_panel``; returns whether the panel converged."""
+    """``SpectralCDF._fit_panel``; returns whether the panel converged.
+
+    The tolerances are widened by the panel's noise mass: the density's own
+    rounding bound (``_g_noise``), amplified by at most ``1 + Lambda_n``
+    (``Lambda_n <= (2/pi) log(n + 1) + 1``, the Chebyshev-Lobatto Lebesgue
+    constant) through interpolation.  A high-degree potential whose terms
+    cancel is known only to that floor, which refinement cannot lower; below
+    the tolerances it is negligible and the test is unchanged.
+    """
     cdef int m = 2 * n + 3
     cdef double vals[72]
     cdef double exact[72]
@@ -520,11 +450,16 @@ cdef int _fit_cdf_panel(
     cdef double tail_abs = 0.0, coeff_scale = 0.0
     cdef double av, pred, err, scale, width, mass_scale
     cdef double tol_mass, tail_tol_mass, lift, mass
+    cdef double nz, noise = 0.0, noise_mass
     cdef int i, j, converged
     for i in range(n + 1):
-        vals[i] = _g(d, mp, 0.5 * ((b - a) * u[i] + (a + b)))
+        vals[i] = _g_noise(d, mp, 0.5 * ((b - a) * u[i] + (a + b)), &nz)
+        if nz > noise:
+            noise = nz
     for i in range(m):
-        exact[i] = _g(d, mp, 0.5 * ((b - a) * uv[i] + (a + b)))
+        exact[i] = _g_noise(d, mp, 0.5 * ((b - a) * uv[i] + (a + b)), &nz)
+        if nz > noise:
+            noise = nz
     # cdf_panel_metrics
     for i in range(n + 1):
         total = 0.0
@@ -554,8 +489,9 @@ cdef int _fit_cdf_panel(
     out.tail_ratio = tail_abs / (coeff_scale if coeff_scale > 1e-300 else 1e-300)
     width = b - a
     mass_scale = width * scale
-    tol_mass = o.abs_tol + o.rel_tol * mass_scale
-    tail_tol_mass = o.abs_tol + o.coeff_tol * mass_scale
+    noise_mass = width * noise * (2.0 + 0.6366197723675814 * log(n + 1.0))
+    tol_mass = o.abs_tol + o.rel_tol * mass_scale + noise_mass
+    tail_tol_mass = o.abs_tol + o.coeff_tol * mass_scale + noise_mass
     converged = (width * fit_error <= tol_mass) and (width * tail_abs <= tail_tol_mass)
     lift = _lift(t, coeff, n + 1, 8, work, depths)
     if lift > 0.0:
@@ -1276,25 +1212,13 @@ cdef class DensitySpec:
     cdef const BasisTable** _tables
     cdef const double** _thetas
     cdef double* _work
-    cdef BasisTable* _local_tables
-    cdef double** _local_storage
-    cdef Py_ssize_t _nlocal
 
     def __cinit__(self):
         self._tables = NULL
         self._thetas = NULL
         self._work = NULL
-        self._local_tables = NULL
-        self._local_storage = NULL
-        self._nlocal = 0
 
     def __dealloc__(self):
-        cdef Py_ssize_t i
-        if self._local_storage != NULL:
-            for i in range(self._nlocal):
-                free(self._local_storage[i])
-        free(self._local_storage)
-        free(self._local_tables)
         free(self._tables)
         free(self._thetas)
         free(self._work)
@@ -1306,7 +1230,7 @@ cdef class DensitySpec:
         ----------
         components : sequence of tuple
             ``(kernel, theta, Lz, Uz, log_norm, mu, sigma, jf, weight, lo,
-            hi)`` per G3 basis component: ``kernel`` a
+            hi)`` per basis component: ``kernel`` a
             ``_basis_kernels.BasisKernel``, ``theta`` its coefficients, the
             canonical coordinate the kernel's ``z = (x - c) / h`` and
             ``log_norm = log Z - log h``.
@@ -1317,7 +1241,6 @@ cdef class DensitySpec:
         cdef const double[::1] tv
         cdef BasisKernel kern
         cdef Py_ssize_t nfw = 0, ncw = 0
-        cdef double logh, offset
         k = len(components)
         if k < 1:
             raise ValueError("at least one component is required")
@@ -1325,12 +1248,8 @@ cdef class DensitySpec:
             raise TypeError("density components must carry a BasisKernel")
         self._tables = <const BasisTable**>malloc(k * sizeof(BasisTable*))
         self._thetas = <const double**>malloc(k * sizeof(double*))
-        self._local_tables = <BasisTable*>malloc(k * sizeof(BasisTable))
-        self._local_storage = <double**>calloc(k, sizeof(double*))
-        if (self._tables == NULL or self._thetas == NULL or
-                self._local_tables == NULL or self._local_storage == NULL):
+        if self._tables == NULL or self._thetas == NULL:
             raise MemoryError("density description")
-        self._nlocal = k
         thetas = []
         for i, c in enumerate(components):
             kern = c[0]
@@ -1339,13 +1258,9 @@ cdef class DensitySpec:
                 raise ValueError("basis coefficients must be finite, one per column")
             thetas.append((kern, theta))
             tv = theta
-            if abs(kern.t.c / kern.t.h) > 16777216.0:
-                if _fitting_table(&kern.t, &self._local_tables[i],
-                                  &self._local_storage[i]) != 0:
-                    raise MemoryError("fitting-coordinate spectral table")
-                self._tables[i] = &self._local_tables[i]
-            else:
-                self._tables[i] = &kern.t
+            # Canonical nodes are evaluated directly (``potential_point_z``),
+            # so a center far from zero in units of ``h`` loses nothing.
+            self._tables[i] = &kern.t
             self._thetas[i] = &tv[0]
             nfw = max(nfw, 5 * kern.t.nf + 1)
             ncw = max(ncw, kern.t.d + 1)
@@ -1359,19 +1274,6 @@ cdef class DensitySpec:
         )
         if par.size != _NPAR * k:
             raise ValueError("each component needs nine scalar parameters")
-        for i, c in enumerate(components):
-            if self._local_storage[i] != NULL:
-                kern = c[0]
-                theta = thetas[i][1]
-                logh = log(kern.t.h)
-                offset = 0.0
-                if kern.t.log_col_lower >= 0:
-                    offset += theta[kern.t.log_col_lower]
-                if kern.t.log_col_upper >= 0:
-                    offset += theta[kern.t.log_col_upper]
-                # q_x = q_z - (sum endpoint amplitudes) * log(h).
-                # Hence q_x + logZ_x-logh = q_z + (logZ_x-logh-offset*logh).
-                par[_NPAR * i + 2] -= offset * logh
         self._keep = (par, thetas)
         pv = par
         self.d.K = k
@@ -1398,7 +1300,7 @@ cdef class DensitySpec:
         cdef Py_ssize_t i
         with nogil:
             for i in range(xv.shape[0]):
-                ov[i] = _density(&self.d, xv[i])
+                ov[i] = _density(&self.d, xv[i], NULL)
         return out
 
 
@@ -1503,23 +1405,19 @@ def build_cdf(
         o.coeff_tol = coeff_tol
         o.max_depth = max_depth
         o.max_panels = max_panels
-        mp.kind = map_kind
-        mp.L = L
-        mp.U = U
-        mp.center = center
-        mp.scale = scale
+        map_set(&mp, map_kind, L, U, center, scale)
         with nogil:
             if choose_scale:
                 for i in range(7):
                     sc = s0 * mults[i]
                     if sc < _TINY:
                         sc = _TINY
-                    mp.scale = sc
+                    map_set(&mp, map_kind, L, U, center, sc)
                     trial = _trial_score(&density.d, &mp, &t, maxdeg)
                     if i == 0 or trial < best_score:
                         best_score = trial
                         best_s = sc
-                mp.scale = best_s
+                map_set(&mp, map_kind, L, U, center, best_s)
             _build_partition(
                 &density.d, &mp, &t, &o, &bd, &breaks[0], breaks.shape[0], work, depths
             )
@@ -1648,11 +1546,7 @@ def build_ppf(
     if 2 * maxdeg + 5 > 150 or maxdeg + 2 > _MAXN:
         raise ValueError("degree options exceed the compiled table size")
     _tab_from(tables, &t)
-    mp.kind = map_kind
-    mp.L = L
-    mp.U = U
-    mp.center = center
-    mp.scale = scale
+    map_set(&mp, map_kind, L, U, center, scale)
     ev.m = a.shape[0]
     ev.stride = ev_coeffs.shape[1]
     ev.breaks = &breaks[0]

@@ -1,68 +1,45 @@
-# Current development status — October 23, 2026
+# Development status
 
-**Version:** `0.2.0.dev0`. **Status:** unreleased development checkpoint.
+**Current source version:** `0.2.0.dev0` (unreleased).
 
-The library uses the general potential basis and coefficient-linear curvature
-constraints. It supports weighted point and interval observations, finite
-mixtures, automatic component/degree/log/span selection, selected tail families
-with optional within-family parameter estimates, post-fit distribution operations
-and durable format-2 persistence. Experimental Taylor candidate search remains
-optional and retains full shape acceptance.
+## Implemented capabilities
 
-The [follow-up register](review-follow-up.md) records all original findings and
-current dispositions. Completed bounded work covers request precedence,
-resampling and exp-view integration, empirical-tail scaling/deadlines, record
-validation and cache identity, development-branch CI, documentation/package
-hygiene, exact endpoint-log feasibility, interior point stationarity and
-uniform rejected-endpoint cut discovery, checked feasibility repairs,
-support-appropriate recurrence coordinates, a common Newton controller and
-tighter curvature contact arithmetic.
+The library fits a general potential basis (bulk polynomials, finite-endpoint logarithms, and `Polynomial`, `SoftPower` or `Exponential` tails) under coefficient-linear curvature constraints. It fits weighted point and interval observations and finite mixtures. Automatic selection covers the number of components, polynomial degree, endpoint-log terms, coefficient span, and within-family tail parameters. Fitted distributions expose post-fit statistical operations and durable persistence (`format_version` 1).
+
+The fitter uses support-appropriate polynomial recurrences and one constrained Newton controller. Log-concavity is verified numerically over the whole support within a threshold `tau` (default `1e-6`, recorded per component as `shape_tau`); a fit whose shape is not verified reports `unverified` and warns. Inspect `fit_diagnostics` and `spectral_diagnostics` when numerical accuracy matters.
 
 ## Verification
 
-The current common-controller and polynomial-coordinate refactor is described in
-[fitting coordinates](fitting-coordinates.md) and the
-[resolution report](review-evidence/coordinate-refactor-resolution.md).
-Production verification uses Linux x86-64, CPython 3.12.14, NumPy 2.3.5,
-SciPy 1.17.0, Cython 3.3.0 and GCC/G++ 13.3. All 14 native extensions were
-built at `-O3`.
+Environment: Linux x86-64, CPython 3.13.17, NumPy 2.5.3, SciPy 1.18.1,
+Cython 3.3.0, and GCC 13.3. The source uses 12 native extensions.
 
-- Complete source sweep: **6,104 passed, 1 regression, 2 skipped, 1 expected failure**, out of 6,108 cases in 746.335 seconds. The final guard fixes the bounded warm-start regression; its affected-case rerun passes **28 tests** in 89.569 seconds.
-- Reconciled unique source cases: **6,105 passed, 2 skipped, 1 expected failure**, with no unresolved failure. This combines the full sweep and final affected-case rerun; it is not a fresh all-green full invocation after the final guard.
-- Installed wheel outside the source checkout: **182 passed** in 98.579 seconds; all 14 native extensions imported. The broad wheel batch emitted four documented SoftPower conversion warnings and one invalid-arithmetic warning in optional contact inspection. A final finite-derivative guard removes the latter; the affected serialization check passes again with runtime warnings treated as errors in both source and installed wheel.
-- Both degree-12 likelihood/acceptance regressions pass with existing numerical assertions. The degree-4 two-linear-tail Laplace test retains its strict expected-failure marker.
-- Black and configured Ruff checks pass. Source hashes identify the delivered source verified by the sweep plus final targeted reruns; 81 Python/native package files match the installed wheel byte for byte.
+- Full suite: **6,379 passed, 1 skipped, 11 warnings**, in 14 minutes with
+  two worker processes and numerical libraries limited to one thread each.
+  The `test` extra (`mpmath`, `sympy`, `pytest`, `pytest-xdist`) is required.
+- Post-fit quantities (density, distribution and survival functions, quantiles,
+  tails to `e^-300`, moments, entropy, mode, hazard, residual life, exp-space
+  mean, truncation, affine views, sampling, goodness of fit, and the durable
+  normalizer) are checked against an independent high-precision oracle on five
+  supports/shapes and a mixture (`tests/test_postfit_oracle.py`).
+- Black and Ruff pass on the whole tree; `cython-lint`
+  reports only long-standing accepted findings.
+- Fit coverage was also exercised by 140 generated cases (`tests/casegen`) and
+  a set of adversarial point, censored, mixture and tail-family fits.
+- A wheel built from the tree and installed outside the checkout imports all
+  12 extensions and passes the packaging, serialization and expectation tests.
+- CI covers CPython 3.11–3.14 on Linux, Windows and macOS. Debug builds, the
+  minimum declared NumPy/SciPy versions and the release wheel matrix are not
+  yet qualified.
 
-Historical debug verification predates this refactor. Current full debug and
-other interpreter/platform matrices are not established.
+See [Fitting performance](performance.md) for measured runtimes and the
+constraint-retention policy. These measurements do not guarantee latency or
+cross-platform correctness.
 
-## Open work
+## Known limitations and further work
 
-R16 retains the degree-4 two-linear-tail Laplace target OI-E2-6 and broader
-face/derivative conditioning work. The 1,200-point accounting regression and
-3,000-point degree-12 lognormal target OI-E2-3 are resolved. No numerical assertion or solver/shape threshold was relaxed,
-and no failing test was converted to xfail.
+- See [Limitations](limitations.md#known-open-items) for the numerical limits (data concentrated far from a finite end, high explicit degrees on half-lines, high-degree polynomial tails, heavy tails and `SoftPower`).
+- Mixture fitting, and above all automatic component-count selection, is much more expensive than single-component fitting.
+- Automatic tail-family comparison and broader predictive-tail evaluation remain research work. An explicit tail family is not changed automatically, even when it may fit the data poorly.
+- Debug builds, the minimum declared dependency versions and the release wheel matrix have not been qualified; CI covers the supported interpreters on Linux, Windows and macOS.
 
-An uncertified return warns by default; inspect `fit_diagnostics` and
-`spectral_diagnostics` before quantitative use. An explicit tail choice can be
-statistically inappropriate even when its fitted model passes numerical shape
-acceptance.
-
-The declared CPython 3.10–3.14/Linux/Windows/macOS targets need the current
-source's CI matrix. Minimum dependency combinations and changes to 3.10/3.15
-support policy remain open. Mixture cost, difficult curvature contacts,
-comparative predictive-tail validation, per-fit parallelism, broader architecture
-profiling and automatic tail-family comparison remain engineering/research work.
-
-## Historical evidence
-
-- [Original source review](history/source-review-2026-10-22.md).
-- [First implementation pass](history/implementation-pass-one.md).
-- [Second implementation checkpoint](history/implementation-pass-two.md).
-- [G3-064 checkpoint](history/g3-064-status.md).
-- [Benchmark findings](benchmark-findings.md),
-  [curvature rows](G3-078_CURVATURE_ROWS.md),
-  [automatic tail parameters](AUTOMATIC_TAIL_PARAMETERS.md),
-  [series search](series-staged-search.md) and
-  [runtime update](fit-runtime-update.md) retain earlier experiment evidence;
-  current behavior is documented in the user guides.
+See [Limitations](limitations.md), [Fitting](fitting.md), and [Fitting coordinates](fitting-coordinates.md) for details.

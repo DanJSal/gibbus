@@ -1,6 +1,6 @@
 # Modeling concepts
 
-Gibbus fits smooth univariate probability distributions by maximum likelihood under a per-component log-concavity constraint. This document describes the model at a conceptual level; [Numerical methods and performance](numerical-methods.md) covers implementation details.
+Gibbus fits smooth univariate probability distributions by maximum likelihood under a per-component log-concavity constraint. This document describes the model at a conceptual level; [Numerical methods](numerical-methods.md) covers implementation details.
 
 ## A Gibbus distribution
 
@@ -49,7 +49,7 @@ For mixtures, the presence and fitted amplitude of each enabled physical-boundar
 
 ## Bulk degree
 
-The bulk degree (`poly_degree`) controls the flexibility of the smooth component potential. Higher degree is not automatically better: it adds flexibility and parameters, and therefore requires model selection and numerical certification.
+The bulk degree (`poly_degree`) controls the flexibility of the smooth component potential. Higher degree is not automatically better: it adds flexibility and parameters, and therefore requires model selection and numerical shape verification.
 
 The convenience `poly_degree` route rejects odd degrees on full-infinite support. A general `BasisSpec` can admit odd bulk degrees with independently constrained tails; some directions may be fixed to zero on an exact coefficient face. Automatic degree selection considers admissible rungs. Mixtures may retain different bulk degrees by component.
 

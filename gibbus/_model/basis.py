@@ -1,43 +1,45 @@
-"""Exact compilation of a G3 coefficient-linear potential basis.
+"""Exact compilation of a coefficient-linear potential basis.
 
-G1 owner replaced: ``_model/natural.py`` (``_NaturalLayout``) and
-``_model/spec.py`` (``_ModelSpec``), plus the degree-parity admissibility of
-``_fit/inputs.py`` (``_is_poly_degree_admissible``), which becomes the exact
-structural admissibility below.  Retained from G1: a fixed, immutable layout of
-independent coefficients bound to one fitting coordinate; enabled endpoint-log
-amplitudes as structurally nonnegative coordinates.
+The potential is
 
-The full G3 potential is
+``q(z) = sum_j f_j(z) [a_j + b_j t_L(z) + c_j t_U(z)]``
 
-``q(x) = sum_j f_j(x) [a_j + b_j t_L(x) + c_j t_U(x)]``
-
-over the canonical underlying functions ``x^0..x^N``, ``-log(x - L)``,
-``-log(U - x)``, lower/upper noninteger soft powers and lower/upper
-exponentials (``N + 7`` functions, ``3 (N + 7)`` slots).  Compilation:
+in the canonical coordinate ``z`` over the underlying functions ``z^0..z^N``,
+``-log(z - z_L)``, ``-log(z_U - z)``, the lower/upper soft powers ``A(z)**p``
+and the lower/upper exponentials ``exp(-lambda (z + 1))`` and
+``exp(lambda (z - 1))`` (``N + 7`` functions, ``3 (N + 7)`` slots), with the
+fixed Gaussian gates ``t_L = erf(a (1 + z))`` and ``t_U = erf(a (1 - z))`` of
+:mod:`gibbus._model.basis_geometry` (``a = s / sqrt(2)``).  Compilation:
 
 1. activates functions and fixes unavailable slots to zero (``a_0``, ``b``
    on a finite lower end, ``c`` on a finite upper end, gated logarithms);
-2. assigns every infinite end a target leading growth order (requested
-   tail, else bulk-determined; the full-line odd-degree rule of spec §7);
-3. imposes exact suppression rows ``g_s = 0`` on functions growing faster
+2. attaches every tail function (a soft power, an exponential, or a tail
+   monomial above the bulk degree) to its own end: the foreign gate slot is
+   unavailable and an exact structural row keeps the gate in the span of
+   ``W_L = (1 - t_L) / 2`` and ``W_U = (1 - t_U) / 2``, so the function
+   enters as ``f W_s`` and shapes only that tail;
+3. assigns every infinite end a target leading growth order (requested
+   tail, else bulk-determined; an odd top bulk degree on the full line leads
+   with the next even degree);
+4. imposes exact suppression rows ``g_s = 0`` on functions growing faster
    than the target, and the shared physical-amplitude row when both ends
    request the same order;
-4. selects the retained span (``"full"``: every admissible slot;
+5. selects the retained span (``"full"``: every admissible slot;
    ``"minimal"``: the deterministic smallest slot subset that preserves the
    requested leading amplitudes, outward-positive feasibility and the
    presence of every active nonconstant function);
-5. reconstructs the full coefficients *algebraically* from independent
-   coefficients ``theta`` through an exact rational map ``full = M theta``
-   (G3-006/M-O04), so suppressions and ties hold exactly rather than as
-   optimizer residuals.
+6. reconstructs the full coefficients *algebraically* from independent
+   coefficients ``theta`` through an exact rational map ``full = M theta``,
+   so suppressions and ties hold exactly rather than as optimizer residuals.
 
-Each retained column is ``sum_j f_j(x) * (alpha_0 + alpha_1 t_L + alpha_2 t_U)``
+Each retained column is ``sum_j f_j(z) * (alpha_0 + alpha_1 t_L + alpha_2 t_U)``
 with exact rational gate coefficients.  Numerical evaluation lives in the
 basis evaluator; this module performs no floating-point model evaluation.
 
-Asymptotic growth orders are tuples compared lexicographically:
-``(2, rate, 0)`` for an exponential, ``(1, p, 0)`` for ``|x|**p``,
-``(1, 0, 1)`` for a logarithm and ``(0, 0, 0)`` for a decaying function.
+Asymptotic growth orders are tuples compared lexicographically, in canonical
+units: ``(2, lambda, 0)`` for ``exp(lambda |z|)``, ``(1, p, 0)`` for
+``|z|**p``, ``(1, 0, 1)`` for a logarithm and ``(0, 0, 0)`` for a decaying
+function.
 """
 
 import dataclasses
@@ -49,6 +51,7 @@ from functools import cached_property, lru_cache
 
 import numpy as np
 
+from .._defaults import BASIS_GATE_SHARPNESS
 from ._basis_kernels import BasisKernel
 from .basis_geometry import _resolve_basis_geometry
 from .basis_spec import (
@@ -59,6 +62,15 @@ from .basis_spec import (
     _canonicalize_basis_spec,
 )
 from .coords import _build_fit_coordinate
+
+
+class _StructurallyImproper(ValueError):
+    """No coefficient vector of the requested basis is proper and convex.
+
+    A property of the request (its degree and tail classes), never of the
+    data; the automatic degree ladder skips such a degree.
+    """
+
 
 _MONOMIAL = "monomial"
 _LOG = "log"
@@ -74,8 +86,9 @@ _CONSTANT = (1, 0.0, 0)
 _LINEAR = (1, 1.0, 0)
 _LOG_ORDER = (1, 0.0, 1)
 
-# Largest |log| of the centering ratio in a shared exponential-amplitude row.
-_MAX_SHARED_EXP_LOG_RATIO = 700.0
+# Exact square of the gate rate ``a = s / sqrt(2)``: the only gate constant the
+# exact tail-curvature expansion needs.
+_GATE_RATE_SQUARED = Fraction(BASIS_GATE_SHARPNESS) ** 2 / 2
 
 
 @dataclass(frozen=True)
@@ -93,18 +106,17 @@ class _BasisFunction:
     degree : int or None
         Monomial degree.
     power : float or None
-        Noninteger soft-power exponent.
-    delta : float or None
-        Soft-power smoothing in squared user units.
+        Noninteger soft-power exponent ``p``.
     rate : float or None
-        Exponential rate in inverse user units.
-    location : float or None
-        Exponential centering location (the side's tanh location).
+        Canonical exponential rate ``lambda`` (``r h`` for a user rate ``r``).
     active : bool
         Whether the function carries free admissible slots (bulk, requested
         tail, enabled log).  An inactive intermediate monomial can still
-        appear inside a lower-order completion column (G3-025), always tied
-        to a gate.
+        appear inside a lower-order completion column, always tied to a gate.
+    tail_sides : tuple of str
+        Ends the function is a tail function of: it enters only as
+        ``f W_s`` for those ends (both ends for a soft power shared by equal
+        lower and upper requests).  Empty for bulk monomials and logs.
     label : str
         Human-readable name.
     """
@@ -114,10 +126,9 @@ class _BasisFunction:
     side: str | None
     degree: int | None
     power: float | None
-    delta: float | None
     rate: float | None
-    location: float | None
     active: bool
+    tail_sides: tuple
     label: str
 
 
@@ -147,13 +158,13 @@ class _AsymptoticTerm:
     """Coefficient functional of one surviving growth order at one end.
 
     The physical contribution is ``exp(log_factor) * (row @ theta) * shape``
-    where ``shape`` is ``|x - c|**p``, ``exp(rate |x - c|)`` or
+    where ``shape`` is ``|x - c|**p``, ``exp(r |x - c|)`` or
     ``-log|x - c|`` in user units.
 
     Parameters
     ----------
     order : tuple
-        Growth-order key.
+        Growth-order key in canonical units.
     shape : str
         ``"power"``, ``"exponential"`` or ``"log"``.
     row_exact : tuple of Fraction
@@ -161,7 +172,8 @@ class _AsymptoticTerm:
     row : numpy.ndarray
         ``float64`` copy of ``row_exact`` converted to physical units.
     log_factor : float
-        Exponential centering factor (``0`` for nonexponential shapes).
+        Exponential centering factor ``-lambda`` (``0`` for nonexponential
+        shapes): ``exp(lambda (z - 1)) = exp(-lambda) exp(r |x - c|)``.
     functions : tuple of int
         Contributing function indices.
     """
@@ -178,26 +190,39 @@ class _AsymptoticTerm:
 class _CurvatureTerm:
     """One term of the leading ``q''`` expansion at a linear-target end.
 
-    The contribution to ``q''`` is ``(row_exact @ theta) * w(z)`` with a
-    positive weight ``w``: ``1 / d**2`` for an opposite-endpoint logarithm
-    (``shape == "log"``, distance ``d`` in user units) or
-    ``|z|**order * exp(-rate |z|)`` up to a positive constant
-    (``shape == "power"``, internal units ``z = (x - c) / h``).  The sign
-    convention is already applied: a positive value means positive curvature.
+    With ``zeta = |z|`` toward the end, the contribution to ``q''`` is
+    ``(row_exact @ theta) * w(zeta) * (1 + O(1 / zeta))`` with a positive
+    weight ``w``: ``1 / (zeta - zeta_0)**2`` for an opposite-endpoint
+    logarithm at ``zeta_0`` (``shape == "log"``) or, for a gate term
+    (``shape == "gate"``),
+
+    ``w = F(zeta) * 4 a**2 u exp(-u**2) / sqrt(pi)``, ``u = a (zeta + offset)``,
+
+    where the own gate of the end is centered at ``zeta = 1``
+    (``offset = -1``) and the opposite gate at ``zeta = -1`` (``offset = 1``).
+    The prefactor ``F`` is ``zeta**order`` for a monomial, ``A(zeta)**order``
+    for a soft power and ``exp(-rate (zeta + 1))`` for an opposite-side
+    exponential.  The sign convention is already applied: a positive value
+    means positive curvature.
 
     Parameters
     ----------
     shape : str
-        ``"log"`` or ``"power"``.
+        ``"log"`` or ``"gate"``.
+    offset : int
+        Gate offset (``0`` for ``"log"``).
     rate : float
-        Exponential decay rate in internal units (``0`` for ``"log"``).
+        Canonical rate of an opposite-side exponential prefactor (``0``
+        otherwise).
     order : float
-        Power of ``|z|`` multiplying the exponential.
+        Monomial degree or soft-power exponent of the prefactor (``0`` for an
+        exponential).
     row_exact : tuple of Fraction
         Exact coefficient functional over ``theta``.
     """
 
     shape: str
+    offset: int
     rate: float
     order: float
     row_exact: tuple
@@ -222,9 +247,10 @@ class _SideAsymptotics:
     curvature : tuple of _CurvatureTerm
         For a linear target only (whose own curvature is zero): the leading
         ``q''`` terms, strongest first -- an opposite-endpoint logarithm, then
-        the slowest exponentially small gate/exponential corrections ordered
-        by the power of ``|z|``.  Empty for other targets, whose leading term
-        has curvature of the same sign as its outward-positive amplitude.
+        the Gaussian gate corrections of the end's own gate, then those of
+        the opposite gate, each ordered by the power of ``|z|``.  Empty for
+        other targets, whose leading term has curvature of the same sign as
+        its outward-positive amplitude.
     """
 
     side: str
@@ -242,7 +268,7 @@ class _SideAsymptotics:
 
 @dataclass(frozen=True)
 class _BasisModel:
-    """Immutable compiled G3 basis.
+    """Immutable compiled basis.
 
     Parameters
     ----------
@@ -306,7 +332,7 @@ class _BasisModel:
 
     @property
     def slot_names(self):
-        """Names of all ``3 (N + 7)`` full slots, e.g. ``"b[x^2]"``."""
+        """Names of all ``3 (N + 7)`` full slots, e.g. ``"b[z^2]"``."""
         return tuple(f"{s}[{f.label}]" for f in self.functions for s in _SLOT_NAMES)
 
     @cached_property
@@ -315,18 +341,9 @@ class _BasisModel:
         return BasisKernel(self)
 
     @cached_property
-    def series_plan(self):
-        """Immutable local-series geometry and exact sign maps, built once."""
-        from .basis_series import SeriesPlan
-
-        return SeriesPlan(self)
-
-    @cached_property
-    def series_signature(self):
-        """Exact value key for reuse of immutable local-series geometry."""
-        from .basis_series import _geometry_signature
-
-        return _geometry_signature(self)
+    def _polynomial_coordinate_cache(self):
+        """Cache of the most recent numerical basis and its coordinate inputs."""
+        return {}
 
     def side_asymptotics(self, side, /):
         """Return the asymptotic metadata of an infinite end, or ``None``.
@@ -498,42 +515,50 @@ def _enumerate_functions(request, geometry, /):
         ``(functions, merged_soft_power)``.
     """
     lt, ut = request.lower_tail, request.upper_tail
+    tails = ((_LOWER, lt), (_UPPER, ut))
     tail_degrees = {
-        int(t.value) for t in (lt, ut) if t is not None and t.kind == _POLYNOMIAL
+        int(t.value) for _, t in tails if t is not None and t.kind == _POLYNOMIAL
     }
-    # Lower-order completion (G3-025) multiplies the gate of a soft power of
-    # order p by z**k for every integer k < p, so those monomials must exist.
+    # Lower-order completion multiplies the gate of a soft power of order p by
+    # z**k for every integer k < p, so those monomials must exist.
     completion_degrees = {
         math.ceil(t.value) - 1
-        for t in (lt, ut)
+        for _, t in tails
         if t is not None and t.kind == _SOFT_POWER
     }
     n = max([1, request.bulk_degree, *tail_degrees, *completion_degrees])
     funcs = []
     for k in range(n + 1):
         active = k <= request.bulk_degree or k in tail_degrees
-        label = "1" if k == 0 else ("x" if k == 1 else f"x^{k}")
+        # A requested polynomial tail above the bulk degree is a tail function
+        # of the ends that request it; at or below it, it is a bulk monomial.
+        sides = tuple(
+            side
+            for side, t in tails
+            if k > request.bulk_degree
+            and t is not None
+            and t.kind == _POLYNOMIAL
+            and int(t.value) == k
+        )
+        label = "1" if k == 0 else ("z" if k == 1 else f"z^{k}")
         funcs.append(
-            _BasisFunction(k, _MONOMIAL, None, k, None, None, None, None, active, label)
+            _BasisFunction(k, _MONOMIAL, None, k, None, None, active, sides, label)
         )
     funcs.append(
         _BasisFunction(
-            n + 1, _LOG, _LOWER, None, None, None, None, None, request.log_lower, "logL"
+            n + 1, _LOG, _LOWER, None, None, None, request.log_lower, (), "logL"
         )
     )
     funcs.append(
         _BasisFunction(
-            n + 2, _LOG, _UPPER, None, None, None, None, None, request.log_upper, "logU"
+            n + 2, _LOG, _UPPER, None, None, None, request.log_upper, (), "logU"
         )
     )
     pow_l = lt is not None and lt.kind == _SOFT_POWER
     pow_u = ut is not None and ut.kind == _SOFT_POWER
-    merged = (
-        pow_l
-        and pow_u
-        and lt.value == ut.value
-        and geometry.lower_delta == geometry.upper_delta
-    )
+    # A(z)**p is even, so equal lower and upper powers are one function gated
+    # toward both ends.
+    merged = pow_l and pow_u and lt.value == ut.value
     funcs.append(
         _BasisFunction(
             n + 3,
@@ -541,10 +566,9 @@ def _enumerate_functions(request, geometry, /):
             _LOWER,
             None,
             lt.value if pow_l else None,
-            geometry.lower_delta if pow_l else None,
-            None,
             None,
             pow_l,
+            (_LOWER, _UPPER) if merged else (_LOWER,) if pow_l else (),
             "powL",
         )
     )
@@ -555,10 +579,9 @@ def _enumerate_functions(request, geometry, /):
             _UPPER,
             None,
             ut.value if pow_u else None,
-            geometry.upper_delta if pow_u else None,
-            None,
             None,
             pow_u and not merged,
+            (_UPPER,) if pow_u and not merged else (),
             "powU",
         )
     )
@@ -571,10 +594,9 @@ def _enumerate_functions(request, geometry, /):
             _LOWER,
             None,
             None,
-            None,
             geometry.lower_rate if exp_l else None,
-            geometry.lower_location if exp_l else None,
             exp_l,
+            (_LOWER,) if exp_l else (),
             "expL",
         )
     )
@@ -585,10 +607,9 @@ def _enumerate_functions(request, geometry, /):
             _UPPER,
             None,
             None,
-            None,
             geometry.upper_rate if exp_u else None,
-            geometry.upper_location if exp_u else None,
             exp_u,
+            (_UPPER,) if exp_u else (),
             "expU",
         )
     )
@@ -597,6 +618,8 @@ def _enumerate_functions(request, geometry, /):
 
 def _slot_available(fn, slot, request, /):
     """Whether one ``(function, slot)`` pair is structurally admissible.
+
+    A tail function keeps only the gate slots of its own ends.
 
     Parameters
     ----------
@@ -613,9 +636,35 @@ def _slot_available(fn, slot, request, /):
         return not (fn.kind == _MONOMIAL and fn.degree == 0)
     if fn.kind == _LOG:
         return False
+    side = _LOWER if slot == _B else _UPPER
+    if fn.tail_sides and side not in fn.tail_sides:
+        return False
     if slot == _B:
         return request.lower_infinite
     return request.upper_infinite
+
+
+def _tail_row(fn, /):
+    """Exact structural row keeping a tail function out of the bulk.
+
+    ``W_L = (1 - t_L) / 2`` has slots ``(1/2, -1/2, 0)`` and
+    ``W_U = (1 - t_U) / 2`` has ``(1/2, 0, -1/2)``; their span is the gate
+    sum ``a + b + c = 0``.  The foreign gate slot of a one-sided tail function
+    is unavailable (:func:`_slot_available`), so its free directions are
+    exactly ``f W_s`` of its own end.  Lower-order completion of the other
+    end's tail can add ``f W_s'`` of the other end, which the row keeps.
+
+    Parameters
+    ----------
+    fn : _BasisFunction
+        Active tail function.
+
+    Returns
+    -------
+    dict
+        Full-slot row ``{slot: Fraction}``, ``== 0``.
+    """
+    return {3 * fn.index + k: Fraction(1) for k in (_A, _B, _C)}
 
 
 def _order(fn, side, /):
@@ -633,6 +682,7 @@ def _order(fn, side, /):
     if fn.kind == _LOG:
         return _LOG_ORDER
     if fn.kind == _SOFT_POWER:
+        # A(z)**p is even and grows like |z|**p toward both ends.
         return (1, float(fn.power), 0)
     if fn.side == side:
         return (2, float(fn.rate), 0)
@@ -679,36 +729,39 @@ def _parity_sign(fn, side, /):
     return 1
 
 
-def _exp_log_factor(fn, geometry, /):
-    """Log of the factor relating ``g_s`` to the amplitude of ``exp(rate |x - c|)``.
+def _exp_log_factor(fn, /):
+    """Log of the factor relating ``g_s`` to the amplitude of ``exp(r |x - c|)``.
 
-    ``exp(-r (x - x_L)) = exp(r (x_L - c)) exp(r |x - c|)`` as ``x -> -inf``
-    and ``exp(r (x - x_U)) = exp(-r (x_U - c)) exp(r |x - c|)`` as ``x -> +inf``.
+    Each exponential is centered at its own gate:
+    ``exp(lambda (z - 1)) = exp(-lambda) exp(lambda |z|)`` as ``z -> +inf`` and
+    ``exp(-lambda (z + 1)) = exp(-lambda) exp(lambda |z|)`` as ``z -> -inf``,
+    with ``lambda |z| = r |x - c|``.
 
     Parameters
     ----------
     fn : _BasisFunction
         Active exponential function.
-    geometry : _BasisGeometry
-        Resolved geometry.
     """
-    if fn.side == _LOWER:
-        return fn.rate * (fn.location - geometry.center)
-    return -fn.rate * (fn.location - geometry.center)
+    return -float(fn.rate)
 
 
-def _target_order(request, side, /):
+def _target_order(request, geometry, side, /):
     """Leading growth order preserved at an infinite end.
 
     Parameters
     ----------
     request : _BasisRequest
         Canonical request.
+    geometry : _BasisGeometry
+        Resolved geometry (canonical exponential rates).
     side : str
         ``"lower"`` or ``"upper"``.
     """
     tail = request.lower_tail if side == _LOWER else request.upper_tail
     if tail is not None:
+        if tail.kind == _EXPONENTIAL:
+            rate = geometry.lower_rate if side == _LOWER else geometry.upper_rate
+            return (2, float(rate), 0)
         return tail.order
     nb = request.bulk_degree
     full_line = request.lower_infinite and request.upper_infinite
@@ -718,7 +771,7 @@ def _target_order(request, side, /):
         and request.upper_tail is None
         and nb % 2 == 1
     ):
-        # Spec §7: an odd top bulk monomial cannot be outward on both ends.
+        # An odd top bulk monomial cannot be outward on both ends.
         return (1, float(nb - 1), 0)
     return (1, float(nb), 0)
 
@@ -793,26 +846,31 @@ def _group_functions(active, shared_members, /):
 
 
 # ---------------------------------------------------------------------------
-# Exact tail curvature at linear-target ends (G3-025, rule 2)
+# Exact tail curvature at linear-target ends
 # ---------------------------------------------------------------------------
 
 
-def _tail_curvature(side, functions, used, exact, request, geometry, available, /):
+def _tail_curvature(side, functions, used, exact, request, available, /):
     """Leading ``q''`` terms at an infinite end whose target is linear.
 
     At such an end every power term above linear is exactly suppressed and the
-    surviving algebraic part (``z``, constants) has zero curvature, so the sign
-    of ``q''`` is decided by (i) the logarithm of an opposite finite endpoint,
-    whose curvature ``gamma / d**2`` decays only algebraically, then (ii) the
-    exponentially small corrections.  Writing the gate tails exactly,
-    ``1 + t_L = 2 e^{2 u_L} + O(e^{4 u_L})`` toward ``-inf`` (and analogously
-    for ``t_U`` and toward ``+inf``), each term ``f G`` contributes
-    ``f(z) w e^{-r |z|}`` with ``r = 2 alpha h`` and ``w > 0`` from the gate
-    location; exponential functions of the opposite side contribute their own
-    decay.  Only the slowest rate is kept (all exactly-equal rates combined,
-    ``w`` normalized exactly from the float geometry).  With prefactor
-    ``F(z)``, the curvature is ``e^{sigma r z} (F'' + 2 sigma r F' + r^2 F)``,
-    expanded in descending powers of ``|z|`` with the end's parity signs.
+    surviving algebraic part (``z``, constants; tail functions of the other end
+    vanish there) has zero curvature.  The sign of ``q''`` is decided by
+    (i) the logarithm of an opposite finite endpoint, whose curvature decays
+    only algebraically, then (ii) the Gaussian gate corrections.  With
+    ``zeta = |z|`` toward the end, the own gate is ``t = -1 + e`` and the
+    opposite gate ``t = 1 - e'``, where ``e = erfc(a (zeta - 1))`` and
+    ``e' = erfc(a (zeta + 1))``.  A gated prefactor ``F`` contributes
+
+    ``(F e)'' = exp(-u**2) / sqrt(pi) * (4 a**2 u F -+ 4 a F' + F'' S(u) / u)``
+
+    with ``u = a (zeta -+ 1)`` and ``S(u) = 1 - 1 / (2 u**2) + ...``.  The
+    bracket is dominated by ``4 a**2 u F``, so its sign is the sign of the
+    leading term of ``F``'s expansion in descending powers of ``zeta``: the
+    coefficients of ``F`` are themselves an exact lexicographic curvature
+    expansion.  Every own-gate term outweighs every opposite-gate term
+    (their ratio grows like ``exp(4 a**2 zeta)``), and within a gate a power
+    prefactor outweighs a decaying opposite-side exponential.
 
     Parameters
     ----------
@@ -826,8 +884,6 @@ def _tail_curvature(side, functions, used, exact, request, geometry, available, 
         Exact ``(3 (N + 7), d)`` reconstruction map.
     request : _BasisRequest
         Canonical request.
-    geometry : _BasisGeometry
-        Resolved geometry.
     available : numpy.ndarray
         Compiled slot mask.
 
@@ -838,91 +894,45 @@ def _tail_curvature(side, functions, used, exact, request, geometry, available, 
         omitted.
     """
     d = len(exact[0]) if exact else 0
-    h, c = geometry.scale, geometry.center
     lower_end = side == _LOWER
-    sigma = 1 if lower_end else -1
-
-    def slot_row(slot, scale):
-        return [scale * v for v in exact[slot]]
-
-    gates = []  # (slot offset, rate, log weight, coefficient sign)
-    if geometry.lower_location is not None:
-        rate = 2.0 * geometry.lower_steepness * h
-        zl = (geometry.lower_location - c) / h
-        gates.append((1, rate, -sigma * rate * zl, 2 * sigma))
-    if geometry.upper_location is not None:
-        rate = 2.0 * geometry.upper_steepness * h
-        zu = (geometry.upper_location - c) / h
-        gates.append((2, rate, -sigma * rate * zu, -2 * sigma))
-
+    # (offset, slot, sign): the own gate leaves +e, the opposite gate -e'.
+    gates = ((-1, _B, 1), (1, _C, -1)) if lower_end else ((-1, _C, 1), (1, _B, -1))
     terms = []
-    pieces = []  # (rate, log weight, kind, key, row)
+    prefactors = {-1: {}, 1: {}}  # offset -> {(rate, order): row}
     for j in used:
         fn = functions[j]
         if fn.kind == _LOG:
             row = list(exact[3 * j])
             if any(v != 0 for v in row):
-                terms.append(_CurvatureTerm("log", 0.0, 0.0, tuple(row)))
+                terms.append(_CurvatureTerm("log", 0, 0.0, 0.0, tuple(row)))
             continue
-        if fn.kind == _EXPONENTIAL:
+        if fn.kind == _MONOMIAL:
+            rate, order = 0.0, float(fn.degree)
+            parity = -1 if (lower_end and fn.degree % 2 == 1) else 1
+        elif fn.kind == _SOFT_POWER:
+            rate, order, parity = 0.0, float(fn.power), 1
+        else:
             if fn.side == side:
                 raise RuntimeError(
                     "internal error: growing exponential at a linear end"
                 )
-            base_rate = fn.rate * h
-            base_log = fn.rate * (c - fn.location) * sigma
-            g = _limit_functional(fn, side, request, available)
-            row = [
-                sum(g[k] * exact[3 * j + k][col] for k in range(3)) for col in range(d)
+            rate, order, parity = float(fn.rate), 0.0, 1
+        for offset, slot, sign in gates:
+            if not available[3 * j + slot]:
+                continue
+            row = exact[3 * j + slot]
+            acc = prefactors[offset].setdefault((rate, order), [Fraction(0)] * d)
+            prefactors[offset][(rate, order)] = [
+                a + sign * parity * v for a, v in zip(acc, row)
             ]
-            pieces.append((base_rate, base_log, _MONOMIAL, 0, row))
-            kind, key = _MONOMIAL, 0
-        else:
-            base_rate, base_log = 0.0, 0.0
-            kind = fn.kind
-            key = fn.degree if fn.kind == _MONOMIAL else fn.power
-        for offset, rate, log_w, sign in gates:
-            row = slot_row(3 * j + offset, sign)
-            pieces.append((base_rate + rate, base_log + log_w, kind, key, row))
-
-    pieces = [p for p in pieces if any(v != 0 for v in p[4])]
-    if pieces:
-        rate = min(p[0] for p in pieces)
-        group = [p for p in pieces if p[0] == rate]
-        top = max(p[1] for p in group)
-        beta, soft = {}, {}
-        for _, log_w, kind, key, row in group:
-            w = Fraction(math.exp(log_w - top))
-            target = beta if kind == _MONOMIAL else soft
-            acc = target.setdefault(key, [Fraction(0)] * d)
-            target[key] = [a + w * v for a, v in zip(acc, row)]
-        r = Fraction(rate)
-        zero = [Fraction(0)] * d
-        ordered = []
-        if beta:
-            for n in range(max(beta), -1, -1):
-                b0, b1, b2 = (
-                    beta.get(n, zero),
-                    beta.get(n + 1, zero),
-                    beta.get(n + 2, zero),
-                )
-                parity = -1 if (lower_end and n % 2 == 1) else 1
-                row = [
-                    parity
-                    * (
-                        r * r * v0
-                        + 2 * sigma * r * (n + 1) * v1
-                        + (n + 2) * (n + 1) * v2
-                    )
-                    for v0, v1, v2 in zip(b0, b1, b2)
-                ]
-                ordered.append((float(n), row))
-        for p, row in soft.items():
-            ordered.append((float(p), [r * r * v for v in row]))
-        ordered.sort(key=lambda t: -t[0])
-        for order, row in ordered:
+    for offset in (-1, 1):
+        group = prefactors[offset]
+        # Power prefactors (rate 0) by descending power, then decaying
+        # exponentials by ascending rate.
+        for rate, order in sorted(group, key=lambda key: (key[0], -key[1])):
+            row = group[(rate, order)]
             if any(v != 0 for v in row):
-                terms.append(_CurvatureTerm("power", rate, order, tuple(row)))
+                terms.append(_CurvatureTerm("gate", offset, rate, order, tuple(row)))
     return tuple(terms)
 
 
@@ -1024,7 +1034,7 @@ def _tail_curvature_feasible(asymptotics, columns, d, /):
 
 
 def _lower_order_completion(map_columns, functions, /):
-    """Lower-order completion of gated power terms (G3-025, rule 1).
+    """Lower-order completion of gated power terms.
 
     For every retained column and every term ``f G`` in it whose gate
     ``G = alpha_0 + alpha_1 t_L + alpha_2 t_U`` is gated (``alpha_1`` or
@@ -1053,7 +1063,7 @@ def _lower_order_completion(map_columns, functions, /):
     n_slots = 3 * len(functions)
     # Echelon rows are kept sparse ({slot: value}, nonzeros only): columns are
     # gate triples of a few functions, and exact rational arithmetic on the
-    # zeros dominated basis assembly (G3-041).  The elimination is unchanged.
+    # zeros would dominate basis assembly.
     echelon = []
 
     def reduce(vec):
@@ -1175,7 +1185,7 @@ def _basis_layout(request, geometry, /):
 
     A pure function of its (hashable, immutable) arguments, cached: the
     automatic pipeline compiles, grows and completes the same layout
-    repeatedly (G3-041).
+    repeatedly.
 
     Parameters
     ----------
@@ -1195,8 +1205,7 @@ def _basis_layout(request, geometry, /):
     ValueError
         If the family cannot represent a proper log-concave density (no
         surviving outward growth of at least linear order at an infinite end,
-        or no outward-positive leading amplitude), or a shared exponential
-        amplitude is numerically unrepresentable.
+        or no outward-positive leading amplitude).
     """
     functions, merged = _enumerate_functions(request, geometry)
     available = np.array(
@@ -1212,7 +1221,7 @@ def _basis_layout(request, geometry, /):
 
     targets = {}
     for s in sides:
-        target = _target_order(request, s)
+        target = _target_order(request, geometry, s)
         if target < _LINEAR:
             raise ValueError(
                 f"structurally improper basis: no admissible term can grow at least "
@@ -1224,7 +1233,8 @@ def _basis_layout(request, geometry, /):
 
     suppressed = {s: [] for s in sides}
     leaders = {s: [] for s in sides}
-    rows = []  # (dict slot -> Fraction)
+    # Exact full-slot equalities {slot: Fraction}; tail functions first.
+    rows = [_tail_row(functions[j]) for j in active if functions[j].tail_sides]
     for j in active:
         fn = functions[j]
         for s in sides:
@@ -1250,25 +1260,13 @@ def _basis_layout(request, geometry, /):
     )
     shared_members = set()
     if shared:
-        weights = {_LOWER: Fraction(1), _UPPER: Fraction(1)}
-        if lt.kind == _EXPONENTIAL:
-            (jl,), (ju,) = leaders[_LOWER], leaders[_UPPER]
-            log_ratio = _exp_log_factor(functions[jl], geometry) - _exp_log_factor(
-                functions[ju], geometry
-            )
-            if abs(log_ratio) > _MAX_SHARED_EXP_LOG_RATIO:
-                raise ValueError(
-                    "shared exponential amplitude is unrepresentable: tanh locations "
-                    "are too asymmetric about the basis center"
-                )
-            # exp(fL) gL = exp(fU) gU, scaled so the larger factor is one.
-            factor = Fraction(math.exp(-abs(log_ratio)))
-            weights[_LOWER if log_ratio < 0 else _UPPER] = factor
+        # Equal orders carry equal centering factors (equal exponential rates
+        # share exp(-lambda)), so the physical amplitudes tie with unit weights.
         row = {}
         for s, sign in ((_LOWER, 1), (_UPPER, -1)):
             for j in leaders[s]:
                 g = _limit_functional(functions[j], s, request)
-                p = _parity_sign(functions[j], s) * sign * weights[s]
+                p = _parity_sign(functions[j], s) * sign
                 for k in range(3):
                     if g[k] != 0:
                         row[3 * j + k] = row.get(3 * j + k, Fraction(0)) + p * g[k]
@@ -1382,12 +1380,11 @@ def _basis_layout(request, geometry, /):
     choice = [e[4] for e in entries]
     parts = assemble(choice)
     if not _tail_curvature_feasible(parts[4], parts[0], len(parts[1])):
-        raise ValueError(
+        raise _StructurallyImproper(
             "structurally improper basis: no coefficient vector makes q'' "
             "eventually nonnegative together with outward growth at every "
-            "linear tail (tanh-gated terms of degree <= 1 cannot form an "
-            "exactly convex linear tail); raise bulk_degree or request a "
-            "faster tail"
+            "linear tail (gated terms of degree <= 1 cannot form an exactly "
+            "convex linear tail); raise bulk_degree or request a faster tail"
         )
     return _BasisLayout(functions, merged, tuple(rows), tuple(entries), assemble)
 
@@ -1484,9 +1481,9 @@ def _model_from_parts(request, geometry, layout, combos, parts, /):
 def _grow_basis(model, /):
     """Admissible one-slot extensions of a basis inside its full span.
 
-    Each candidate adds one free slot of one group (spec section 8: the
-    minimal span grows toward the full span); its span strictly contains the
-    current one and keeps the exact admissibility rules (G3-025).
+    Each candidate adds one free slot of one group (the minimal span grows
+    toward the full span); its span strictly contains the current one and
+    keeps the exact admissibility rules.
 
     Parameters
     ----------
@@ -1665,8 +1662,10 @@ def _end_asymptotics(
 
     Raises
     ------
+    ValueError
+        If ``target`` is ``None`` (a face) and no growing term survives.
     RuntimeError
-        If the target leader is missing (internal error).
+        If a given target leader is missing (internal error).
     """
     d = len(exact[0]) if exact else 0
     by_order = {}
@@ -1700,13 +1699,13 @@ def _end_asymptotics(
         if order[0] == 2:
             shape, log_factor, unit = (
                 "exponential",
-                _exp_log_factor(functions[funcs[0]], geometry),
+                _exp_log_factor(functions[funcs[0]]),
                 1.0,
             )
         elif order == _LOG_ORDER:
             shape, log_factor, unit = "log", 0.0, 1.0
         else:
-            # Internal monomials/soft powers are in z = (x - c)/h units.
+            # Monomials and soft powers are in z = (x - c) / h units.
             shape, log_factor, unit = "power", 0.0, geometry.scale ** (-order[1])
         row_float = np.array([float(v) * unit for v in entry["row"]], dtype=np.float64)
         terms.append(
@@ -1714,13 +1713,16 @@ def _end_asymptotics(
                 order, shape, tuple(entry["row"]), row_float, log_factor, funcs
             )
         )
-    if target is None and terms:
+    if target is None:
+        if not terms:
+            # A face whose forced zeros remove every growing term at this end.
+            raise ValueError(f"the leader face has no outward growth at the {s} end")
         target = terms[0].order
     if not terms or terms[0].order != target:
         raise RuntimeError(f"internal error: target leader missing at the {s} end")
     requested = request.lower_tail if s == _LOWER else request.upper_tail
     curvature = (
-        _tail_curvature(s, functions, used, exact, request, geometry, available)
+        _tail_curvature(s, functions, used, exact, request, available)
         if target == _LINEAR
         else ()
     )
@@ -1876,16 +1878,7 @@ def _restrict_to(model, vectors, face, /):
     )
 
 
-def _build_basis(
-    spec,
-    points=None,
-    weights=None,
-    policy=None,
-    coordinate=None,
-    /,
-    *,
-    adaptive_geometry=True,
-):
+def _build_basis(spec, points=None, weights=None, coordinate=None, /):
     """Canonicalize a public spec, fix the coordinate and geometry, compile.
 
     Parameters
@@ -1894,17 +1887,12 @@ def _build_basis(
         Public basis configuration.
     points : numpy.ndarray or None
         Canonical representative data locations in user units, shape ``(R,)``
-        (point samples or interval midpoints).
+        (point samples or interval midpoints).  Unused on a bounded support.
     weights : numpy.ndarray or None
         Nonnegative weights or mixture responsibilities, shape ``(R,)``.
-    policy : _GeometryPolicy or None
-        Automatic-geometry constants.
     coordinate : _FitCoordinate or None
-        Previously fixed non-reflected coordinate (continuation, probes or
+        Previously fixed canonical coordinate (continuation, probes or
         interval-built coordinates); ``None`` builds one from ``points``.
-    adaptive_geometry : bool
-        Allow skew-aware defaults for full-line unweighted point data. Mixture
-        responsibility fits disable this even for uniform responsibilities.
 
     Returns
     -------
@@ -1914,26 +1902,19 @@ def _build_basis(
     Raises
     ------
     ValueError
-        If neither a coordinate nor data are supplied.
+        If no coordinate is supplied and the data do not identify one.
     """
     request = _canonicalize_basis_spec(spec)
     if coordinate is None:
-        if points is None or np.asarray(points).size == 0:
+        support = (request.lower, request.upper)
+        bounded = math.isfinite(request.lower) and math.isfinite(request.upper)
+        if not bounded and (points is None or np.asarray(points).size == 0):
             raise ValueError(
-                "a fitting coordinate requires data or an explicit coordinate"
+                "a canonical coordinate requires data or an explicit coordinate"
             )
         coordinate = _build_fit_coordinate(
-            (request.lower, request.upper),
-            np.asarray(points, dtype=np.float64),
+            support,
+            None if points is None else np.asarray(points, dtype=np.float64),
             weights,
-            None,
         )
-    geometry = _resolve_basis_geometry(
-        request,
-        coordinate,
-        points,
-        weights,
-        policy,
-        adaptive_geometry=adaptive_geometry,
-    )
-    return _compile_basis(request, geometry)
+    return _compile_basis(request, _resolve_basis_geometry(request, coordinate))

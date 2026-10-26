@@ -3,7 +3,8 @@
 Three independent questions, deliberately answered separately:
 
 * **Did the likelihood optimization converge?** — :attr:`fit_diagnostics`,
-  covering every component's natural-conic certificate plus the EM session
+  covering every component's optimizer record and shape verdict plus the EM
+  session
   whenever that in-process diagnostic record is available.
 * **Why was this component count chosen?** — :attr:`selection_diagnostics`.
 * **Was the CDF/PPF that queries actually use resolved?** —
@@ -42,7 +43,13 @@ class _DiagnosticsMixin:
             ``converged`` summarizes all component optimizers and, when
             available, the final EM run. ``components`` is a tuple of
             per-component geometry and solver records; these are not
-            independent optimality certificates for a coupled mixture.
+            independent optimality certificates for a coupled mixture.  Each
+            record's ``shape`` is the numerical curvature verdict:
+            ``"verified"`` (``q'' >= 0`` within the threshold ``shape_tau``
+            on the scaled curvature), ``"violated"`` or ``"unverified"``
+            (the search did not resolve; ``shape_tau`` is then ``nan`` when
+            no search ran).  ``face_dimension`` counts the component's free
+            private coefficients.
             ``shared_boundary`` reports physical lower/upper amplitudes,
             allowed and active sides, marginal standard errors, policy
             p-values, and weakly identified sides once for the whole model.
@@ -102,10 +109,12 @@ class _DiagnosticsMixin:
                     ),
                 }
             )
-            # G3 (G3-046): the fit's numerical shape verdict and the
-            # component's private face dimension; never a proof.
+            # The fit's numerical shape verdict (``verified`` within the
+            # curvature threshold ``shape_tau``, ``violated`` or
+            # ``unverified``) and the component's private face dimension.
             component_records[-1].update(
                 shape=str(state["basis_shape"]) if historical else None,
+                shape_tau=float(state["basis_shape_tau"]) if historical else None,
                 face_dimension=int(state["basis_n_face"]) if historical else None,
             )
         historical_fit_available = all(

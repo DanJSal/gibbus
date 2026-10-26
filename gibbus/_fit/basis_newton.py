@@ -1,4 +1,4 @@
-"""Newton fit of a G3 basis over its constraint rows, with faces and cuts.
+"""Newton fit of a basis over its constraint rows, with faces and cuts.
 
 All objectives share a coordinate preparation boundary and one compiled Newton
 lifecycle. Scalar projection and interior-point quadratic kernels supply steps
@@ -10,21 +10,21 @@ canonical coefficients, faces and likelihood accounting at the output boundary.
 **Faces.**  A face fixes linear functionals of ``theta`` at zero: an enabled
 log amplitude, or a collapsed leading growth amplitude.  It is entered only
 when its row is *active*: a positive KKT multiplier (recovered by NNLS over
-the near-active rows, using G1's multiplier method), so a merely small leader at
+the near-active rows), so a merely small leader at
 an interior optimum is kept.  On a leader face the next surviving growth
 term of each end becomes its growth row; an end left with no outward growth,
 or two ends demanding opposite signs of the same term, adds an equality.  An
 active leader whose face has no proper member means the likelihood supremum
-lies on the improper boundary: the fit raises (G3-032, M-O12).  A face is
-left again when the point is not a KKT point of a larger face (zero log
-amplitudes as G1; collapsed leaders from a strictly interior convex start,
-G3-042), which matters for warm starts that inherit a smaller fit's face.
+lies on the improper boundary: the fit raises.  A face is left again when
+the point is not a KKT point of a larger face (zero log amplitudes by the
+KKT gain; collapsed leaders from a strictly interior convex start), which
+matters for warm starts that inherit a smaller fit's face.
 
 **Trial failures.**  An improper trial is a routine line-search rejection.
 A trial the normalizer cannot resolve is recorded as a non-routine
 ``_QuadratureFailure`` (fatal under ``GIBBUS_DEBUG``) and the step
 backtracks; at the start, an accepted iterate or the final state it
-propagates (G3-032).
+propagates.
 """
 
 import itertools
@@ -36,7 +36,12 @@ from types import SimpleNamespace
 import numpy as np
 from scipy.optimize import nnls
 
-from .._defaults import DEBUG, _reraise_if_debug
+from .._defaults import (
+    CURVATURE_SEARCH_OPTIONS,
+    DEBUG,
+    NUMERIC_FAILURES,
+    _reraise_if_debug,
+)
 from .._model.basis_eval import _evaluate_basis
 from .._model.basis_normalizer import (
     _ImproperPotential,
@@ -58,7 +63,7 @@ from .basis_objective import _ObjectiveEvaluation
 from .budget import _check_fit_time
 from .conic_newton import (
     _CONVERGED,
-    _UNCERTIFIED,
+    _UNVERIFIED,
     _apply_global_objective_certificate,
     _NewtonOptions,
     _NewtonRun,
@@ -66,7 +71,6 @@ from .conic_newton import (
 )
 from .curvature_search import (
     _CurvatureContext,
-    _CurvatureOptions,
     _separate_curvature,
 )
 
@@ -103,7 +107,7 @@ class _Face:
         the involved block goes through the SVD.  A full SVD leaves
         rounding-level entries (~1e-16) in every column, which become
         spurious nonzeros of the face rows and wreck the row-flattening
-        column scales (a scale of 2.7e10 from one 1.6e-16 entry, G3-035).
+        column scales (a scale of 2.7e10 from one 1.6e-16 entry).
 
         Parameters
         ----------
@@ -127,9 +131,9 @@ class _Face:
 class _Blocks:
     """Coefficient blocks: ``theta_k = theta[index[k]]`` in block ``k``'s basis.
 
-    A single fit is one block, the identity.  A mixture (Stage 5 Phase C,
-    G3-045) has one block per component, each in its own span of one
-    geometry (one coordinate, gates and centres); a shared column is one
+    A single fit is one block, the identity.  A mixture has one block per
+    component, each in its own span of one
+    geometry (one coordinate, gates and centers); a shared column is one
     joint coordinate in every block, and coordinates in no block (mixture
     logits) are unconstrained.  Constraint rows, faces, cuts and
     curvature searches are per block, embedded in the joint coordinates.
@@ -236,8 +240,8 @@ class _Blocks:
 class _JointSeparation:
     """Curvature searches of every block (``_CurvatureSearchResult`` each).
 
-    ``status`` is ``nonnegative`` when every block's is, ``violated`` when
-    one block's is, else ``inconclusive``.
+    ``status`` is ``verified`` when every block's is, ``violated`` when one
+    block's is, else ``unverified``.
     """
 
     parts: tuple
@@ -246,21 +250,21 @@ class _JointSeparation:
     def status(self):
         """Joint shape verdict."""
         statuses = [p.status for p in self.parts]
-        if all(st == "nonnegative" for st in statuses):
-            return "nonnegative"
+        if all(st == "verified" for st in statuses):
+            return "verified"
         if "violated" in statuses:
             return "violated"
-        return "inconclusive"
+        return "unverified"
 
     @property
     def feasible(self):
-        """Whether ``q'' >= 0`` was established for every block."""
-        return self.status == "nonnegative"
+        """Whether ``q'' >= 0`` was verified for every block."""
+        return self.status == "verified"
 
     @property
-    def domains(self):
-        """Search domain per block."""
-        return tuple(p.domain for p in self.parts)
+    def threshold(self):
+        """The curvature threshold ``tau`` the verdict is relative to."""
+        return max(float(p.threshold) for p in self.parts)
 
 
 class _JointCurvature:
@@ -308,7 +312,7 @@ class _JointCurvature:
         ----------
         theta : numpy.ndarray
             Joint coefficients, shape ``(n,)``.
-        options : _CurvatureOptions
+        options : _CurvatureSearchOptions
             Search settings.
         """
         return _JointSeparation(
@@ -321,15 +325,15 @@ class _JointCurvature:
 
 @dataclass(frozen=True)
 class _BasisNewtonResult:
-    """Outcome of one G3 Newton fit (G1 ``_ConicNewtonResult`` role).
+    """Outcome of one basis Newton fit.
 
     Parameters
     ----------
     status : str
-        G1 ladder: ``converged``, ``converged_approximately``,
-        ``non_descent``, ``line_search_failed``, ``iteration_limit`` or
-        ``uncertified`` (a converged point whose shape the curvature search
-        did not find nonnegative: ``violated`` or ``inconclusive``, G3-035).
+        ``converged``, ``converged_approximately``, ``non_descent``,
+        ``line_search_failed``, ``iteration_limit`` or ``unverified`` (a
+        converged point whose shape the curvature search did not verify
+        within ``tau``: its verdict is ``violated`` or ``unverified``).
     params : numpy.ndarray
         Fitted coefficients.
     objective_value : float
@@ -345,14 +349,14 @@ class _BasisNewtonResult:
     exchanges : int
         Cut exchange rounds.
     final_decrease_bound : float
-        G1 predicted-decrease certificate of the last Newton run.
+        Predicted-decrease certificate of the last Newton run.
     final_separation : _JointSeparation
-        Shape evidence at ``params`` per block (``nonnegative``,
-        ``violated`` or ``inconclusive``; numerical, G3-028).
+        Shape evidence at ``params`` per block (``verified``, ``violated``
+        or ``unverified``).
     global_gap : float
-        NLL minus G1's nonparametric interval bound (``lower_bound``; run
+        NLL minus the nonparametric interval bound (``lower_bound``; run
         only until the certificate is decided, so a large gap is an upper
-        estimate) when the fit is shape-certified, else ``nan``.
+        estimate) when the fit's shape is verified, else ``nan``.
     """
 
     status: str
@@ -376,7 +380,7 @@ class _BasisNewtonResult:
 _TRACE = None
 _TRACE_CAPACITY = 4096
 
-# G1 solver statuses of ``_face_newton_loop``; 6 is the gate's stop.
+# Solver statuses of ``_face_newton_loop``; 6 is the gate's stop.
 _RUN_STATUS = {
     1: "converged",
     2: "converged_approximately",
@@ -388,22 +392,18 @@ _RUN_STATUS = {
 
 
 class _FaceObjective:
-    """Objective restricted to a face, ``theta = N phi`` (G1 callable shape).
+    """Objective restricted to a face, ``theta = N phi``.
 
     Calling it evaluates in Python (starts, restored points, final states);
-    ``run`` makes one Newton run in G1's fused loop over the compiled face
+    ``run`` makes one Newton run in the fused loop over the compiled face
     objective (``_basis_newton_kernels``).  Inside a run every trial point
-    is first checked by the global curvature search (G3-038): the normalizer
-    only ever integrates log-concave potentials, where non-convex trials
-    were 70-94% of the evaluations of slow fits and often exhausted the cell
-    budget (E-G3-016).  A non-convex trial is a routine line-search
+    is first checked by the global curvature search: the normalizer
+    only ever integrates log-concave potentials. A non-convex trial is a
+    routine line-search
     rejection; if it reveals new cuts they are queued, the line search
     continues to a convex trial, and the next trial after that ends the run
     with its accepted iterate (status ``cut_required``), so every exchange
     round keeps one step of progress and re-solves with the new cuts.
-    (Ending the run at the first non-convex trial discarded the step: a
-    bimodal fit made two Newton steps in 30 rounds; backtracking without
-    re-solving jammed on the boundary with 849 rows.)
 
     Parameters
     ----------
@@ -413,7 +413,7 @@ class _FaceObjective:
         Face basis ``N``, shape ``(d, k)``.
     curvature : _CurvatureContext or None
         Curvature search of the face (required by ``run``).
-    options : _CurvatureOptions or None
+    options : _CurvatureSearchOptions or None
         Search settings.
     """
 
@@ -423,7 +423,9 @@ class _FaceObjective:
         self.model = getattr(objective, "model", None)
         self.basis = basis
         self.curvature = curvature
-        self.curvature_options = _CurvatureOptions() if options is None else options
+        self.curvature_options = (
+            CURVATURE_SEARCH_OPTIONS if options is None else options
+        )
         self._calls = 0
         self._compiled = None
 
@@ -490,6 +492,7 @@ class _FaceObjective:
                 (
                     c.tails["lower"].kernel if "lower" in c.tails else None,
                     c.tails["upper"].kernel if "upper" in c.tails else None,
+                    c.search,
                 )
                 for c in joint.contexts
             ]
@@ -502,12 +505,10 @@ class _FaceObjective:
                 kind,
                 data,
                 trace=0 if _TRACE is None else _TRACE_CAPACITY,
-                series_models=blocks.models,
-                curvature_contexts=joint.contexts,
             )
         return self._compiled
 
-    def run(self, representation, phi, blocks, evaluation, options, known, domain):
+    def run(self, representation, phi, blocks, evaluation, options, known):
         """One gated Newton run in the fused compiled loop.
 
         Parameters
@@ -521,11 +522,9 @@ class _FaceObjective:
         evaluation : _ObjectiveEvaluation
             Face evaluation at ``phi``.
         options : _NewtonOptions
-            G1 Newton policy.
+            Newton policy.
         known : _ConstraintRows
             Retained rows (a trial's cuts are queued only if one is new).
-        domain : tuple of tuple
-            Search domain of the round per block (valley anchors).
 
         Returns
         -------
@@ -539,7 +538,7 @@ class _FaceObjective:
         compiled = self.compiled()
         coefficient_blocks = self.curvature.blocks
         a_packed, sizes, a_offsets, q_offsets = representation.packed
-        compiled.begin(known.rows, domain, stop_on_failure=DEBUG)
+        compiled.begin(known.rows, stop_on_failure=DEBUG)
         try:
             (
                 code,
@@ -569,9 +568,9 @@ class _FaceObjective:
                 representation.reference_dual,
                 representation.row_degrees,
                 representation.pack_blocks(blocks),
-                # G1's Jacobi scaling of each subproblem's Hessian: the
+                # Jacobi scaling of each subproblem's Hessian: the
                 # row-flattening scales serve feasibility measurement only
-                # (``_polish``), G3-050.
+                # (``_polish``).
                 None,
                 options,
             )
@@ -584,20 +583,17 @@ class _FaceObjective:
         queued = []
         pending = compiled.pending()
         if pending is not None:
-            block, rows, n_points, theta, trial_domain = pending
-            # Replace the fast gate's approximate cuts with the full
-            # rejected-endpoint search. Retaining both sets adds nearly
-            # duplicate contact rows and perturbs subproblem gap floors.
+            block, rows, n_points, theta = pending
+            # The gate stops at the first rejected block: search every block
+            # at the violating trial so all of its cuts are queued together.
             separation = self.curvature.separate(theta, self.curvature_options)
             queued = [
-                (_TrialCuts(k, part.cut_points, part.cut_rows, part.domain), theta)
+                (_TrialCuts(k, part.cut_points, part.cut_rows), theta)
                 for k, part in enumerate(separation.parts)
-                if part.status != "nonnegative" and len(part.cut_rows)
+                if part.status != "verified" and len(part.cut_rows)
             ]
             if not queued and not separation.feasible:
-                queued = [
-                    (_TrialCuts(block, np.zeros(n_points), rows, trial_domain), theta)
-                ]
+                queued = [(_TrialCuts(block, np.zeros(n_points), rows), theta)]
         final = evaluation
         if not np.array_equal(x, phi):
             # The loop's accepted iterate, as the compiled objective evaluated
@@ -627,7 +623,7 @@ class _FaceObjective:
         return run, queued
 
     def _ledger(self, failures, /):
-        """Record the run's unresolved trials (G3-032), fatal under ``GIBBUS_DEBUG``.
+        """Record the run's unresolved trials, fatal under ``GIBBUS_DEBUG``.
 
         Parameters
         ----------
@@ -639,13 +635,13 @@ class _FaceObjective:
             return
         count, status, side, diag, theta, row, block = failures
         if status == ALLOCATION:
-            exc = MemoryError("G3 Newton trial workspace")
+            exc = MemoryError("Newton trial workspace")
         else:
             exc = self.objective.trial_failure(status, side, diag, theta, row, block)
         for _ in range(count):
             # Not routine: the primary integrator could not resolve a trial
             # point; the compiled line search backtracked on it.
-            _reraise_if_debug(exc, "G3 Newton trial evaluation")
+            _reraise_if_debug(exc, "Newton trial evaluation")
 
 
 @dataclass(frozen=True)
@@ -653,13 +649,12 @@ class _TrialCuts:
     """Cuts queued at a violating trial of one block (separation-like record).
 
     ``cut_rows[:cut_points.size]`` are point cuts, the rest tail or bound
-    rows (block coordinates); ``domain`` bounds the curvature search.
+    rows (block coordinates).
     """
 
     block: int
     cut_points: np.ndarray
     cut_rows: np.ndarray
-    domain: tuple
 
 
 def _merge_part(rows, blocks, k, part, /):
@@ -981,8 +976,8 @@ def _multipliers(rows, gradient, theta, /, hessian=None):
 def _polish(rows, phi, scales, /):
     """Restore exact feasibility of rows the solver met only to its tolerance.
 
-    G1 reconstructs each interior-point endpoint from its Gram certificate,
-    so its rows hold by construction.  With more ``1 x 1`` rows than
+    An interior-point endpoint reconstructed from its Gram certificate
+    satisfies its rows by construction.  With more ``1 x 1`` rows than
     coefficients the infeasible-start solver meets them only to its primal
     residual (``~1e-12`` relative), which is a visible ``q'' < 0`` at an
     active cut.  The minimum-norm correction onto the violated rows restores
@@ -990,7 +985,7 @@ def _polish(rows, phi, scales, /):
     correction and budget are measured in the solver's row-flattening column
     scales, where every row is resolvable: a far exponential-tail cut is
     ``e_exp`` plus polynomial entries ~1e-17 of it, so an unscaled test
-    accepts a violation of ``4e-20`` that is ``q'' = -0.03`` there (G3-035).
+    accepts a violation of ``4e-20`` that is ``q'' = -0.03`` there.
 
     Parameters
     ----------
@@ -1075,17 +1070,18 @@ class _Problem:
     exchanges: int = 0
 
 
-def _toward_anchor(rows, phi, anchor, scales, /, *, objective=None):
+def _toward_anchor(rows, phi, anchor, scales, /, *, objective=None, tau=None):
     """Restore new rows exactly by moving toward a globally convex anchor.
 
-    A point whose curvature search found ``q'' >= 0`` everywhere satisfies
-    every cut found later (each cut is ``q''(x*) >= 0`` at some point), so
-    the segment from the current point to that anchor reaches feasibility.
+    A point whose curvature was verified (``H >= -tau`` everywhere) satisfies
+    every cut found later up to that threshold (each cut is ``q''(x*) >= 0``
+    at some point), so the segment from the current point to that anchor
+    reaches feasibility, at worst at the anchor's own level.
     The smallest feasible step is an exact ratio test because rows are
     linear; the NLL is convex along the segment, so the restored point is no
-    worse than the anchor.  G1's Fisher-metric projection (G3-034) and a
-    Newton-model or fixed-metric nearest point (G3-035) all moved far along
-    poorly determined directions (NLL 1.8 -> 5.8e3 in one exchange).
+    worse than the anchor.  A Fisher-metric projection, a Newton-model or a
+    fixed-metric nearest point would all move far along poorly determined
+    directions.
 
     Parameters
     ----------
@@ -1099,6 +1095,9 @@ def _toward_anchor(rows, phi, anchor, scales, /, *, objective=None):
         Subproblem column scales (for the final polish).
     objective : callable or None
         When supplied, assess a final rounding repair in the actual objective.
+    tau : float or None
+        Curvature threshold the anchor was verified within (default: the
+        search default).
 
     Returns
     -------
@@ -1108,16 +1107,18 @@ def _toward_anchor(rows, phi, anchor, scales, /, *, objective=None):
     Raises
     ------
     RuntimeError
-        If the anchor violates a row beyond its shape certificate (an
-        internal inconsistency).
+        If the anchor violates a row far beyond its verification threshold
+        (an internal inconsistency).
     """
+    tau = CURVATURE_SEARCH_OPTIONS.tau if tau is None else tau
     slack = rows.slack(phi)
     anchor_slack = rows.slack(anchor)
-    # The anchor's certificate is the shape verdict's (q''_zz >= -1e-12),
-    # so it may sit ~1e-13 inside a cut; each row is restored to the
-    # anchor's own level at worst.  A gross violation is an inconsistency.
-    if np.min(anchor_slack) < -1e-8 * max(1.0, float(np.linalg.norm(anchor))):
-        raise RuntimeError("internal error: a G3 convex anchor violates a row")
+    # The anchor is verified within tau (H = q'' / ||pieces|| >= -tau), so a
+    # unit cut row may hold it at -tau ||pieces|| / ||row||, of order
+    # tau ||anchor||; each row is restored to the anchor's own level at
+    # worst.  A violation far beyond that is an inconsistency.
+    if np.min(anchor_slack) < -1e3 * tau * max(1.0, float(np.linalg.norm(anchor))):
+        raise RuntimeError("internal error: a convex anchor violates a row")
     target = np.minimum(anchor_slack, 0.0)
     bad = slack < target
     if not np.any(bad):
@@ -1133,6 +1134,54 @@ def _toward_anchor(rows, phi, anchor, scales, /, *, objective=None):
             evaluation = objective(out)
             out, _, _ = _checked_row_polish(objective, rows, out, evaluation, scales)
     return out
+
+
+def _retire_inactive_cuts(rows, ages, theta, options, /):
+    """Retire point cuts after consecutive slack exchange iterates.
+
+    Structural rows, tail rows, and face-scoped records are retained. The
+    global curvature gate can regenerate retired point cuts before any
+    nonconvex trial reaches the normalizer. Activity uses a relative
+    cancellation margin in each row, with an absolute floor for small
+    coefficients; it does not change the shape or convergence tolerance.
+
+    Parameters
+    ----------
+    rows : _ConstraintRows
+        Global unit rows, with new rows appended after the tracked prefix.
+    ages : numpy.ndarray
+        Consecutive inactive exchange counts for that prefix, shape ``(m,)``.
+    theta : numpy.ndarray
+        Current full-coordinate coefficients, shape ``(d,)``.
+    options : _NewtonOptions
+        Cut retention and activity policy; zero retention disables retirement.
+
+    Returns
+    -------
+    retained : _ConstraintRows
+        Rows still enforced by the next Newton relaxation.
+    ages : numpy.ndarray
+        Updated counts in retained-row order.
+    """
+    if not options.cut_retention_exchanges:
+        return rows, ages
+    ages = np.pad(ages, (0, rows.size - ages.size))
+    slack = rows.slack(theta)
+    magnitude = np.abs(rows.rows) @ np.abs(theta)
+    inactive = (np.array(rows.kinds) == "cut") & (
+        slack > options.cut_activity_margin * np.maximum(1.0, magnitude)
+    )
+    ages = np.where(inactive, ages + 1, 0)
+    keep = ages <= options.cut_retention_exchanges
+    if np.all(keep):
+        return rows, ages
+    return (
+        _ConstraintRows(
+            rows.rows[keep],
+            tuple(kind for kind, kept in zip(rows.kinds, keep, strict=True) if kept),
+        ),
+        ages[keep],
+    )
 
 
 def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=False):
@@ -1182,13 +1231,12 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
         and np.min(slack) >= -floor
         and np.any(slack[growth] <= 0.0)
         and curvature.separate(basis @ phi, problem.curvature_options).status
-        == "nonnegative"
+        == "verified"
     ):
         # A lifted smaller fit (feasible and globally convex, its new leader
-        # zero): moved into the interior along the face's certified convex
-        # direction, as a released leader (G3-042), giving up at most
-        # ``options.lift_nll_slack``, so it stays near the smaller answer
-        # (G3-047).
+        # zero): moved into the interior along the face's verified convex
+        # direction, as a released leader, giving up at most
+        # ``options.lift_nll_slack``, so it stays near the smaller answer.
         w = _face_direction(problem, face, basis, curvature)
         t = _RELEASE_START * max(1.0, float(np.linalg.norm(phi))) / np.linalg.norm(w)
         base_nll = float(face_obj(phi).nll)
@@ -1212,12 +1260,19 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
         # projected onto a leader face: 1e-11 against a floor of 1e-14): the
         # cold start sat 1.5-3 nats above it, and from there 30 exchanges of
         # 60 Newton iterations each crawled 0.03-0.06 nats per run without
-        # converging (105 s per candidate, G3-059).  The NLL is convex along
+        # converging (105 s per candidate).  The NLL is convex along
         # the segment to the anchor, so the restored start stays near phi.
         anchor = _face_anchor(problem, face, basis, face_obj, curvature)
         start_rows = _active_rows(problem, face, basis)
         scales = _column_scales(start_rows, face_obj(phi).hessian)
-        phi = _toward_anchor(start_rows, phi, anchor, scales, objective=face_obj)
+        phi = _toward_anchor(
+            start_rows,
+            phi,
+            anchor,
+            scales,
+            objective=face_obj,
+            tau=problem.curvature_options.tau,
+        )
     elif start_rows.size and (np.min(slack) < -floor or np.any(slack[growth] <= 0.0)):
         # A start outside the face's rows or without strict outward growth
         # (a cold start projected onto a leader face can lose its growth,
@@ -1228,11 +1283,12 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
     separation = None
     queued = []
     repair_pending = False
+    cut_ages = np.zeros(problem.rows.size, dtype=np.int64)
     for exchange in range(problem.max_exchanges + 1):
         _check_fit_time("curvature exchange")
         theta = face_obj.full(phi)
         separation = curvature.separate(theta, problem.curvature_options)
-        if separation.status == "nonnegative":
+        if separation.status == "verified":
             anchor = phi.copy()
         before = (
             problem.rows.size + len(problem.scoped_tails) + len(problem.scoped_points)
@@ -1254,18 +1310,18 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
             # No new inequality can improve the relaxation. Retain the
             # certified classification at its unchanged numerical floor.
             if (
-                separation.status == "nonnegative"
+                separation.status == "verified"
                 and bound <= problem.options.certified_tolerance
             ):
                 status = "converged"
             break
         # A run stopped for a cut at a feasible point whose model bound over
         # the relaxation is already certified: the kernel's rule for a run
-        # that cannot step (G1).  Cutting planes approach a degenerate
+        # that cannot step.  Cutting planes approach a degenerate
         # contact at a linear rate (a log-concave fit of multimodal data:
         # thirty exchanges at a bound below 1e-10), so the bound, not the
         # exchange, ends the fit.
-        feasible = exchange > 0 and separation.status == "nonnegative"
+        feasible = exchange > 0 and separation.status == "verified"
         if feasible and status not in _CONVERGED and bound <= problem.options.tolerance:
             status = "converged"
             break
@@ -1280,15 +1336,18 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
                 status = "iteration_limit"
             break
         problem.exchanges += 1
+        problem.rows, cut_ages = _retire_inactive_cuts(
+            problem.rows, cut_ages, theta, problem.options
+        )
         rows = _active_rows(problem, face, basis)
         if rows.size == 0:
             # No structural row and no cut yet (a bounded support without
             # logs, started at q'' = 0): any curvature cut is a valid row
-            # (q'' >= 0 everywhere, G3-026); take the one at the centre.
-            problem.rows = problem.rows.merged(_centre_cut(blocks), "cut")
+            # (q'' >= 0 everywhere); take the one at the center.
+            problem.rows = problem.rows.merged(_center_cut(blocks), "cut")
             rows = _active_rows(problem, face, basis)
         if rows.size == 0:
-            raise RuntimeError("a G3 face has no constraint rows")
+            raise RuntimeError("a face has no constraint rows")
         # Newton constraints are exactly the coefficient-linear rows for
         # q''(x) >= 0 at the known cut locations, plus structural growth/log
         # inequalities.  Strict positivity is required in the interior-point
@@ -1299,13 +1358,20 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
         floor = 8.0 * np.finfo(np.float64).eps * max(1.0, float(np.linalg.norm(phi)))
         if np.min(slack) < -floor:
             if anchor is None:
-                # The face's own convex cold start (certified, ray-optimal).
+                # The face's own convex cold start (verified, ray-optimal).
                 anchor = _face_anchor(problem, face, basis, face_obj, curvature)
                 rows = _active_rows(problem, face, basis)
                 representation = _linear_representation(rows)
                 scales = _column_scales(rows, evaluation.hessian)
                 slack = rows.slack(phi)
-            phi = _toward_anchor(rows, phi, anchor, scales, objective=face_obj)
+            phi = _toward_anchor(
+                rows,
+                phi,
+                anchor,
+                scales,
+                objective=face_obj,
+                tau=problem.curvature_options.tau,
+            )
             evaluation = face_obj(phi)
             slack = rows.slack(phi)
         # All Gram blocks are scalar slacks.  A boundary or slightly
@@ -1323,7 +1389,6 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
             evaluation,
             problem.options,
             problem.rows,
-            separation.domains,
         )
         problem.newton_iterations += run.iterations
         problem.subproblem_iterations += run.subproblem_iterations
@@ -1367,216 +1432,19 @@ def _solve_face(problem, face, theta, /, *, interior_lift=False, restore_start=F
     if full is None:
         full = objective(face_obj.full(phi))
     theta = face_obj.full(phi)
-    if status in _CONVERGED and getattr(objective, "coefficient_convex", False):
-        theta, full, bound, separation = _polish_point_stationarity(
-            problem,
-            face,
-            basis,
-            objective,
-            curvature,
-            status,
-            theta,
-            full,
-            bound,
-            separation,
-        )
     return status, theta, full, bound, separation
 
 
-def _stationarity_step(problem, basis, evaluation, theta, rows, separation):
-    """Newton correction on resolved moving curvature contacts.
-
-    Eliminating a stationary contact location adds the multiplier times the
-    third-derivative outer product divided by the fourth derivative to the
-    likelihood Hessian. Degenerate
-    contacts are left to the ordinary cut exchange. Endpoint contacts and
-    coefficient bounds have fixed rows and add no location curvature.
-    """
-    gradient = basis.T @ evaluation.gradient
-    hessian = basis.T @ evaluation.hessian @ basis
-    kept = [i for i, kind in enumerate(rows.kinds) if kind != "cut"]
-    contact_rows = list(rows.rows[kept])
-    derivatives = [None] * len(kept)
-    for k, part in enumerate(separation.parts):
-        model = problem.blocks.models[k]
-        for minimum in part.minima:
-            if minimum.kind not in ("interior", "endpoint"):
-                continue
-            values = _evaluate_basis(model, [minimum.x], max_order=4)
-            if not np.all(np.isfinite(values.d2phi[0])):
-                continue
-            row = problem.blocks.embed(k, values.d2phi[0]) @ basis
-            norm = np.linalg.norm(row)
-            if not math.isfinite(norm) or norm <= 0.0:
-                continue
-            contact_rows.append(row / norm)
-            derivative = None
-            if minimum.kind == "interior":
-                third = problem.blocks.embed(k, values.d3phi[0]) @ basis / norm
-                fourth = float(values.d4phi[0] @ problem.blocks.part(k, theta)) / norm
-                derivative = third, fourth
-            derivatives.append(derivative)
-    contacts = _ConstraintRows(
-        np.asarray(contact_rows).reshape(-1, basis.shape[1]),
-        ("cut",) * len(contact_rows),
-    )
-    multipliers = _multipliers(contacts, gradient, basis.T @ theta, hessian=hessian)
-    active = np.flatnonzero(multipliers > 0.0)
-    for j in active:
-        if derivatives[j] is not None:
-            third, fourth = derivatives[j]
-            if not math.isfinite(fourth) or fourth <= 0.0:
-                raise np.linalg.LinAlgError("unresolved moving curvature contact")
-            hessian = hessian + multipliers[j] / fourth * np.outer(third, third)
-    diagonal = np.diag(hessian)
-    if not np.all(np.isfinite(diagonal)) or np.any(diagonal <= 0.0):
-        raise np.linalg.LinAlgError("unresolved stationarity metric")
-    scales = 1.0 / np.sqrt(diagonal)
-    metric = scales[:, None] * hessian * scales[None, :]
-    if np.linalg.cond(metric) > 1.0 / np.sqrt(np.finfo(float).eps):
-        raise np.linalg.LinAlgError("unresolved stationarity metric")
-    if active.size:
-        a = contacts.rows[active] * scales
-        system = np.block([[metric, -a.T], [a, np.zeros((len(active), len(active)))]])
-        rhs = np.r_[-gradient * scales, -contacts.rows[active] @ (basis.T @ theta)]
-        solution, _, rank, _ = np.linalg.lstsq(system, rhs, rcond=None)
-        if rank < system.shape[0]:
-            raise np.linalg.LinAlgError("unresolved active contact span")
-        step = scales * solution[: len(gradient)]
-    else:
-        factor = np.linalg.cholesky(metric)
-        step = scales * np.linalg.solve(
-            factor.T, np.linalg.solve(factor, -gradient * scales)
-        )
-    return step, scales
-
-
-def _polish_point_stationarity(
-    problem,
-    face,
-    basis,
-    objective,
-    curvature,
-    status,
-    theta,
-    evaluation,
-    bound,
-    separation,
-):
-    """Refine convex coefficient stationarity at interior or resolved contacts.
-
-    Corrections retain row feasibility, full shape acceptance and likelihood
-    accounting. Unresolved metrics/contacts leave the incumbent intact.
-    """
-    rows = _active_rows(problem, face, basis)
-    target = (
-        problem.options.certified_tolerance
-        if status == "converged"
-        else problem.options.accuracy_floor
-    )
-    for _ in range(3):
-        _check_fit_time("Newton polish")
-        try:
-            step, scales = _stationarity_step(
-                problem, basis, evaluation, theta, rows, separation
-            )
-        except (np.linalg.LinAlgError, RuntimeError, ValueError):
-            break
-        gradient = basis.T @ evaluation.gradient
-        hessian = basis.T @ evaluation.hessian @ basis
-        model_decrease = -float(gradient @ step + 0.5 * step @ hessian @ step)
-        # Polishing resolves final numerical stationarity. Larger improvements
-        # belong to the main Newton/exchange lifecycle and its warm-start policy.
-        if (
-            not math.isfinite(model_decrease)
-            or model_decrease > problem.options.tolerance
-        ):
-            break
-        phi = basis.T @ theta + step
-        if not np.all(np.isfinite(phi)):
-            break
-        phi = _polish(rows, phi, scales)
-        trial = basis @ phi
-        candidate_separation = curvature.separate(trial, problem.curvature_options)
-        # A moving contact can miss curvature feasibility at second order.
-        # Restore along a strict row-interior direction, retaining the existing
-        # row-polish displacement budget and checking the whole shape again.
-        for _repair in range(3):
-            if candidate_separation.status == "nonnegative":
-                break
-            if candidate_separation.status != "violated":
-                break
-            for k, part in enumerate(candidate_separation.parts):
-                if len(part.cut_rows):
-                    rows = rows.merged(
-                        problem.blocks.embed(k, part.cut_rows) @ basis, "cut"
-                    )
-            try:
-                from .linear_qp import _strict_direction
-
-                a = rows.rows * scales
-                a /= np.linalg.norm(a, axis=1)[:, None]
-                direction = _strict_direction(a)
-                margins = a @ direction
-                if np.min(margins) <= 0.0:
-                    break
-                current = phi / scales
-                floor = 32.0 * np.finfo(float).eps * max(1.0, np.linalg.norm(current))
-                shift = max(0.0, float(np.max((floor - a @ current) / margins)))
-                correction = shift * direction
-                if np.linalg.norm(correction) > 1e-8 * max(
-                    1.0, np.linalg.norm(current)
-                ):
-                    break
-                phi = phi + scales * correction
-            except (np.linalg.LinAlgError, RuntimeError, ValueError):
-                break
-            trial = basis @ phi
-            candidate_separation = curvature.separate(trial, problem.curvature_options)
-        if candidate_separation.status != "nonnegative" or np.any(
-            rows.slack(phi) < 0.0
-        ):
-            break
-        problem.evaluations += 1
-        try:
-            candidate = objective(trial)
-        except (_QuadratureFailure, ValueError, OverflowError) as exc:
-            _reraise_if_debug(exc, "point stationarity polish", routine=True)
-            break
-        if not math.isfinite(candidate.nll) or not np.all(
-            np.isfinite(candidate.gradient)
-        ):
-            break
-        roundoff = 8.0 * np.finfo(float).eps * max(1.0, abs(evaluation.nll))
-        if candidate.nll > evaluation.nll + roundoff:
-            break
-        try:
-            next_step, next_scales = _stationarity_step(
-                problem, basis, candidate, trial, rows, candidate_separation
-            )
-        except (np.linalg.LinAlgError, RuntimeError, ValueError):
-            break
-        if np.linalg.norm(next_step / next_scales) >= np.linalg.norm(step / scales):
-            break
-        candidate_bound = bound + max(0.0, candidate.nll - evaluation.nll) + roundoff
-        if candidate_bound > target:
-            break
-        theta, evaluation = trial, candidate
-        bound, separation = candidate_bound, candidate_separation
-        problem.newton_iterations += 1
-    return theta, evaluation, bound, separation
-
-
 class _NoConvexFaceStart(RuntimeError):
-    """A candidate face's cut-exchange could not certify a convex start."""
+    """A candidate face's cut-exchange could not verify a convex start."""
 
 
 def _face_direction(problem, face, basis, curvature, /):
     """Strictly interior, globally convex direction of a face (face coordinates).
 
     The max-margin interior direction of the face rows, cut-exchanged until
-    the curvature search certifies it (``q''`` is homogeneous, so the whole
-    ray is then convex).  The retained rows grow with the cuts found.
+    the curvature search verifies it (``q''`` is homogeneous, so the whole
+    ray is then convex).  The search adds rows for newly discovered cuts.
 
     Parameters
     ----------
@@ -1592,14 +1460,14 @@ def _face_direction(problem, face, basis, curvature, /):
     Raises
     ------
     RuntimeError
-        If the direction cannot be certified nonnegative within the exchange
+        If the direction cannot be verified nonnegative within the exchange
         budget.
     """
     rows = _active_rows(problem, face, basis)
     direction = _interior_direction(rows)
     for _ in range(problem.max_exchanges):
         separation = curvature.separate(basis @ direction, problem.curvature_options)
-        if separation.status == "nonnegative":
+        if separation.status == "verified":
             return direction
         before = (
             problem.rows.size + len(problem.scoped_tails) + len(problem.scoped_points)
@@ -1612,7 +1480,7 @@ def _face_direction(problem, face, basis, curvature, /):
             break
         rows = _active_rows(problem, face, basis)
         direction = _interior_direction(rows)
-    raise _NoConvexFaceStart("no certified convex point on a G3 face")
+    raise _NoConvexFaceStart("no verified convex point on the face")
 
 
 def _face_anchor(problem, face, basis, face_obj, curvature, /):
@@ -1637,7 +1505,7 @@ def _face_anchor(problem, face, basis, face_obj, curvature, /):
     Raises
     ------
     RuntimeError
-        If the direction cannot be certified nonnegative within the exchange
+        If the direction cannot be verified nonnegative within the exchange
         budget.
     """
     direction = _face_direction(problem, face, basis, curvature)
@@ -1650,10 +1518,10 @@ def _candidate_face(problem, face, theta, /):
 
     A face to enter (a collapsed leader or a zero log amplitude) is an
     alternative to a valid incumbent: when the normalizer cannot resolve its
-    start the candidate is not adopted, and the fit keeps the incumbent
-    (G3-049).  Leaving a face keeps G1's rule: an unresolvable release start
-    fails the solve (a mixture M-step then stalls, ending growth), since
-    continuing past it ran release solves of 30 s that never converged.
+    start the candidate is not adopted, and the fit keeps the incumbent.
+    Leaving a face is different: an unresolvable release start fails the
+    solve (a mixture M-step then stalls, ending growth), since continuing
+    past it ran release solves of 30 s that never converged.
 
     Parameters
     ----------
@@ -1669,63 +1537,18 @@ def _candidate_face(problem, face, theta, /):
     except _QuadratureFailure as exc:
         # Routine: a candidate start on the face's boundary can leave
         # exponentially cancelling columns the normalizer cannot evaluate.
-        _reraise_if_debug(exc, "G3 candidate face start", routine=True)
+        _reraise_if_debug(exc, "candidate face start", routine=True)
         return None
     except _NoConvexFaceStart as exc:
-        # An optional active-set face without a certified convex start cannot
+        # An optional active-set face without a verified convex start cannot
         # displace the current run.  Preserve that run and let the caller's
         # normal convergence check decide whether it is acceptable.
-        _reraise_if_debug(exc, "G3 candidate face start", routine=True)
+        _reraise_if_debug(exc, "candidate face start", routine=True)
         return None
-
-
-def _collapsed_leader_start(problem, face, run, /):
-    """Second start on the face of leaders that collapsed without converging.
-
-    When the likelihood supremum lies on a leader face, the interior run
-    approaches it under the fraction-to-boundary cap on the growth rows and
-    stalls (an ``Exponential(2)`` lower tail on Laplace data: the leader fell
-    to 1.6e-14 in 60 Newton iterations, ``iteration_limit``), so the KKT face
-    test, which needs a converged run, never runs.  Each growth row whose
-    value has fallen to the face trigger is tried as a face (singly, then
-    all together); a face is adopted only if its solve converges (G3-047's
-    rule for second starts), and the KKT loop may still release it.
-
-    Parameters
-    ----------
-    problem : _Problem
-        Fit bookkeeping.
-    face : _Face
-        Face of ``run``.
-    run : tuple
-        Unconverged ``_solve_face`` result.
-
-    Returns
-    -------
-    tuple
-        ``(run, face)``: the first converged leader-face run, else the inputs.
-    """
-    blocks = problem.blocks
-    theta = run[1]
-    trigger = problem.options.face_trigger * max(1.0, float(np.max(np.abs(theta))))
-    collapsed = [g for g in face.growth if abs(float(g @ theta)) <= trigger]
-    trials = [[g] for g in collapsed]
-    if len(collapsed) > 1:
-        trials.append(collapsed)
-    for rows in trials:
-        grown = _face_growth(blocks, np.vstack([face.equalities, *rows]))
-        if grown is None:
-            continue
-        eq, growth = grown
-        candidate_face = _Face(eq, face.zero_logs, _suppressed_ends(blocks, eq), growth)
-        candidate = _candidate_face(problem, candidate_face, theta)
-        if candidate is not None and candidate[0] in _CONVERGED:
-            return candidate, candidate_face
-    return run, face
 
 
 def _leader_release(problem, face, theta, evaluation, sides, gscale, /):
-    """A released-leader face and its start, or ``None`` (G3-042).
+    """A released-leader face and its start, or ``None``.
 
     Releasing the collapsed leaders of ``sides`` is the face without those
     ends' suppression (``_face_from``; its forced equalities are recomputed,
@@ -1736,7 +1559,7 @@ def _leader_release(problem, face, theta, evaluation, sides, gscale, /):
     feasible descent direction (``g . (-r) = -|r|^2``); a gain along the
     leader functional alone misses descent into the released face along other
     directions.  The start is ``theta + t N w`` with ``w``
-    the released face's certified convex interior direction: ``theta``
+    the released face's verified convex interior direction: ``theta``
     satisfies every row and ``q''(theta) >= 0`` (a converged shape verdict),
     ``N w`` strictly satisfies every row with ``q''(N w) >= 0``, and rows and
     ``q''`` are linear in the coefficients, so the start is strictly inside,
@@ -1786,18 +1609,18 @@ def _leader_release(problem, face, theta, evaluation, sides, gscale, /):
     return released, theta + t * w
 
 
-def _centre_cut(blocks, /):
-    """Curvature cuts ``Phi''(c) . theta_k >= 0`` at the fitting centre, per block.
+def _center_cut(blocks, /):
+    """Curvature cuts ``Phi''(c) . theta_k >= 0`` at the fitting center, per block.
 
     Parameters
     ----------
     blocks : _Blocks
         Coefficient blocks.
     """
-    centre = np.array([blocks.model.geometry.center])
+    center = np.array([blocks.model.geometry.center])
     return np.array(
         [
-            blocks.embed(k, _evaluate_basis(m, centre, max_order=2).d2phi[0])
+            blocks.embed(k, _evaluate_basis(m, center, max_order=2).d2phi[0])
             for k, m in enumerate(blocks.models)
         ]
     )
@@ -1911,9 +1734,7 @@ def _matching_face(blocks, suppressed, zero_log_labels, /):
 def _convex_start(problem, structural, /):
     """Cold start strictly inside the structural *and* curvature rows.
 
-    G1's cold start is strictly inside its exact cone, so it never needs a
-    projection.  The G3 counterpart runs the cut exchange on the interior
-    direction itself: recompute the strictly interior direction with the cuts
+    The cut exchange runs on the interior direction itself: recompute the strictly interior direction with the cuts
     found so far until the curvature search adds none.  ``q''`` is linear and
     homogeneous in ``theta``, so every point ``a w`` of the ray is then
     convex as well, and the ray minimizer is a feasible start.
@@ -1944,7 +1765,7 @@ def _convex_start(problem, structural, /):
 
 
 def _better(candidate, incumbent, tolerance, /):
-    """G1 face acceptance: converged and no worse than the incumbent.
+    """Face acceptance: converged and no worse than the incumbent.
 
     Parameters
     ----------
@@ -1969,27 +1790,26 @@ def _solve_coordinate_basis(
     start_face=None,
     blocks=None,
     interior_lift=False,
-    leader_restart=False,
+    start_cuts=None,
 ):
     """Fit a basis point or interval objective over ``q'' >= 0`` with exact faces.
 
     Parameters
     ----------
     objective : _BasisPointObjective or _BasisIntervalObjective
-        Objective (G1 callable shape); a ``lower_bound(nll, options)``
-        method supplies G1's global certificate, applied after the local
+        Objective; a ``lower_bound(nll, options)`` method supplies the
+        global certificate, applied after the local
         solve.
     options : _NewtonOptions or None
-        G1 Newton policy (defaults shared with G1).
-    curvature_options : _CurvatureOptions or None
+        Newton policy.
+    curvature_options : _CurvatureSearchOptions or None
         Curvature search settings.
     max_exchanges : int
         Cut exchange rounds per face solve.  With convex trial points a round
         ends after one accepted step whenever a step reveals new cuts; every
-        fit of the Stage 4d grid needs fewer than 30 rounds per face, and G1's
-        Newton budget (60) only slowed the loud failures of the explicit
-        13-column ``full`` expansion (71 -> 787 s) without rescuing one
-        (G3-038(e)).
+        fit of a reference grid needs fewer than 30 rounds per face, and a
+        budget of 60 only slowed the loud failures of the explicit 13-column
+        ``full`` expansion (71 -> 787 s) without rescuing one.
     start : numpy.ndarray or None
         Warm start (a lifted fit of a smaller span: proper and globally
         convex, possibly on active rows); ``None`` builds the convex cold
@@ -2000,22 +1820,19 @@ def _solve_coordinate_basis(
         ``(suppressed, zero_log_labels)`` of the fit ``start`` was lifted
         from (``(block, end)`` pairs and joint labels): the warm start begins on the matching face of this basis (its
         suppressed functionals are exact zeros there).  Both leader faces
-        (G3-042) and zero-log faces are released when the KKT test says so;
+        and zero-log faces are released when the KKT test says so;
         a start without strict growth on that face is replaced by the face's
         own convex cold start.
     interior_lift : bool
         Instead, move such a start (feasible and globally convex) into the
-        face's interior along its certified convex direction: the second
-        start of a lifted fit whose first did not converge (G3-047; the
-        face's cold start lost a degree-7 lognormal fit at NLL 2.44 against
-        the nested 1.45).
+        face's interior along its verified convex direction (the face's cold
+        start lost a degree-7 lognormal fit at NLL 2.44 against the nested
+        1.45).
+    start_cuts : numpy.ndarray or None
+        Curvature cut rows in this objective's coordinates, shape ``(k, d)``,
+        seeded with the structural rows (see :func:`_solve_basis`); slack
+        ones are retired like any other cut.
 
-    leader_restart : bool
-        When the run does not converge, retry the faces of growth rows that
-        collapsed to the face trigger (``_collapsed_leader_start``).  Single
-        fits use it; mixture M-steps do not: an intermediate M-step routinely
-        stops early, and moving it onto a leader face that later M-steps
-        inherit made growth refits 15 times slower (G3-049).
     Returns
     -------
     _BasisNewtonResult
@@ -2040,10 +1857,12 @@ def _solve_coordinate_basis(
         objective,
         blocks,
         _JointCurvature(blocks),
-        curvature_options,
+        CURVATURE_SEARCH_OPTIONS if curvature_options is None else curvature_options,
         options,
         int(max_exchanges),
-        rows=structural,
+        rows=(
+            structural if start_cuts is None else structural.merged(start_cuts, "cut")
+        ),
     )
     if start_face is not None:
         face = _matching_face(blocks, *start_face)
@@ -2076,8 +1895,6 @@ def _solve_coordinate_basis(
         if start_theta.shape != (d,) or not np.all(np.isfinite(start_theta)):
             raise ValueError("start must be finite with one entry per coefficient")
     run = _solve_face(problem, face, start_theta, interior_lift=interior_lift)
-    if leader_restart and run[0] not in _CONVERGED:
-        run, face = _collapsed_leader_start(problem, face, run)
 
     for _ in range(8):
         changed = False
@@ -2137,7 +1954,7 @@ def _solve_coordinate_basis(
             continue
         # Release a collapsed leader when the active-row KKT gain says so: a
         # warm start carries the incumbent's suppressed leaders into a larger
-        # span, where they need not stay zero (G3-042).
+        # span, where they need not stay zero.
         # One end at a time, then both: suppressing one end can force the
         # other (opposite signs of a shared functional), so only releasing
         # both leaves the face.
@@ -2158,7 +1975,7 @@ def _solve_coordinate_basis(
                 break
         if changed:
             continue
-        # Release a zero amplitude when the active-row KKT gain says so (G1).
+        # Release a zero amplitude when the active-row KKT gain says so.
         for col in face.zero_logs:
             rest = tuple(c for c in face.zero_logs if c != col)
             eq = np.array(
@@ -2189,21 +2006,19 @@ def _solve_coordinate_basis(
         if not changed:
             break
     status, theta, evaluation, bound, separation = run
-    if status in _CONVERGED and (
-        separation is None or separation.status != "nonnegative"
-    ):
+    if status in _CONVERGED and (separation is None or separation.status != "verified"):
         # Convergence is claimed only with a conclusive shape verdict.
-        status = _UNCERTIFIED
+        status = _UNVERIFIED
     gap = math.nan
     bound_of = getattr(objective, "lower_bound", None)
     lower = None
     if bound_of is not None and (
-        separation is not None and separation.status == "nonnegative"
+        separation is not None and separation.status == "verified"
     ):
         lower = bound_of(float(evaluation.nll), options)
     if lower is not None:
-        # G1's global certificate after the local solve: an endpoint at the
-        # nonparametric bound is globally optimal (status as G1).
+        # The global certificate after the local solve: an endpoint at the
+        # nonparametric bound is globally optimal.
         local = _NewtonRun(
             status=status,
             params=theta,
@@ -2248,9 +2063,26 @@ def _solve_basis(
     start_face=None,
     blocks=None,
     interior_lift=False,
-    leader_restart=False,
+    start_cuts=None,
 ):
-    """Fit through one controller with validated runtime coordinate candidates."""
+    """Fit through one controller with validated runtime coordinate candidates.
+
+    Parameters
+    ----------
+    objective : _BasisPointObjective, _BasisIntervalObjective or joint objective
+        Objective in canonical coordinates.
+    options, curvature_options, max_exchanges, start, start_face, blocks
+        As for :func:`_solve_coordinate_basis`.
+    interior_lift : bool
+        As for :func:`_solve_coordinate_basis`.
+    start_cuts : numpy.ndarray or None
+        Canonical curvature cut rows ``r . theta >= 0`` of an earlier solve of
+        the same basis, shape ``(k, d)``: a mixture's previous M-step.  Each
+        is ``q''(x*) >= 0`` at some point, valid for every convex potential,
+        so seeding them changes the exchange path and not the feasible set.
+    """
+    # Deferred: ``coordinates`` imports ``basis_newton`` (``_Blocks``,
+    # ``_face_from``, ``_JointCurvature``).
     from .coordinates import _prepare_coordinates
 
     _check_fit_time("component solve")
@@ -2277,18 +2109,26 @@ def _solve_basis(
                 start_face=start_face,
                 blocks=binding.blocks,
                 interior_lift=interior_lift,
-                leader_restart=leader_restart,
+                start_cuts=(
+                    None
+                    if start_cuts is None or not len(start_cuts)
+                    else np.asarray(start_cuts, dtype=np.float64) @ binding.transform
+                ),
             )
             for name in totals:
                 totals[name] += getattr(result, name)
             result = binding.restore(result, curvature_options)
-        except (RuntimeError, ArithmeticError, ValueError):
-            if binding.original is binding.objective or DEBUG:
+        except NUMERIC_FAILURES as exc:
+            if binding.original is binding.objective:
                 raise
+            # Not routine: the runtime coordinates failed numerically or did
+            # not reproduce the canonical likelihood and shape; the same
+            # family is retried in canonical coordinates.
+            _reraise_if_debug(exc, "runtime-coordinate solve")
             continue
         if result.status in _CONVERGED:
             return dataclass_replace(result, **totals)
-        score = (result.status == _UNCERTIFIED, -result.objective_value)
-        if best is None or score > (best.status == _UNCERTIFIED, -best.objective_value):
+        score = (result.status == _UNVERIFIED, -result.objective_value)
+        if best is None or score > (best.status == _UNVERIFIED, -best.objective_value):
             best = result
     return dataclass_replace(best, **totals)

@@ -473,19 +473,11 @@ class SpectralPPF:
             ccoeffs[j, : ic.size] = ic
             cncoeff[j] = ic.size
 
-        kind_map = {
-            "finite": 0,
-            "lower": 1,
-            "upper": 2,
-            "real": 3,
-            "lower_centered": 4,
-            "upper_centered": 5,
-        }
         mp = sp.map
         return SpectralPPFEvaluator(
             self.pmin,
             self.pmax,
-            kind_map[mp.kind],
+            _KIND_CODE[mp.kind],
             float(mp.L),
             float(mp.U),
             float(mp.center),

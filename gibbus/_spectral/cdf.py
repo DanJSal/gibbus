@@ -35,14 +35,8 @@ _RECERTIFY_GAUSS_N = 24
 """Gauss-Legendre nodes per subinterval when the builder re-measures the mass
 of a panel it could not certify."""
 
-_KIND_CODE = {
-    "finite": 0,
-    "lower": 1,
-    "upper": 2,
-    "real": 3,
-    "lower_centered": 4,
-    "upper_centered": 5,
-}
+_KIND_CODE = {"finite": 0, "lower": 1, "upper": 2, "centered": 3}
+"""Durable codes of the compactifying map families (``_maps.pxd``)."""
 
 _TABLES: dict = {}
 
@@ -102,32 +96,91 @@ def density_spec(components, /, *, view):
 
 
 _REMOTE_BOUNDARY_RATIO = 10.0
-"""Distance/std ratio above which a half-line map is centered on the mode.
+"""Distance/std ratio beyond which a finite end is remote from the density.
 
-The endpoint-anchored rational map spends its resolution at the endpoint: a
-body ``k`` standard deviations away lands in a compact interval of width
-``O(1/k^2)``, which a degree-32 panel can straddle with no node inside it.
-That happened for a fitted mixture component at ``k = 29`` (every panel saw
-zero density and the construction failed with zero mass).  Beyond ten
-standard deviations the endpoint region carries no appreciable mass, and the
-centered variant preserves the exact finite endpoint while using real-line
-resolution through the body of the density.
+A map anchored at an end spends its resolution there, and an affine map
+spreads it evenly: a body ``k`` standard deviations from a near end lands
+in a compact interval of width ``O(1/k^2)`` or ``O(1/k)``, which a
+degree-32 panel can straddle with no node inside it.  That happened for a
+fitted mixture component at ``k = 29`` (every panel saw zero density and the
+construction failed with zero mass).  Remote ends carry no appreciable mass,
+so the map is centered on the density and merely clipped at them.
 """
+
+
+def _map_kind(L, U, mode, s0, /):
+    """Map family for a support and a density body at ``mode``.
+
+    An affine map serves a finite support whose ends are both near the
+    body, a map anchored at the single near end serves a body pressed
+    against one end, and otherwise the map is centered on the body (clipped
+    at any finite remote end).
+
+    Parameters
+    ----------
+    L, U : float
+        Support endpoints, possibly infinite.
+    mode : float
+        Density mode inside the support.
+    s0 : float
+        Positive body scale.
+    """
+    reach = _REMOTE_BOUNDARY_RATIO * s0
+    near_lower = bool(np.isfinite(L) and not (mode - L) > reach)
+    near_upper = bool(np.isfinite(U) and not (U - mode) > reach)
+    if near_lower and near_upper:
+        return "finite"
+    if near_lower:
+        return "lower"
+    if near_upper:
+        return "upper"
+    return "centered"
+
+
+def _rational_t(kind, center, scale, x):
+    """Rational coordinate of physical points (``+/- 1`` at infinity).
+
+    Parameters
+    ----------
+    kind : str
+        ``"lower"``, ``"upper"`` or ``"centered"``.
+    center, scale : float
+        Map anchor or center and its positive scale.
+    x : array_like
+        Physical coordinates.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if kind == "lower":
+            y = (x - center) / scale
+            t = (y - 1.0) / (y + 1.0)
+        elif kind == "upper":
+            y = (center - x) / scale
+            t = (1.0 - y) / (1.0 + y)
+        else:
+            y = (x - center) / scale
+            t = y / (1.0 + np.hypot(1.0, y))
+    return np.where(np.isinf(x), np.sign(x), t)
 
 
 @dataclass(frozen=True)
 class _Map:
     """Monotone map between compact and physical support coordinates.
 
+    The Python mirror of ``_maps.pxd``: ``"finite"`` is affine; the rational
+    families ``"lower"``, ``"upper"`` and ``"centered"`` are restricted to
+    the window of their coordinate that the support occupies, so a remote
+    finite end clips the map rather than stretching it.
+
     Parameters
     ----------
     kind : str
-        Finite, half-line, real-line or centered half-line map variant.
+        ``"finite"``, ``"lower"``, ``"upper"`` or ``"centered"``.
     L, U : float
         Physical support bounds, allowing infinite endpoints.
     center, scale : float
-        Map location and positive resolution scale. Centered variants retain
-        the exact finite endpoint while resolving the density's body.
+        Map location (the anchoring end for ``"lower"`` and ``"upper"``) and
+        positive resolution scale.
     """
 
     kind: str
@@ -135,6 +188,18 @@ class _Map:
     U: float
     center: float
     scale: float
+
+    def _window(self):
+        """Window ``(t_lo, t_hi)`` of the rational coordinate."""
+        if self.kind == "finite":
+            return -1.0, 1.0
+        lo = -1.0 if self.kind == "lower" else float(self._t(self.L))
+        hi = 1.0 if self.kind == "upper" else float(self._t(self.U))
+        return lo, hi
+
+    def _t(self, x):
+        """Rational coordinate of physical points."""
+        return _rational_t(self.kind, self.center, self.scale, x)
 
     def x_from_z(self, z):
         """Map compact coordinates to physical ones.
@@ -148,44 +213,28 @@ class _Map:
         -------
         numpy.ndarray
             Physical coordinates.  Exact finite endpoints are preserved
-            rather than recomputed, since ``center +/- scale`` can round
-            just outside the support and create a spurious jump.
+            rather than recomputed, since the map can round just outside
+            the support and create a spurious jump.
         """
         z = np.asarray(z, dtype=np.float64)
         if self.kind == "finite":
             x = self.center + self.scale * z
-            # Preserve exact finite support endpoints; roundoff in center +/-
-            # scale can otherwise place a Chebyshev endpoint just outside the
-            # support and create an artificial jump in the sampled PDF.
+        else:
+            lo, hi = self._window()
+            t = z if (lo, hi) == (-1.0, 1.0) else lo + 0.5 * (z + 1.0) * (hi - lo)
+            c, s = self.center, self.scale
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                if self.kind == "lower":
+                    x = c + s * (1.0 + t) / (1.0 - t)
+                elif self.kind == "upper":
+                    x = c - s * (1.0 - t) / (1.0 + t)
+                else:
+                    x = c + (2.0 * s * t) / (1.0 - t * t)
+        if np.isfinite(self.L):
             x = np.where(z <= -1.0, self.L, x)
+        if np.isfinite(self.U):
             x = np.where(z >= 1.0, self.U, x)
-            return x
-        if self.kind == "lower":
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return self.L + self.scale * (1.0 + z) / (1.0 - z)
-        if self.kind == "upper":
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return self.U - self.scale * (1.0 - z) / (1.0 + z)
-        if self.kind == "real":
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return self.center + (2.0 * self.scale * z) / (1.0 - z * z)
-        if self.kind in ("lower_centered", "upper_centered"):
-            if self.kind == "lower_centered":
-                y_edge = (self.L - self.center) / self.scale
-                t_edge = y_edge / (1.0 + np.hypot(1.0, y_edge))
-                t = t_edge + 0.5 * (z + 1.0) * (1.0 - t_edge)
-            else:
-                y_edge = (self.U - self.center) / self.scale
-                t_edge = y_edge / (1.0 + np.hypot(1.0, y_edge))
-                t = -1.0 + 0.5 * (z + 1.0) * (t_edge + 1.0)
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                x = self.center + (2.0 * self.scale * t) / (1.0 - t * t)
-            if self.kind == "lower_centered":
-                x = np.where(z <= -1.0, self.L, x)
-            else:
-                x = np.where(z >= 1.0, self.U, x)
-            return x
-        raise RuntimeError("unknown map kind")
+        return x
 
     def jac(self, z):
         """Return ``dx/dz`` for the density change of variables.
@@ -203,29 +252,17 @@ class _Map:
         z = np.asarray(z, dtype=np.float64)
         if self.kind == "finite":
             return np.full_like(z, self.scale)
-        if self.kind == "lower":
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return 2.0 * self.scale / (1.0 - z) ** 2
-        if self.kind == "upper":
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return 2.0 * self.scale / (1.0 + z) ** 2
-        if self.kind == "real":
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return 2.0 * self.scale * (1.0 + z * z) / (1.0 - z * z) ** 2
-        if self.kind in ("lower_centered", "upper_centered"):
-            if self.kind == "lower_centered":
-                y_edge = (self.L - self.center) / self.scale
-                t_edge = y_edge / (1.0 + np.hypot(1.0, y_edge))
-                dt_dz = 0.5 * (1.0 - t_edge)
-                t = t_edge + (z + 1.0) * dt_dz
-            else:
-                y_edge = (self.U - self.center) / self.scale
-                t_edge = y_edge / (1.0 + np.hypot(1.0, y_edge))
-                dt_dz = 0.5 * (t_edge + 1.0)
-                t = -1.0 + (z + 1.0) * dt_dz
-            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                return (2.0 * self.scale * (1.0 + t * t) / (1.0 - t * t) ** 2) * dt_dz
-        raise RuntimeError("unknown map kind")
+        lo, hi = self._window()
+        full = (lo, hi) == (-1.0, 1.0)
+        t = z if full else lo + 0.5 * (z + 1.0) * (hi - lo)
+        dt = 1.0 if full else 0.5 * (hi - lo)
+        s = self.scale
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            if self.kind == "lower":
+                return 2.0 * s / (1.0 - t) ** 2 * dt
+            if self.kind == "upper":
+                return 2.0 * s / (1.0 + t) ** 2 * dt
+            return 2.0 * s * (1.0 + t * t) / (1.0 - t * t) ** 2 * dt
 
 
 @dataclass
@@ -405,33 +442,22 @@ class SpectralCDF:
 
         s0 = float(std) if std is not None and np.isfinite(std) and std > 0 else 1.0
         L, U = map(float, self.support)
-        if np.isfinite(L) and np.isfinite(U):
-            center = 0.5 * (L + U)
-            scale = 0.5 * (U - L)
-            self.map = _Map("finite", L, U, center, scale)
+        c = float(mode) if mode is not None and np.isfinite(mode) else 0.0
+        if not L <= c <= U:
+            c = (
+                0.5 * (L + U)
+                if np.isfinite(L) and np.isfinite(U)
+                else min(max(c, L), U)
+            )
+        kind = _map_kind(L, U, c, s0)
+        if kind == "finite":
+            self.map = _Map(kind, L, U, 0.5 * (L + U), 0.5 * (U - L))
         else:
-            c = float(mode) if mode is not None and np.isfinite(mode) else 0.0
-            if np.isfinite(L):
-                remote = (
-                    np.isfinite(c) and c > L and (c - L) > _REMOTE_BOUNDARY_RATIO * s0
-                )
-                kind = "lower_centered" if remote else "lower"
-            elif np.isfinite(U):
-                remote = (
-                    np.isfinite(c) and c < U and (U - c) > _REMOTE_BOUNDARY_RATIO * s0
-                )
-                kind = "upper_centered" if remote else "upper"
-            else:
-                kind = "real"
             if map_scale is None:
-                map_scale = self._default_map_scale(L, U, mode, s0, kind)
+                map_scale = self._default_map_scale(L, U, c, s0, kind)
             s = float(map_scale) if map_scale is not None else float("nan")
-            if kind == "lower":
-                self.map = _Map(kind, L, U, L, s)
-            elif kind == "upper":
-                self.map = _Map(kind, L, U, U, s)
-            else:
-                self.map = _Map(kind, L, U, c, s)
+            anchor = {"lower": L, "upper": U, "centered": c}[kind]
+            self.map = _Map(kind, L, U, anchor, s)
 
         br = [-1.0, 1.0]
         if initial_breaks is not None:
@@ -452,8 +478,8 @@ class SpectralCDF:
         ----------
         L, U : float
             Support endpoints.
-        mode : float or None
-            Density mode.
+        mode : float
+            Map center: the density mode, clipped into the support.
         s0 : float
             Baseline scale.
         kind : str
@@ -554,14 +580,6 @@ class SpectralCDF:
 
     def _build_cython_evaluator(self):
         """Pack the immutable query-time representation for the Cython kernel."""
-        kind_map = {
-            "finite": 0,
-            "lower": 1,
-            "upper": 2,
-            "real": 3,
-            "lower_centered": 4,
-            "upper_centered": 5,
-        }
         m = len(self.panels)
         # D <= 32 implies integrated series length <= 34. Keep the storage
         # generic so construction can still experiment with other degrees.
@@ -581,7 +599,7 @@ class SpectralCDF:
 
         self._packed = (offsets, coeffs, ncoeff)
         return SpectralEvaluator(
-            kind_map[self.map.kind],
+            _KIND_CODE[self.map.kind],
             float(self.map.L),
             float(self.map.U),
             float(self.map.center),

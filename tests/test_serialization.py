@@ -1,8 +1,7 @@
 """Executable contract tests for durable serialization.
 
-Gibbus reads and writes one format (``FORMAT_VERSION``, the G3 basis model);
-every other version is rejected.  The model shapes are freshly fitted, so
-the tests exercise the current schema only.
+The envelope's ``format_version`` is ``FORMAT_VERSION``; any other value is an
+invalid envelope.  The model shapes are freshly fitted.
 """
 
 import ast
@@ -167,7 +166,7 @@ def _serialization_ledger_entries():
     return [f for f in gibbus.suppressed_failures() if "serializ" in f["context"]]
 
 
-def test_v2_envelope_and_model_schema_are_explicit():
+def test_envelope_and_model_schema_are_explicit():
     model = Distribution().fit(
         np.random.default_rng(8101).normal(size=160), poly_degree=4
     )
@@ -180,7 +179,7 @@ def test_v2_envelope_and_model_schema_are_explicit():
         "cache",
     )
     assert str(state["format"]) == FORMAT_NAME
-    assert int(state["format_version"]) == FORMAT_VERSION == 2
+    assert int(state["format_version"]) == FORMAT_VERSION == 1
     assert state.dtype.hasobject is False
     durable = state["model"]
     assert durable.dtype.names == _MODEL_FIELDS
@@ -209,7 +208,7 @@ def test_v2_envelope_and_model_schema_are_explicit():
         assert shape == expected_shape, name
 
 
-def test_v2_ragged_coefficients_use_values_and_offsets():
+def test_ragged_coefficients_use_values_and_offsets():
     rng = np.random.default_rng(8102)
     x = np.concatenate([rng.normal(-2.0, 0.5, 140), rng.normal(2.0, 0.7, 140)])
     fitted = Distribution().fit(
@@ -226,11 +225,11 @@ def test_v2_ragged_coefficients_use_values_and_offsets():
     assert sorted(int(c.data["bulk_degree"]) for c in fitted.components) == [2, 4]
 
 
-def test_unversioned_state_is_rejected():
+def test_a_state_without_the_envelope_fields_is_rejected():
     fitted = Distribution().fit(np.random.default_rng(8103).normal(size=120))
-    with pytest.raises(ValueError, match="unversioned"):
+    with pytest.raises(ValueError, match="invalid Gibbus serialization envelope"):
         Distribution(fitted.components[0].data)
-    with pytest.raises(ValueError, match="unversioned"):
+    with pytest.raises(ValueError, match="invalid Gibbus serialization envelope"):
         Distribution(_drop_top_field(fitted.data, "format_version"))
 
 
@@ -251,20 +250,13 @@ def test_envelope_dtypes_are_pinned():
         Distribution(malformed)
 
 
-def test_future_and_other_versions_are_rejected():
+def test_format_version_must_be_the_format_s_own():
     fitted = Distribution().fit(np.random.default_rng(8104).normal(size=120))
-
-    future = np.array(fitted.data, copy=True)
-    future["format_version"] = FORMAT_VERSION + 1
-    with pytest.raises(ValueError, match="newer"):
-        Distribution(future)
-
-    # No migration readers: any other version is rejected outright.
-    for version in (FORMAT_VERSION - 1, 0):
-        old = np.array(fitted.data, copy=True)
-        old["format_version"] = version
-        with pytest.raises(ValueError, match="not supported"):
-            Distribution(old)
+    for version in (FORMAT_VERSION + 1, 0, -1):
+        state = np.array(fitted.data, copy=True)
+        state["format_version"] = version
+        with pytest.raises(ValueError, match="format_version must be 1"):
+            Distribution(state)
 
 
 def test_unknown_model_fields_are_rejected():

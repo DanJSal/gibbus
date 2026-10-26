@@ -1,4 +1,4 @@
-"""G3 Stage 3b: normalizer and moments.
+"""Normalizer and moments.
 
 Analytic families (Gaussian at several widths, gamma, beta, a non-convex
 two-well potential) and an independent graded composite Gauss-Legendre
@@ -13,7 +13,7 @@ import warnings
 
 import numpy as np
 import pytest
-from scipy.special import betaln, gammaln
+from scipy.special import betaln, digamma, gammaln
 from test_basis_admissibility import _grid_lp
 from test_basis_evaluation import _broad_battery
 
@@ -67,13 +67,13 @@ def _theta(model, weights):
 def test_gaussian_normalizer_and_moments(a):
     model = _model(BasisSpec(bulk_degree=2))
     b = 0.3 * math.sqrt(a)
-    theta, labels = _theta(model, {"x^2": a, "x": b})
+    theta, labels = _theta(model, {"z^2": a, "z": b})
     res = _basis_state(_NormalizerContext(model), theta)
     h = model.geometry.scale
     exact = math.log(h * math.sqrt(math.pi / a)) + b * b / (4.0 * a)
     assert res.status == "proper"
     assert res.log_z == pytest.approx(exact, abs=1e-12 * max(1.0, abs(exact)))
-    ix, i2 = labels.index("x"), labels.index("x^2")
+    ix, i2 = labels.index("z"), labels.index("z^2")
     mz, vz = -b / (2.0 * a), 1.0 / (2.0 * a)
     assert res.mean[ix] == pytest.approx(mz, rel=1e-11, abs=1e-12 * math.sqrt(vz))
     assert res.cov[ix, ix] == pytest.approx(vz, rel=1e-11)
@@ -84,11 +84,13 @@ def test_gaussian_normalizer_and_moments(a):
 
 
 @pytest.mark.parametrize(
-    "gamma,beta", [(0.0, 1.0), (0.5, 2.0), (3.0, 0.7), (1e-3, 5.0)]
+    "gamma,beta",
+    # Vanishing amplitudes check continuity as the endpoint log switches off.
+    [(0.0, 1.0), (0.5, 2.0), (3.0, 0.7), (1e-3, 5.0), (1e-300, 1.0), (1e-12, 1.0)],
 )
 def test_gamma_half_line_with_log_endpoint(gamma, beta):
     model = _model(BasisSpec(support=(0.0, math.inf), bulk_degree=1, log_lower=True))
-    theta, labels = _theta(model, {"logL": gamma, "x": beta})
+    theta, labels = _theta(model, {"logL": gamma, "z": beta})
     res = _basis_state(_NormalizerContext(model), theta)
     g = model.geometry
     # q = -gamma log x + beta (x - c) / h  ->  Z = e^{beta c / h} Gamma(gamma+1) (h/beta)^{gamma+1}
@@ -100,10 +102,8 @@ def test_gamma_half_line_with_log_endpoint(gamma, beta):
     assert res.log_z == pytest.approx(exact, abs=1e-12 * max(1.0, abs(exact)))
     # E[x] = (gamma + 1) h / beta  ->  E[z] = (E[x] - c) / h
     ez = ((gamma + 1.0) * g.scale / beta - g.center) / g.scale
-    assert res.mean[labels.index("x")] == pytest.approx(ez, rel=1e-11)
+    assert res.mean[labels.index("z")] == pytest.approx(ez, rel=1e-11)
     # E[-log x] = -(digamma(gamma + 1) + log(h / beta))
-    from scipy.special import digamma
-
     elog = -(digamma(gamma + 1.0) + math.log(g.scale / beta))
     assert res.mean[labels.index("logL")] == pytest.approx(elog, rel=1e-10, abs=1e-11)
 
@@ -121,12 +121,12 @@ def test_beta_bounded_with_two_log_endpoints(g1, g2):
     # E[x] = -1 + 4 (g1 + 1) / (g1 + g2 + 2)
     ex = -1.0 + 4.0 * (g1 + 1.0) / (g1 + g2 + 2.0)
     ez = (ex - model.geometry.center) / model.geometry.scale
-    assert res.mean[labels.index("x")] == pytest.approx(ez, rel=1e-11, abs=1e-12)
+    assert res.mean[labels.index("z")] == pytest.approx(ez, rel=1e-11, abs=1e-12)
 
 
 def test_non_convex_two_well_potential():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 1.0, "x^2": -4.0, "x": 0.5})
+    theta, _ = _theta(model, {"z^4": 1.0, "z^2": -4.0, "z": 0.5})
     res = _basis_state(_NormalizerContext(model), theta)
     ref = _reference(model, theta)
     assert res.log_z == pytest.approx(ref[0], abs=1e-12)
@@ -136,21 +136,21 @@ def test_non_convex_two_well_potential():
 
 def test_improper_vectors_are_reported():
     model = _model(BasisSpec(bulk_degree=2))
-    theta, _ = _theta(model, {"x^2": -0.1})
+    theta, _ = _theta(model, {"z^2": -0.1})
     res = _basis_state(_NormalizerContext(model), theta)
     assert res.status == "improper" and res.log_z == math.inf and res.mean is None
 
 
 def test_negative_log_amplitude_is_rejected():
     model = _model(BasisSpec(support=(0.0, math.inf), bulk_degree=1, log_lower=True))
-    theta, _ = _theta(model, {"logL": -0.5, "x": 1.0})
+    theta, _ = _theta(model, {"logL": -0.5, "z": 1.0})
     with pytest.raises(ValueError):
         _basis_state(_NormalizerContext(model), theta)
 
 
 def test_exhausted_budget_fails_loudly():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 1e4, "x^2": -4e4, "x": 50.0})
+    theta, _ = _theta(model, {"z^4": 1e4, "z^2": -4e4, "z": 50.0})
     opts = _NormalizerOptions(max_cells=8, initial_cells=4)
     with pytest.raises(_QuadratureFailure) as info:
         _basis_state(_NormalizerContext(model), theta, opts)
@@ -165,7 +165,7 @@ def test_exhausted_budget_fails_loudly():
 def _gl_panels(model, theta, panels):
     """Composite 40-point Gauss-Legendre over panels.
 
-    Returns ``(log Z, mean, cov)`` with a centred (two-pass) covariance.
+    Returns ``(log Z, mean, cov)`` with a centered (two-pass) covariance.
     """
     nodes, wts = np.polynomial.legendre.leggauss(40)
     a, b = panels[:-1], panels[1:]
@@ -180,8 +180,8 @@ def _gl_panels(model, theta, panels):
     phi = np.where(np.isfinite(phi), phi, 0.0)
     z = e.sum()
     mean = (e @ phi) / z
-    centred = phi - mean
-    cov = (centred * (e / z)[:, None]).T @ centred
+    centered = phi - mean
+    cov = (centered * (e / z)[:, None]).T @ centered
     return math.log(z) - q_ref, mean, cov
 
 
@@ -257,7 +257,11 @@ def test_normalizer_matches_independent_quadrature(spec):
             continue
         ref = _reference(model, theta)
         assert res.log_z == pytest.approx(ref[0], abs=1e-11 * max(1.0, abs(ref[0])))
-        scale = np.sqrt(np.abs(np.diag(ref[2]))) + np.abs(ref[1]) + 1e-300
+        # Moments are resolved relative to the column's own spread and to its
+        # natural magnitude where the data live (``column_scale``): a gated
+        # tail column is nearly zero under a bulk density, and its tiny
+        # variance is not held to a relative standard of its own.
+        scale = np.sqrt(np.abs(np.diag(ref[2]))) + np.abs(ref[1]) + ctx.column_scale
         assert np.all(np.abs(res.mean - ref[1]) <= 1e-10 * scale)
         assert np.all(np.abs(res.cov - ref[2]) <= 1e-9 * np.outer(scale, scale))
         assert res.rel_error <= 1e-12
@@ -266,7 +270,7 @@ def test_normalizer_matches_independent_quadrature(spec):
 
 def test_typical_normalizer_time():
     model = _model(BasisSpec(bulk_degree=4))
-    theta, _ = _theta(model, {"x^4": 0.05, "x^2": 0.5, "x^3": 0.1})
+    theta, _ = _theta(model, {"z^4": 0.05, "z^2": 0.5, "z^3": 0.1})
     ctx = _NormalizerContext(model)
     start = time.perf_counter()
     for _ in range(5):
@@ -346,11 +350,11 @@ def test_conditioning_floor_is_reported_not_failed():
 def test_nearly_improper_growth_fails_loudly_not_with_overflow():
     # Slope 1e-14 per scale: proper, but truncation would need ~1e16 scales.
     model = _model(BasisSpec(support=(0.0, math.inf), bulk_degree=1))
-    theta, _ = _theta(model, {"x": 1e-14})
+    theta, _ = _theta(model, {"z": 1e-14})
     with pytest.raises(_QuadratureFailure, match="cutoff cap"):
         _basis_state(_NormalizerContext(model), theta)
     # A modest slope is fine.
-    theta, _ = _theta(model, {"x": 1e-3})
+    theta, _ = _theta(model, {"z": 1e-3})
     assert _basis_state(_NormalizerContext(model), theta).status == "proper"
 
 
@@ -371,7 +375,7 @@ def test_gauss_kronrod_rule_is_exact_to_its_degree():
 
 
 # ---------------------------------------------------------------------------
-# Stage 6: fitting-coordinate normalization (OI-E2-1, G3-052)
+# Fitting-coordinate normalization
 # ---------------------------------------------------------------------------
 
 
@@ -379,12 +383,12 @@ def test_large_offset_gaussian_normalizer_uses_fitting_units():
     """A Gaussian at 1e6 with nanometric spread must retain its true Z."""
     x = 1e6 + 1e-9 * np.random.default_rng(48).standard_normal(600)
     model = _build_basis(BasisSpec(bulk_degree=2), x)
-    theta, labels = _theta(model, {"x^2": 0.5})
+    theta, labels = _theta(model, {"z^2": 0.5})
     state = _basis_state(_NormalizerContext(model), theta)
     expected = math.log(model.geometry.scale) + 0.5 * math.log(2.0 * math.pi)
     assert state.log_z == pytest.approx(expected, abs=2e-12)
-    assert state.mean[labels.index("x")] == pytest.approx(0.0, abs=2e-12)
-    assert state.cov[labels.index("x"), labels.index("x")] == pytest.approx(
+    assert state.mean[labels.index("z")] == pytest.approx(0.0, abs=2e-12)
+    assert state.cov[labels.index("z"), labels.index("z")] == pytest.approx(
         1.0, rel=2e-11
     )
 
@@ -435,3 +439,72 @@ def test_tiny_bounded_endpoint_log_restores_physical_constant():
     elog = -math.log(width) + 1.0 / (gamma + 1.0)
     # E[-log(x-L)] under Beta(gamma+1, 1) scaled to [L,U].
     assert state.mean[labels.index("logL")] == pytest.approx(elog, abs=2e-11)
+
+
+EXTREME_SPECS = [
+    BasisSpec(
+        bulk_degree=2, lower_tail=Exponential(1e-6), upper_tail=Exponential(1e-6)
+    ),
+    BasisSpec(bulk_degree=2, lower_tail=Exponential(8.0), upper_tail=Exponential(30.0)),
+    BasisSpec(bulk_degree=2, lower_tail=SoftPower(1.01), upper_tail=SoftPower(1.01)),
+    BasisSpec(bulk_degree=2, lower_tail=SoftPower(7.3), upper_tail=SoftPower(40.5)),
+    BasisSpec(bulk_degree=3, upper_tail=Polynomial(5), expansion="full"),
+    BasisSpec(
+        support=(0.0, math.inf),
+        bulk_degree=2,
+        log_lower=True,
+        upper_tail=Exponential(2.0),
+    ),
+    BasisSpec(
+        support=(-math.inf, 0.0),
+        bulk_degree=2,
+        log_upper=True,
+        lower_tail=SoftPower(2.5),
+    ),
+]
+
+
+def _tail_member(model, rng, noise):
+    """A proper member: unit outward tail weights, a unit bulk, small noise."""
+    theta = np.zeros(model.n_coefficients)
+    for i, column in enumerate(model.columns):
+        if column.label.endswith(("(-1+tL)", "(-1+tU)")):
+            # (-1 + t) = -2 W: a negative weight is an outward-growing tail.
+            theta[i] = -1.0
+        elif column.label == "z^2":
+            theta[i] = 0.5
+        elif column.nonnegative:
+            theta[i] = 0.7
+    theta += noise * rng.normal(size=theta.size) * (theta == 0.0)
+    for i, column in enumerate(model.columns):
+        if column.nonnegative:
+            theta[i] = abs(theta[i])
+    return theta
+
+
+@pytest.mark.parametrize("spec", EXTREME_SPECS, ids=lambda s: "")
+def test_extreme_rates_powers_and_barriers_match_independent_quadrature(spec):
+    model = _model(spec)
+    ctx = _NormalizerContext(model)
+    rng = np.random.default_rng(EXTREME_SPECS.index(spec))
+    checked = 0
+    for noise in (0.0, 0.05, 0.05, 0.05):
+        theta = _tail_member(model, rng, noise)
+        try:
+            res = _basis_state(ctx, theta)
+        except _QuadratureFailure as exc:
+            # A competing linear term against a leader of order zeta^1.01 can
+            # push properness beyond the cap: that must fail loudly, never
+            # silently, and only for the perturbed members.
+            assert noise > 0.0 and exc.diagnostics["stage"] == "properness"
+            continue
+        if res.status == "improper":
+            continue
+        ref = _reference(model, theta)
+        tol = max(1e-11, 10.0 * res.cond_error)
+        assert res.log_z == pytest.approx(ref[0], abs=tol * max(1.0, abs(ref[0])))
+        scale = np.sqrt(np.abs(np.diag(ref[2]))) + np.abs(ref[1]) + ctx.column_scale
+        assert np.all(np.abs(res.mean - ref[1]) <= 1e-9 * scale)
+        assert np.all(np.abs(res.cov - ref[2]) <= 1e-8 * np.outer(scale, scale))
+        checked += 1
+    assert checked

@@ -13,6 +13,7 @@ from gibbus._spectral.tail import (
     exact_tail_log_cdf,
     invert_tail,
     needs_asymptotic_tail,
+    tail_log_masses,
 )
 
 _LOG_SQRT_2PI = 0.5 * np.log(2.0 * np.pi)
@@ -89,7 +90,12 @@ def test_exact_tail_correction_matches_standard_normal(p):
     potential = _normal_potential()
     start = float(stats.norm.ppf(TAIL_ASYMPTOTIC_P))
     got = invert_tail(
-        potential, np.log(p), -np.inf, start, upper=False, log_tail_mass=None
+        potential,
+        np.log(p),
+        -np.inf,
+        start,
+        upper=False,
+        log_tail_masses=tail_log_masses(potential),
     )
     expected = float(stats.norm.ppf(p))
 
@@ -109,7 +115,12 @@ def test_infinite_tail_root_tolerance_is_translation_independent():
     with warnings.catch_warnings():
         warnings.simplefilter("error", IntegrationWarning)
         got = invert_tail(
-            potential, np.log(p), -np.inf, start, upper=False, log_tail_mass=None
+            potential,
+            np.log(p),
+            -np.inf,
+            start,
+            upper=False,
+            log_tail_masses=tail_log_masses(potential),
         )
 
     expected = mu + float(stats.norm.ppf(p))
@@ -136,6 +147,11 @@ def test_finite_endpoint_algebraic_tail_uses_exact_scaled_quadrature(upper):
         potential = _gamma_potential(shape)
 
     got = invert_tail(
-        potential, np.log(p), endpoint, start, upper=upper, log_tail_mass=None
+        potential,
+        np.log(p),
+        endpoint,
+        start,
+        upper=upper,
+        log_tail_masses=tail_log_masses(potential),
     )
     assert got == pytest.approx(expected, rel=3e-12, abs=0.0)

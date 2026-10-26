@@ -1,12 +1,15 @@
-"""Automatic within-family tail parameters at the public G3 fit boundary."""
+"""Automatic within-family tail parameters at the public fit boundary."""
 
 import pickle
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 import pytest
+from scipy.special import logsumexp
 
 from gibbus import BasisSpec, Distribution, Exponential, Polynomial, SoftPower
+from gibbus._fit import _empirical_tail_likelihood as likelihood
 from gibbus._fit.tail_estimation import TailEstimate, estimate_tail, resolve_auto_tails
 from gibbus._model.basis_spec import _canonicalize_basis_spec
 
@@ -68,7 +71,7 @@ def test_point_fit_and_result_diagnostics():
     diag = fitted.tail_parameter_diagnostics
     assert diag["upper"]["family"] == "polynomial"
     assert diag["upper"]["estimated_parameter"] in range(1, 7)
-    assert not diag["upper"]["fallback_used"]
+    assert set(diag["upper"]) == {"family", "estimated_parameter", "tail_n"}
     assert fitted.fit_diagnostics["converged"]
     assert fitted.copy().tail_parameter_diagnostics == diag
     assert pickle.loads(pickle.dumps(fitted)).tail_parameter_diagnostics == diag
@@ -80,32 +83,35 @@ def test_point_fit_and_result_diagnostics():
     assert fixed.tail_parameter_diagnostics is None
 
 
-def test_retry_at_most_once_and_never_changes_fixed_tail():
+def test_a_failing_automatic_tail_fit_is_not_retried():
     import gibbus._api.fitting as fitting
 
     x = np.random.default_rng(90).normal(size=100)
     basis = BasisSpec(bulk_degree=2, upper_tail=Exponential(), expansion="minimal")
-    proposal = TailEstimate(
-        primary=0.9, alternative=1.1, n_tail=40, family="exponential"
-    )
-    actual_fit = fitting._fit_basis
+    proposal = TailEstimate(primary=0.9, n_tail=40, family="exponential")
     seen = []
 
     def primary_fails(spec, samples, weights, **kwargs):
         seen.append(spec.upper_tail.rate)
-        if spec.upper_tail.rate == 0.9:
-            raise RuntimeError("generated curvature constraint invalid")
-        return actual_fit(spec, samples, weights, **kwargs)
+        raise RuntimeError("generated failure")
 
     with (
         patch("gibbus._fit.tail_estimation.estimate_tail", return_value=proposal),
         patch("gibbus._api.fitting._fit_basis", side_effect=primary_fails),
+        pytest.raises(RuntimeError, match="generated failure"),
     ):
-        fitted = Distribution().fit(x, n_components=1, basis=basis)
-    assert seen == [0.9, 1.1]
-    assert fitted.tail_parameter_diagnostics["upper"]["fallback_used"]
-    assert fitted.tail_parameter_diagnostics["upper"]["estimated_parameter"] == 1.1
-    assert fitted.fit_diagnostics["converged"]
+        Distribution().fit(x, n_components=1, basis=basis)
+    assert seen == [0.9]
+    assert not hasattr(fitting, "alternative_spec")
+
+
+def test_soft_power_estimate_at_p_one_says_the_tail_is_too_heavy():
+    x = np.random.default_rng(11)
+    x.normal(size=500)
+    x.laplace(size=500)
+    t4 = x.standard_t(4, 500)
+    with pytest.raises(ValueError, match="heavier than any SoftPower"):
+        estimate_tail(t4, family="soft_power", side="upper")
 
 
 def test_weighted_points_estimate_is_deterministic():
@@ -118,15 +124,31 @@ def test_weighted_points_estimate_is_deterministic():
     assert a.upper_tail.rate > 0
 
 
-def test_compiled_and_python_kernel_select_same_candidates(monkeypatch):
-    import gibbus._fit._empirical_tail_likelihood as likelihood
+def _reference_objective_gradient(lb, la, ym, mh, rate, ys, h, logwr):
+    """Direct NumPy form of the conditional tail likelihood and its gradient."""
+    b, a = np.exp(lb), np.exp(la)
+    score = logwr - b * ys - a * h
+    logsum = logsumexp(score)
+    nll = b * ym + a * mh + logsum - np.log(rate)
+    if not np.isfinite(nll):
+        return 1e30, (0.0, 0.0)
+    prob = np.exp(score - logsum)
+    # A quadrature point at infinite h has exactly zero posterior weight.
+    mean_y = float(np.dot(prob, ys))
+    mean_h = float(np.dot(prob, np.where(np.isfinite(h), h, 0.0)))
+    return float(nll), (b * (ym - mean_y), a * (mh - mean_h))
 
+
+def test_compiled_kernel_matches_the_reference_likelihood(monkeypatch):
     x = np.random.default_rng(333).gumbel(size=250)
-    accelerated = estimate_tail(x, family="exponential", side="lower")
-    monkeypatch.setattr(likelihood, "_g3tail_accel", None)
-    portable = estimate_tail(x, family="exponential", side="lower")
-    assert abs(accelerated.primary - portable.primary) < 2e-5
-    assert (accelerated.alternative is None) == (portable.alternative is None)
+    compiled = estimate_tail(x, family="exponential", side="lower")
+    monkeypatch.setattr(
+        likelihood,
+        "_tail_kernels",
+        SimpleNamespace(objective_gradient=_reference_objective_gradient),
+    )
+    reference = estimate_tail(x, family="exponential", side="lower")
+    assert abs(compiled.primary - reference.primary) < 2e-5
 
 
 def test_no_auto_inference_for_explicit_fit(monkeypatch):

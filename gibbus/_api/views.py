@@ -53,7 +53,7 @@ from .._postfit.survival import logisf as _logisf
 from .._postfit.survival import logppf as _logppf
 from .._postfit.survival import mean_residual_life as _mean_residual_life
 from .._postfit.survival import residual_entropy as _residual_entropy
-from .._spectral.tail import refine_tail_quantiles
+from .._spectral.tail import refine_tail_quantiles, tail_log_masses
 from .validation import (
     _validate_level,
     _validate_log_probabilities,
@@ -257,13 +257,11 @@ class _BaseSpaceView:
         """
         lo, hi = map(float, self.support)
         return cdf_hybrid(
-            self.neg_log,
             self._spectral_cdf,
             x,
             lo,
             upper_endpoint=hi,
-            log_tail_mass=self._exact_tail_log_mass,
-            log_tail_masses=self._exact_tail_log_masses,
+            log_tail_masses=self._tail_log_masses,
         )
 
     def ppf(self, p):
@@ -316,8 +314,13 @@ class _BaseSpaceView:
             float(supp[1]),
             np.atleast_1d(p).reshape(-1),
             out.reshape(-1),
-            log_tail_mass=self._exact_tail_log_mass,
+            log_tail_masses=self._tail_log_masses,
         )
+        # The ends are the support's by definition; the canonical round trip
+        # can land an ulp inside them.
+        flat = np.atleast_1d(p).reshape(-1)
+        out[flat == 0.0] = float(supp[0])
+        out[flat == 1.0] = float(supp[1])
 
         out = out.reshape(p.shape)
         return float(out) if scalar else out
@@ -363,7 +366,7 @@ class _BaseSpaceView:
         x : float or array_like
             Evaluation point or points in the relevant coordinate space.
         n : int, optional
-            Derivative order (default ``0``).
+            Derivative order, ``0`` to ``4`` (default ``0``).
 
         Returns
         -------
@@ -372,7 +375,7 @@ class _BaseSpaceView:
         Raises
         ------
         ValueError
-            If *n* is negative.
+            If *n* is negative or above four.
         """
         self._p._ensure_fitted()
         n = int(n)
@@ -393,23 +396,11 @@ class _BaseSpaceView:
             out = np.where(active, out, np.nan)
         return float(out) if scalar else out
 
-    def _exact_tail_log_mass(self, x, endpoint, /, *, upper):
-        """Evaluate one exact tail mass with the reusable compiled callback.
+    def _tail_log_masses(self, x, endpoint, /, *, upper):
+        """Exact masses between view points and an endpoint (one evaluator).
 
-        Parameters
-        ----------
-        x : float
-            Tail anchor in this view's coordinates.
-        endpoint : float
-            Support endpoint in the requested tail direction.
-        upper : bool
-            Select the upper tail instead of the lower tail.
-        """
-        self._p._ensure_fitted()
-        return float(self._basis_tail_log_masses(np.array([float(x)]), endpoint)[0])
-
-    def _exact_tail_log_masses(self, x, endpoint, /, *, upper):
-        """Evaluate many exact tail masses in one compiled call.
+        :func:`~gibbus._spectral.tail.tail_log_masses` over this view's
+        compiled rows (:meth:`_basis_tail_log_masses`) and its potential.
 
         Parameters
         ----------
@@ -421,13 +412,14 @@ class _BaseSpaceView:
             Select the upper tail instead of the lower tail.
         """
         self._p._ensure_fitted()
-        return self._basis_tail_log_masses(np.asarray(x, dtype=np.float64), endpoint)
+        evaluate = tail_log_masses(self.neg_log, compiled=self._basis_tail_log_masses)
+        return evaluate(x, endpoint, upper=upper)
 
     def _basis_tail_log_masses(self, x, endpoint, /):
-        """Exact G3 masses between view points and an endpoint (G3-046).
+        """Exact masses between view points and an endpoint.
 
         The view points and endpoint map to model units through the fitted
-        affine coordinate; the masses share the endpoint, so the G3
+        affine coordinate; the masses share the endpoint, so the
         normalizer resolves them cumulatively in log space
         (``log_masses_from``).
 
@@ -480,13 +472,11 @@ class _BaseSpaceView:
         """
         lo, hi = map(float, self.support)
         return log_cdf_hybrid(
-            self.neg_log,
             self._spectral_cdf,
             x,
             lo,
             upper_endpoint=hi,
-            log_tail_mass=self._exact_tail_log_mass,
-            log_tail_masses=self._exact_tail_log_masses,
+            log_tail_masses=self._tail_log_masses,
         )
 
     def logsf(self, x):
@@ -499,13 +489,11 @@ class _BaseSpaceView:
         """
         lo, hi = map(float, self.support)
         return log_sf_hybrid(
-            self.neg_log,
             self._spectral_cdf,
             x,
             hi,
             lower_endpoint=lo,
-            log_tail_mass=self._exact_tail_log_mass,
-            log_tail_masses=self._exact_tail_log_masses,
+            log_tail_masses=self._tail_log_masses,
         )
 
     def sf(self, x):
@@ -534,7 +522,7 @@ class _BaseSpaceView:
             self._ppf_for_extensions,
             self.support,
             _validate_probabilities(p, "isf"),
-            log_tail_mass=self._exact_tail_log_mass,
+            log_tail_masses=self._tail_log_masses,
         )
 
     def logppf(self, log_p):
@@ -550,7 +538,7 @@ class _BaseSpaceView:
             self._ppf_for_extensions,
             self.support,
             _validate_log_probabilities(log_p, "logppf"),
-            log_tail_mass=self._exact_tail_log_mass,
+            log_tail_masses=self._tail_log_masses,
         )
 
     def logisf(self, log_p):
@@ -566,7 +554,7 @@ class _BaseSpaceView:
             self._ppf_for_extensions,
             self.support,
             _validate_log_probabilities(log_p, "logisf"),
-            log_tail_mass=self._exact_tail_log_mass,
+            log_tail_masses=self._tail_log_masses,
         )
 
     def log_hazard(self, x):
@@ -1128,11 +1116,17 @@ class _ExpSpaceView:
         y : float or array_like
             Positive evaluation point or points in exp space.
         n : int, optional
-            Derivative order; zero requests the potential itself.
+            Derivative order, ``0`` to ``4``; zero requests the potential
+            itself.
 
         Returns
         -------
         float or numpy.ndarray
+
+        Raises
+        ------
+        ValueError
+            If *n* is negative or above four.
         """
         self._p._ensure_fitted()
         n = int(n)

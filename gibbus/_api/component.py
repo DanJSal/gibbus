@@ -103,7 +103,7 @@ class _Component:
         self._spectral_cdf_eval: Any = None
         self._spectral_ppf_eval: Any = None
         self._base_exp_potential: Any = None
-        # The component's normalized G3 potential (G3-046); ``None`` unfitted.
+        # The component's normalized basis potential; ``None`` unfitted.
         self._basis: Any = None
         self._base_view = _BaseSpaceView(self)
         self._exp_view = _ExpSpaceView(self)
@@ -425,16 +425,16 @@ class _Component:
     def log_concavity_margin(self) -> float:
         """Return the smallest base-space ``V''`` found on a quantile grid.
 
-        A fit whose shape verdict is not ``nonnegative`` has no grid margin
+        A fit whose shape verdict is not ``verified`` has no grid margin
         (``-inf``); otherwise the smallest ``V''`` over a quantile grid,
-        floored at the verdict's zero (G3-046, G3-047).  On an infinite side
+        floored at the verdict's zero.  On an infinite side
         the grid reaches the quantiles ``1e-300`` (standing for the tail
         limit); a finite side's limit is its endpoint, approached
         geometrically in ``x`` from the grid's innermost quantile, since
-        ultratail quantiles need not be representable there (G3-059).
+        ultratail quantiles need not be representable there.
         """
         data = self._ensure_fitted()
-        if str(data["basis_shape"]) != "nonnegative":
+        if str(data["basis_shape"]) != "verified":
             return -np.inf
         base = self.base
         lo, hi = map(float, base.support)
@@ -570,7 +570,7 @@ class _Component:
 
     @property
     def kurt(self):
-        """Return excess kurtosis of the active-space distribution."""
+        """Return the Pearson kurtosis of the active-space distribution (3 for a Gaussian)."""
         return self._active.kurt
 
     def _truncate_base(self, lower, upper):
@@ -695,7 +695,25 @@ class _Component:
         data["raw_moments"] = raw
         data["canonical_raw_moments"] = craw
         if upto >= 4:
-            stats = _pf._stats_from_raw_moments(*map(float, raw[1:5]))
+            # Central moments about the mean, never from raw moments, which
+            # cancel when the law sits far from the origin.
+            # In units of the raw standard deviation (a scale only): the
+            # expectation engine's tolerances are absolute.
+            mean = float(raw[1])
+            unit = float(np.sqrt(abs(float(raw[2]) - mean * mean)))
+            if not (np.isfinite(unit) and unit > 0.0):
+                raise RuntimeError("the truncated law has no positive variance")
+            central = [
+                unit**k
+                * _expect_vectorized(
+                    base_view.neg_log,
+                    base_view.support,
+                    lambda x, kk=k: ((x - mean) / unit) ** kk,
+                    points=(base_view.mode, mean),
+                )
+                for k in (2, 3, 4)
+            ]
+            stats = _pf._stats_from_centered_moments(mean, *map(float, central))
             for name in ("mean", "var", "std", "skew", "kurt"):
                 data[name] = float(stats[name])
         data["median"] = float(base_view.ppf(0.5))
@@ -854,7 +872,7 @@ class _Component:
             lambda x, n: self._base_view.neg_log(x, n)
         )
         if not _is_basis_state(self._data):
-            raise ValueError("component state is not a G3 basis state")
+            raise ValueError("component state is not a basis state")
         self._basis = _potential_of(self._data)
 
     def _density_part(self, mu, sigma, jf, weight, lo, hi, /, z_support=None):
@@ -863,7 +881,7 @@ class _Component:
         Parameters
         ----------
         mu, sigma, jf, weight, lo, hi : float
-            G1 ``density_spec`` entry fields (affine map, Jacobian, weight
+            ``density_spec`` entry fields (affine map, Jacobian, weight
             and public mask).
         z_support : tuple of float or None
             Canonical potential support (default: the stored anchors).
