@@ -82,6 +82,41 @@ jobs:
         run: >-
           python -m pytest -q -n auto tests
           --ignore=tests/test_selection_battery.py
+          --junitxml=junit.xml
+
+      - name: Annotate test failures
+        if: failure()
+        working-directory: ${{ runner.temp }}
+        shell: python
+        run: |
+          # One annotation lists every failure (a step shows at most ten);
+          # the first failures also get their own annotation with detail.
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          def escape(text):
+              return text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+
+          def prop(text):
+              return escape(text).replace(":", "%3A").replace(",", "%2C")
+
+          path = Path("junit.xml")
+          failures = []
+          if path.exists():
+              for case in ET.parse(path).iter("testcase"):
+                  for kind in ("failure", "error"):
+                      node = case.find(kind)
+                      if node is not None:
+                          name = f"{case.get('classname')}::{case.get('name')}"
+                          detail = (node.get("message") or "") + "\n" + (node.text or "")
+                          failures.append((kind, name, detail.strip()))
+          if not failures:
+              print("::error title=No test results::junit.xml has no failures to report")
+          else:
+              listing = "\n".join(f"{kind}: {name}" for kind, name, _ in failures)
+              print(f"::error title={len(failures)} failing tests::{escape(listing)}")
+              for kind, name, detail in failures[:8]:
+                  print(f"::error title={prop(name)}::{escape(detail[-3000:])}")
 
   selection-battery:
     name: Selection battery / Ubuntu / Python 3.14
