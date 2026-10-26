@@ -2,7 +2,7 @@
 
 This file records notable user-facing changes of Gibbus releases.
 
-## 0.2.0.dev0 — Unreleased
+## 0.2.0 — 2026-10-26
 
 A new model replaces the 0.1 polynomial potential. The public entry point is
 still `Distribution().fit`, but options, diagnostics and the saved format

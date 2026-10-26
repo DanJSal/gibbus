@@ -1168,7 +1168,7 @@ def _retire_inactive_cuts(rows, ages, theta, options, /):
     ages = np.pad(ages, (0, rows.size - ages.size))
     slack = rows.slack(theta)
     magnitude = np.abs(rows.rows) @ np.abs(theta)
-    inactive = (np.array(rows.kinds) == "cut") & (
+    inactive = np.array([kind == "cut" for kind in rows.kinds], dtype=bool) & (
         slack > options.cut_activity_margin * np.maximum(1.0, magnitude)
     )
     ages = np.where(inactive, ages + 1, 0)

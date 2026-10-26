@@ -4,18 +4,19 @@ This guide covers installation and the shortest path from observations to a fitt
 
 ## Installation
 
-These docs describe the unreleased `0.2.0.dev0` model on the `develop` branch.
-The package on PyPI is an earlier model with a different API, so install this
-version from source. Source builds compile the Cython extensions and therefore require C and C++ compilers and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
+```bash
+python -m pip install gibbus
+```
+
+Binary wheels cover CPython 3.11 through 3.14 on Linux x86-64, Windows x86-64 and macOS (Intel and Apple Silicon), so no compiler is needed there. These docs describe version 0.2, which replaces the 0.1 model; models saved by 0.1 do not load.
+
+To build from source instead (another platform, or the `develop` branch), clone the repository and install from its root. Source builds compile the Cython extensions and therefore require C and C++ compilers and Python development headers (`build-essential` and `python3-dev` on Debian/Ubuntu, the Xcode command-line tools on macOS, or MSVC Build Tools on Windows). Cython itself is declared as a build dependency.
 
 ```bash
-git clone --branch develop https://github.com/DanJSal/gibbus.git
+git clone https://github.com/DanJSal/gibbus.git
 cd gibbus
 python -m pip install .
 ```
-
-The supported interpreters are CPython 3.11 through 3.14; see
-[Development status](development-status.md) for the verification scope.
 
 For editable source development:
 

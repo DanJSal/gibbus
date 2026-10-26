@@ -1,6 +1,6 @@
 # Development status
 
-**Current source version:** `0.2.0.dev0` (unreleased).
+**Current source version:** `0.2.0`.
 
 ## Implemented capabilities
 
@@ -27,9 +27,9 @@ Cython 3.3.0, and GCC 13.3. The source uses 12 native extensions.
   a set of adversarial point, censored, mixture and tail-family fits.
 - A wheel built from the tree and installed outside the checkout imports all
   12 extensions and passes the packaging, serialization and expectation tests.
-- CI covers CPython 3.11–3.14 on Linux, Windows and macOS. Debug builds, the
-  minimum declared NumPy/SciPy versions and the release wheel matrix are not
-  yet qualified.
+- CI covers CPython 3.11–3.14 on Linux, Windows and macOS, and the declared
+  floors (NumPy 1.23.5, SciPy 1.9.3 on CPython 3.11); `wheels.yml` builds and
+  tests the 16 release wheels. Debug builds are not yet qualified.
 
 See [Fitting performance](performance.md) for measured runtimes and the
 constraint-retention policy. These measurements do not guarantee latency or
@@ -40,6 +40,6 @@ cross-platform correctness.
 - See [Limitations](limitations.md#known-open-items) for the numerical limits (data concentrated far from a finite end, high explicit degrees on half-lines, high-degree polynomial tails, heavy tails and `SoftPower`).
 - Mixture fitting, and above all automatic component-count selection, is much more expensive than single-component fitting.
 - Automatic tail-family comparison and broader predictive-tail evaluation remain research work. An explicit tail family is not changed automatically, even when it may fit the data poorly.
-- Debug builds, the minimum declared dependency versions and the release wheel matrix have not been qualified; CI covers the supported interpreters on Linux, Windows and macOS.
+- Debug builds have not been qualified.
 
 See [Limitations](limitations.md), [Fitting](fitting.md), and [Fitting coordinates](fitting-coordinates.md) for details.

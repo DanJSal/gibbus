@@ -87,61 +87,60 @@ jobs:
       - name: Annotate test failures
         if: failure()
         working-directory: ${{ runner.temp }}
-        shell: python
-        run: |
-          # One annotation lists every failure (a step shows at most ten);
-          # the first failures also get their own annotation with detail.
-          import platform
-          import re
-          import xml.etree.ElementTree as ET
-          from pathlib import Path
+        run: python "${{ github.workspace }}/scripts/annotate_junit.py" junit.xml
 
-          import numpy
-          import scipy
+  minimum-dependencies:
+    name: Minimum NumPy/SciPy / Ubuntu / Python 3.11
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
 
-          def escape(text):
-              return text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-          def prop(text):
-              return escape(text).replace(":", "%3A").replace(",", "%2C")
+      - name: Set up Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
-          def condense(text):
-              # The call chain and the failing lines: frame locations,
-              # the marked source line and pytest's error lines.
-              keep = [
-                  line
-                  for line in text.splitlines()
-                  if line.startswith(("E ", ">"))
-                  or re.search(r"\.py:\d+(: in |:\s)", line)
-              ]
-              return "\n".join(keep)[:6000]
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
 
-          versions = (
-              f"{platform.platform()} {platform.machine()} Python "
-              f"{platform.python_version()} NumPy {numpy.__version__} "
-              f"SciPy {scipy.__version__}"
-          )
+      - name: Build wheel
+        run: python -m build --wheel
 
-          path = Path("junit.xml")
-          failures = []
-          if path.exists():
-              for case in ET.parse(path).iter("testcase"):
-                  for kind in ("failure", "error"):
-                      node = case.find(kind)
-                      if node is not None:
-                          name = f"{case.get('classname')}::{case.get('name')}"
-                          detail = (node.get("message") or "") + "\n" + (node.text or "")
-                          failures.append((kind, name, detail.strip()))
-          if not failures:
-              print("::error title=No test results::junit.xml has no failures to report")
-          else:
-              listing = "\n".join(f"{kind}: {name}" for kind, name, _ in failures)
-              print(
-                  f"::error title={len(failures)} failing tests::"
-                  f"{escape(versions + chr(10) + listing)}"
-              )
-              for kind, name, detail in failures[:8]:
-                  print(f"::error title={prop(name)}::{escape(condense(detail))}")
+      - name: Install built wheel at the declared dependency floors
+        run: >-
+          python -c "import pathlib, subprocess, sys;
+          wheel = next(pathlib.Path('dist').glob('*.whl'));
+          subprocess.check_call([
+          sys.executable, '-m', 'pip', 'install',
+          str(wheel) + '[test]', 'numpy==1.23.5', 'scipy==1.9.3'
+          ])"
+
+      - name: Copy tests outside repository
+        run: >-
+          python -c "import os, pathlib, shutil;
+          dst = pathlib.Path(os.environ['RUNNER_TEMP']) / 'tests';
+          shutil.copytree('tests', dst, dirs_exist_ok=True)"
+
+      - name: Verify installed package
+        working-directory: ${{ runner.temp }}
+        run: python tests/wheel_smoke.py
+
+      - name: Run test suite
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -m pytest -q -n auto tests
+          --ignore=tests/test_selection_battery.py
+          --junitxml=junit.xml
+
+      - name: Annotate test failures
+        if: failure()
+        working-directory: ${{ runner.temp }}
+        run: python "${{ github.workspace }}/scripts/annotate_junit.py" junit.xml
 
   selection-battery:
     name: Selection battery / Ubuntu / Python 3.14

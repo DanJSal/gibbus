@@ -34,7 +34,7 @@ A failed explicit request raises an exception rather than silently installing an
 - **Degree-ladder history.** The single-component degree ladder records why it stopped in an internal selection history that is not yet exposed through `fit_diagnostics`; mixtures report their growth steps in `em_diagnostics["selection"]`.
 - **Interval mixtures with gated tails.** Interval-censored mixtures whose components carry `SoftPower` or `Exponential` tails can take tens of seconds: each M-step's curvature contact moves with the coefficients, and the point cuts that enforce convexity follow it one exchange at a time.
 - **Far-tail masses.** Survival and tail-quantile queries normally use the compiled tail integrator. Where it cannot close a far-tail row (a fit whose requested tail leader is fixed to zero, or a potential beyond binary64 resolution), the scaled tail quadrature evaluates the mass instead and the event is recorded in `suppressed_failures()`.
-- **Platforms.** CI runs the suite on Linux, Windows and macOS for CPython 3.11 through 3.14; the local verification record is in [Development status](development-status.md). Debug builds, the minimum declared NumPy/SciPy versions and the release wheel matrix are not yet qualified.
+- **Platforms.** CI runs the suite on Linux, Windows and macOS for CPython 3.11 through 3.14; the local verification record is in [Development status](development-status.md). CI also tests the declared NumPy/SciPy floors; debug builds are not yet qualified.
 
 ---
 

@@ -1,10 +1,10 @@
 # Releasing Gibbus
 
-`ci.yml` builds and tests installed wheels and the sdist on Linux, Windows and macOS for every supported CPython on pushes to `main` and `develop` and on pull requests. The release automation is stored dormant as `wheels.yml.disabled` and `release.yml.disabled` (GitHub runs only `.yml` and `.yaml` files) until the release matrix is qualified. Activate it in this order:
+Three workflows run the project:
 
-1. Rename `wheels.yml.disabled` to `wheels.yml` and require the 16-wheel matrix (four CPython versions on four platform targets) to build and pass its installed tests.
-2. Configure the TestPyPI and PyPI Trusted Publishers and the `testpypi`/`pypi` GitHub environments, then rename `release.yml.disabled` to `release.yml`. It calls `wheels.yml` and `scripts/release_gate.py`.
-3. Decide whether development versions such as `0.2.0.dev0` may be published from a tag; the gate currently accepts any version that matches the metadata.
+- `ci.yml` builds and tests installed wheels and the sdist on Linux, Windows and macOS for every supported CPython, on pushes to `main` and `develop` and on pull requests.
+- `wheels.yml` builds and tests the 16 release wheels (four CPython versions on four platform targets). It runs when packaging files change, on demand, and from the release workflow.
+- `release.yml` publishes a release from a tag, through `scripts/release_gate.py`.
 
 Gibbus releases are built and published by GitHub Actions. The production tag workflow builds the source distribution and all supported binary wheels, tests those artifacts, publishes them to TestPyPI, verifies the TestPyPI installation, and only then permits publication of the same artifact set to PyPI.
 
